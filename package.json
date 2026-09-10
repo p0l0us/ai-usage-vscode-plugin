@@ -1,0 +1,109 @@
+{
+  "name": "ai-usage-vscode-plugin",
+  "displayName": "AI Usage",
+  "description": "Shows AI usage and remaining budget in one place.",
+  "version": "0.0.1",
+  "publisher": "p0l0us",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished",
+    "onCommand:aiUsage.showDetails",
+    "onCommand:aiUsage.refresh",
+    "onView:aiUsage.chatSessions"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "aiUsage.showDetails",
+        "title": "AI Usage: Show Details"
+      },
+      {
+        "command": "aiUsage.refresh",
+        "title": "AI Usage: Refresh"
+      }
+    ],
+    "views": {
+      "workbench.panel.chat": [
+        {
+          "id": "aiUsage.chatSessions",
+          "name": "AI Usage Sessions"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "AI Usage",
+      "properties": {
+        "aiUsage.accounts": {
+          "type": "array",
+          "description": "AI account usage snapshots.",
+          "default": [
+            {
+              "name": "Copilot Pro",
+              "period": "weekly",
+              "usedTokens": 125000,
+              "tokenLimit": 500000,
+              "usedBudget": 9,
+              "budgetLimit": 20
+            }
+          ],
+          "items": {
+            "type": "object",
+            "required": [
+              "name",
+              "period",
+              "usedTokens",
+              "tokenLimit",
+              "usedBudget",
+              "budgetLimit"
+            ],
+            "properties": {
+              "name": { "type": "string" },
+              "period": { "type": "string", "enum": ["daily", "weekly", "monthly"] },
+              "usedTokens": { "type": "number", "minimum": 0 },
+              "tokenLimit": { "type": "number", "minimum": 1 },
+              "usedBudget": { "type": "number", "minimum": 0 },
+              "budgetLimit": { "type": "number", "minimum": 0 }
+            }
+          }
+        },
+        "aiUsage.chatSessions": {
+          "type": "array",
+          "description": "Session usage shown in chat panel.",
+          "default": [
+            {
+              "session": "Current Chat",
+              "account": "Copilot Pro",
+              "usedTokens": 14500,
+              "remainingTokens": 360500
+            }
+          ],
+          "items": {
+            "type": "object",
+            "required": ["session", "account", "usedTokens", "remainingTokens"],
+            "properties": {
+              "session": { "type": "string" },
+              "account": { "type": "string" },
+              "usedTokens": { "type": "number", "minimum": 0 },
+              "remainingTokens": { "type": "number", "minimum": 0 }
+            }
+          }
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^24.4.0",
+    "@types/vscode": "^1.105.0",
+    "typescript": "^5.9.2"
+  }
+}
