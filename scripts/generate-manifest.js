@@ -1,12 +1,15 @@
 // Generates the chat-input usage chips in package.json.
 //
 // The chat input's status toolbar (`chat/input/status`) renders a menu item without an icon as
-// its static title (an item with an icon would drop the title). To get one chip reading
-// "Claude 17%", each provider gets one text command per state (a percent value, "unavailable",
-// "error", "pending"); the `when` clauses pick the one matching the chat's agent and the
-// `aiUsage.chip.<provider>` context key the extension sets at runtime. Clicking a chip runs
-// `aiUsage.showDetails` for that provider. This script is idempotent: it removes all
-// previously generated `aiUsage.chip.*` entries and regenerates them.
+// its static title, and its hover repeats that title (an item with an icon would drop the title,
+// and there is no separate tooltip). Live text therefore needs one command per possible label;
+// `when` clauses pick the one matching the chat's agent and the context keys the extension sets
+// at runtime:
+//   aiUsage.chip.<provider>.simple   "37%"-style single figure or a state (pending/unavailable/error)
+//   aiUsage.chip.<provider>.<window> the figure of that window in rich mode, e.g. "4% (5h)"
+//   aiUsage.chip.named               whether the first item is prefixed with the service name
+// Clicking any chip runs `aiUsage.showDetails` for its provider. This script is idempotent: it
+// removes all previously generated `aiUsage.chip.*` entries and regenerates them.
 const fs = require('fs');
 const path = require('path');
 
@@ -15,19 +18,24 @@ const path = require('path');
 const agentMatch = (re) =>
   `(aiUsage.chip.debug || chatAgentHostProviderId =~ /${re}/i || lockedCodingAgentId =~ /${re}/i || chatSessionType =~ /${re}/i || sessionType =~ /${re}/i)`;
 
+// `windows` are the labels shown in rich mode (must match src/extension.ts CHIP_WINDOWS); a provider
+// without any is always shown as a single figure. Agent identity is exposed through several context
+// keys depending on the surface: the locked agent-host provider id ("claude"), the locked coding
+// agent id, the chat session type ("agent-host-claude") and, in the Agents window, the session type.
 const PROVIDERS = [
-  // Agent identity is exposed through several context keys depending on the surface: the locked
-  // agent-host provider id ("claude"), the locked coding agent id, the chat session type
-  // ("agent-host-claude") and, in the Agents window, the session type. Match any of them.
-  { id: 'claude', title: 'Claude', match: agentMatch('claude|anthropic') },
-  { id: 'codex', title: 'Codex', match: agentMatch('codex|openai') },
-  // Copilot: regular (unlocked) chat, or a Copilot CLI / cloud agent session.
-  { id: 'copilot', title: 'Copilot', match: `(!lockedToCodingAgent || ${agentMatch('copilot')})` }
+  { id: 'claude', title: 'Claude', windows: ['5h', '7d'], match: agentMatch('claude|anthropic') },
+  { id: 'codex', title: 'Codex', windows: ['5h', '7d'], match: agentMatch('codex|openai') },
+  // Copilot: regular (unlocked) chat, or a Copilot CLI / cloud agent session. Single monthly window.
+  { id: 'copilot', title: 'Copilot', windows: [], match: `(!lockedToCodingAgent || ${agentMatch('copilot')})` }
 ];
 const CHIP_PREFIX = 'aiUsage.chip.';
+const NAMED_KEY = `${CHIP_PREFIX}named`;
 // Only the `navigation` group is rendered inline by the chat input status toolbar; other groups
 // end up in a hidden overflow menu.
 const CHIP_GROUP = 'navigation';
+// Non-numeric states of the single-figure item and their label.
+const STATES = { pending: '…', unavailable: 'n/a', error: '!' };
+const PERCENTS = Array.from({ length: 101 }, (_, percent) => String(percent));
 
 const file = path.join(__dirname, '..', 'package.json');
 const pkg = JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -45,31 +53,44 @@ const paletteMenu = (pkg.contributes.menus.commandPalette || []).filter((m) => !
 // status bar with the same figures is visible.
 const WINDOW_GATE = '((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench))';
 let generated = 0;
-// Non-numeric chip states and their label. Numeric states show the percent of the most used window.
-const STATES = { pending: '…', unavailable: 'n/a', error: '!' };
 PROVIDERS.forEach((provider, index) => {
+  const base = index * 1000;
   const key = `${CHIP_PREFIX}${provider.id}`;
-  const states = [
-    ...Object.entries(STATES),
-    ...Array.from({ length: 101 }, (_, percent) => [String(percent), `${percent}%`])
-  ];
-  states.forEach(([state, label], stateIndex) => {
-    const command = `${key}.${state}`;
-    commands.push({ command, title: `${provider.title} ${label}`, category: 'AI Usage' });
-    statusMenu.push({
-      command,
-      when: `${WINDOW_GATE} && ${provider.match} && ${key} == '${state}'`,
-      group: `${CHIP_GROUP}@${index * 200 + stateIndex}`
-    });
+  const add = (command, title, when, group) => {
+    commands.push({ command, title, category: 'AI Usage' });
+    statusMenu.push({ command, when: `${WINDOW_GATE} && ${provider.match} && ${when}`, group: `${CHIP_GROUP}@${group}` });
     paletteMenu.push({ command, when: 'false' });
     generated++;
+  };
+  // The first item exists with and without the service name (aiUsage.chatChips.labels).
+  const addFirst = (command, text, when, group) => {
+    add(command, text, `${when} && !${NAMED_KEY}`, group);
+    add(`${command}.named`, `${provider.title} ${text}`, `${when} && ${NAMED_KEY}`, group);
+  };
+
+  // Single figure ("37%", the most used window) or a state; also the fallback in rich mode.
+  for (const [state, text] of [...Object.entries(STATES), ...PERCENTS.map((percent) => [percent, `${percent}%`])]) {
+    addFirst(`${key}.simple.${state}`, text, `${key}.simple == '${state}'`, base);
+  }
+  // Rich mode: one item per window, "4% (5h)" "26% (7d)", the first one optionally named.
+  provider.windows.forEach((window, windowIndex) => {
+    for (const percent of PERCENTS) {
+      const command = `${key}.${window}.${percent}`;
+      const text = `${percent}% (${window})`;
+      const when = `${key}.${window} == '${percent}'`;
+      if (windowIndex === 0) {
+        addFirst(command, text, when, base + 1 + windowIndex);
+      } else {
+        add(command, text, when, base + 1 + windowIndex);
+      }
+    }
   });
 });
 
 // Debug chip (aiUsage.chatChips.debug) to confirm the toolbar renders at all.
 const debugCommand = `${CHIP_PREFIX}debug`;
 commands.push({ command: debugCommand, title: 'AI Usage chips active', category: 'AI Usage', icon: '$(debug)' });
-statusMenu.push({ command: debugCommand, when: `${WINDOW_GATE} && aiUsage.chip.debug`, group: `${CHIP_GROUP}@${PROVIDERS.length * 200}` });
+statusMenu.push({ command: debugCommand, when: `${WINDOW_GATE} && aiUsage.chip.debug`, group: `${CHIP_GROUP}@${PROVIDERS.length * 1000}` });
 paletteMenu.push({ command: debugCommand, when: 'false' });
 generated++;
 

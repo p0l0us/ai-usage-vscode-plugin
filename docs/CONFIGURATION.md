@@ -26,12 +26,21 @@ Each service has a `source` setting that selects where its usage is read from:
 ## Other settings
 
 - `aiUsage.statusBar.enabled` (default on): show the usage items in the status bar at all.
-- `aiUsage.statusBar.labels`: `iconOnly` (default) shows just the vendor icon before the figures; `iconAndName` adds the service name.
+- `aiUsage.statusBar.labels`: what precedes the figures in a status bar item: `none` (figures only), `nameOnly`,
+  `iconOnly` (default) or `iconAndName`.
+- `aiUsage.statusBar.usage`: `rich` (default) shows every window, `17% (5h) 25% (7d)`; `simple` shows one figure,
+  the most used window, `25%`. The hover always has the full breakdown.
+- `aiUsage.chatChips.labels`: `name` (default) prefixes the first chip with the service name, `Claude 4% (5h)`;
+  `none` shows figures only. Chips cannot carry the vendor icon: VS Code drops the text of a toolbar item that has
+  an icon.
+- `aiUsage.chatChips.usage`: `rich` (default) shows one chip per window, `Claude 4% (5h)` `26% (7d)`; `simple` one
+  chip with the most used window, `Claude 26%`. Copilot has a single monthly window, so both look the same for it.
 - `aiUsage.chatChips.workbench`: `whenNoStatusBar` (default) shows the chip in a regular VS Code window only when no status bar shows the same figures; `always` or `never` override that. The Agents window has no status bar, so the chip there follows `aiUsage.chatChips.agentsWindow`.
 - `aiUsage.claude.enabled` / `aiUsage.codex.enabled` / `aiUsage.copilot.enabled`: toggle the live items (default on).
 - `aiUsage.copilot.account`: GitHub login to use when several are signed in.
-- `aiUsage.chatChips.enabled`: toggle the `Claude 17%` chip beneath the chat input (default on); it names the
-  chat's agent and its most used window. Clicking it opens a dialog with the same text as the status bar tooltip.
+- `aiUsage.chatChips.enabled`: toggle the chips beneath the chat input (default on). Clicking a chip opens a dialog
+  with the same text as the status bar tooltip. Hovering a chip only repeats its text; VS Code offers extensions no
+  richer tooltip on that toolbar.
 - `aiUsage.chatChips.agentsWindow`: also show the chip in the Agents window (default on; see
   [Agents (sessions) window](AGENTS_WINDOW.md) for the required one-time setup). The extension there runs
   on your local computer and shows the logins found there, also for remote sessions; clicking the chip of an agent

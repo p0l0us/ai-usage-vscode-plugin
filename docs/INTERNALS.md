@@ -23,13 +23,16 @@ greyed out once it is older than 15 minutes.
 ## How the chat chip works
 
 VS Code renders an item of the `chat/input/status` menu as its static title (or, if the command has an icon, as the
-icon alone). `scripts/generate-manifest.js` therefore generates, per provider, one text command per chip state:
-`aiUsage.chip.claude.17` (title "Claude 17%") for every percent value, plus `.pending` ("Claude …"), `.unavailable`
-("Claude n/a") and `.error` ("Claude !"). Their `when` clauses match the chat's locked agent
-(`chatAgentHostProviderId`, `lockedCodingAgentId`, `chatSessionType` such as `agent-host-claude`, or `sessionType` in
-the Agents window) and the `aiUsage.chip.<provider>` context key, which the extension sets to the most used window's
-percent or to one of the three state names, and unsets when the provider is disabled or chips are off. Clicking the
-chip runs `aiUsage.showDetails` for that provider, which opens a dialog with the same text as
+icon alone), and the item's hover repeats that title; there is no separate tooltip. Live text therefore needs one
+command per possible label, which `scripts/generate-manifest.js` produces per provider: `aiUsage.chip.claude.simple.<n>`
+(title "17%") for the single-figure item and its states `.pending` ("…"), `.unavailable` ("n/a") and `.error` ("!"),
+plus `aiUsage.chip.claude.5h.<n>` ("17% (5h)") and `aiUsage.chip.claude.7d.<n>` for rich mode. The first item of each
+kind also exists with a `.named` suffix ("Claude 17% (5h)"), chosen by the `aiUsage.chip.named` key from
+`aiUsage.chatChips.labels`. Their `when` clauses match the chat's locked agent (`chatAgentHostProviderId`,
+`lockedCodingAgentId`, `chatSessionType` such as `agent-host-claude`, or `sessionType` in the Agents window) and the
+per-provider keys the extension sets: `aiUsage.chip.<provider>.simple` with the most used window's percent or a state
+name, or in rich mode `aiUsage.chip.<provider>.<window>` per window (falling back to `simple` when no window label is
+in the manifest, as for Copilot's single monthly window). All unset hides the chips. Clicking a chip runs `aiUsage.showDetails` for that provider, which opens a dialog with the same text as
 the status bar tooltip (both are rendered from one description of the reading). VS Code gives extensions no way to
 open an anchored hover from a toolbar item or a status bar entry, which is why the chip uses a dialog and the status
 bar items have no click command. `aiUsage.chatChips.debug` bypasses the agent match, so with it on every provider's

@@ -6,8 +6,8 @@ a chip beneath the chat input.
 
 - **Status bar**: `17% (5h) 25% (7d)` for Claude, `37% (7d)` for Codex, `42%` for Copilot, each behind its vendor
   icon. Hover for plan, account or organization and reset times; the item turns yellow at 80% and red at 95%.
-- **Chat chip**: `Claude 17%` beneath the chat input, the agent the current chat is using and its most used
-  window; click for the same breakdown the status bar tooltip shows.
+- **Chat chips**: `Claude 17% (5h)` `25% (7d)` beneath the chat input for the agent the current chat is using;
+  click for the same breakdown the status bar tooltip shows.
 - **Organization aware**: Copilot follows the GitHub account whose Copilot organization owns the workspace
   repository, so org-billed seats show org data.
 - **Gentle on the services**: one shared cache for all open windows, per-service check intervals and
@@ -57,7 +57,7 @@ The same with service names (`iconAndName`):
 
 ![Status bar with service names](images/screenshots/status-bar-labels.png)
 
-Hover any item for the per-window breakdown, plan and reset times (the chat chip shows the same text on click):
+Hover any item for the per-window breakdown, plan and reset times (the chat chips show the same text on click):
 
 | Claude | Codex | Copilot |
 |---|---|---|
@@ -70,7 +70,9 @@ usage.
 
 | Setting | Default | What it does |
 |---|---|---|
-| `aiUsage.statusBar.labels` | `iconOnly` | `iconAndName` adds the service name next to the icon. |
+| `aiUsage.statusBar.labels` | `iconOnly` | What precedes the figures: `none`, `nameOnly`, `iconOnly` or `iconAndName`. |
+| `aiUsage.statusBar.usage` | `rich` | `simple` shows one figure, the most used window, instead of every window. |
+| `aiUsage.chatChips.labels` / `.usage` | `name` / `rich` | The same two choices for the chat chips (no icon there). |
 | `aiUsage.codex.source` | `cli` | `api` calls the ChatGPT endpoint; `sessionLog` is fully offline. |
 | `aiUsage.<service>.checkIntervalMinutes` | 10 / 5 / 5 | How often Claude / Codex / Copilot are queried. |
 | `aiUsage.copilot.account` | (auto) | GitHub login to use when several are signed in. |

@@ -31,6 +31,29 @@ const ERROR_PERCENT = 95;
 
 /** Prefix of the chat chip commands generated into package.json (see scripts/generate-manifest.js). */
 const CHIP_COMMAND_PREFIX = 'aiUsage.chip.';
+/** Window labels with generated rich-mode chip commands per provider (keep in sync with the generator). */
+const CHIP_WINDOWS: Record<ProviderId, string[]> = { claude: ['5h', '7d'], codex: ['5h', '7d'], copilot: [] };
+
+/** What precedes the figures: nothing, the service name, the vendor icon, or both. */
+type LabelStyle = 'none' | 'nameOnly' | 'iconOnly' | 'iconAndName';
+/** `simple`: one figure, the most used window ("37%"); `rich`: every window ("4% (5h) 26% (7d)"). */
+type UsageStyle = 'simple' | 'rich';
+
+function statusBarStyle(): { labels: LabelStyle; usage: UsageStyle } {
+  const config = vscode.workspace.getConfiguration();
+  return {
+    labels: config.get<LabelStyle>('aiUsage.statusBar.labels', 'iconOnly'),
+    usage: config.get<UsageStyle>('aiUsage.statusBar.usage', 'rich')
+  };
+}
+
+function chipStyle(): { named: boolean; usage: UsageStyle } {
+  const config = vscode.workspace.getConfiguration();
+  return {
+    named: config.get<string>('aiUsage.chatChips.labels', 'name') === 'name',
+    usage: config.get<UsageStyle>('aiUsage.chatChips.usage', 'rich')
+  };
+}
 /** Scope sets Copilot itself signs in with; any of them is enough to read the quota endpoint. */
 const GITHUB_SCOPE_CANDIDATES: string[][] = [
   ['read:user', 'user:email', 'repo', 'workflow'],
@@ -303,7 +326,7 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   };
 
-  // Every generated chat chip command (aiUsage.chip.<provider>.<state>, see
+  // Every generated chat chip command (aiUsage.chip.<provider>.<item>..., see
   // scripts/generate-manifest.js) opens the details of that provider; the debug chip opens all. The list is read from
   // the manifest so the two stay in sync.
   const manifestCommands = (context.extension.packageJSON as { contributes?: { commands?: Array<{ command: string }> } })
@@ -340,7 +363,10 @@ export function activate(context: vscode.ExtensionContext): void {
     const mode = config.get<string>('aiUsage.chatChips.workbench', 'whenNoStatusBar');
     const chipsEnabled = config.get<boolean>('aiUsage.chatChips.enabled', true);
     const inWorkbench = chipsEnabled && (mode === 'always' || (mode === 'whenNoStatusBar' && !statusBarVisible()));
-    await vscode.commands.executeCommand('setContext', `${CHIP_COMMAND_PREFIX}workbench`, inWorkbench);
+    await Promise.all([
+      vscode.commands.executeCommand('setContext', `${CHIP_COMMAND_PREFIX}workbench`, inWorkbench),
+      vscode.commands.executeCommand('setContext', `${CHIP_COMMAND_PREFIX}named`, chipStyle().named)
+    ]);
   };
   void updateChipPresentation();
   log(`host: ${vscode.env.appName} · uiKind=${vscode.env.uiKind === vscode.UIKind.Desktop ? 'desktop' : 'web'} · remote=${vscode.env.remoteName ?? 'none'} · extensionKind=${context.extension.extensionKind === vscode.ExtensionKind.UI ? 'ui' : 'workspace'}`);
@@ -573,25 +599,39 @@ async function getWorkspaceOwners(): Promise<string[]> {
 }
 
 /**
- * Publishes the state of the provider's chip beneath the chat input as the `aiUsage.chip.<provider>`
- * context key, matched by the generated `chat/input/status` menu items in package.json. Each state is
- * a separate text command whose title is the chip ("Claude 17%"): the percent of the most used window
- * (the one that colours the status bar), or `unavailable`, `error` and `pending`. Unset hides the chip.
+ * Publishes the provider's chips beneath the chat input as context keys matched by the generated
+ * `chat/input/status` menu items in package.json. `aiUsage.chip.<provider>.simple` selects the
+ * single-figure item (most used window) or a state (`pending`, `unavailable`, `error`); in rich mode
+ * `aiUsage.chip.<provider>.<window>` selects one item per window instead. All unset hides the chips.
  */
 async function updateChipContext(provider: LiveProvider, enabled: boolean): Promise<void> {
-  const result = provider.last;
-  let state: string | undefined;
+  const keys = new Map<string, string | undefined>([['simple', undefined]]);
+  for (const window of CHIP_WINDOWS[provider.id]) {
+    keys.set(window, undefined);
+  }
   if (enabled) {
+    const result = provider.last;
     const usage = result?.kind === 'ok' ? result.usage : result?.kind === 'error' ? provider.lastGood : undefined;
     if (usage?.windows.length) {
-      state = String(Math.max(...usage.windows.map((window) => window.usedPercent)));
+      const rich = chipStyle().usage === 'rich'
+        ? usage.windows.filter((window) => CHIP_WINDOWS[provider.id].includes(window.label))
+        : [];
+      if (rich.length) {
+        for (const window of rich) {
+          keys.set(window.label, String(window.usedPercent));
+        }
+      } else {
+        keys.set('simple', String(worstPercent(usage)));
+      }
     } else if (!result) {
-      state = 'pending';
+      keys.set('simple', 'pending');
     } else {
-      state = result.kind === 'error' ? 'error' : 'unavailable';
+      keys.set('simple', result.kind === 'error' ? 'error' : 'unavailable');
     }
   }
-  await vscode.commands.executeCommand('setContext', `${CHIP_COMMAND_PREFIX}${provider.id}`, state);
+  await Promise.all(
+    [...keys].map(([key, value]) => vscode.commands.executeCommand('setContext', `${CHIP_COMMAND_PREFIX}${provider.id}.${key}`, value))
+  );
 }
 
 function renderLive(provider: LiveProvider): void {
@@ -631,7 +671,7 @@ function renderLive(provider: LiveProvider): void {
     }
     // Keep the last reading visible; grey it out once it is old enough to mislead.
     const ageMs = Date.now() - previous.fetchedAt.getTime();
-    item.text = statusText(provider, formatUsageLabel(previous, false), previous.title);
+    item.text = statusText(provider, formatUsageLabel(previous, false, statusBarStyle().usage), previous.title);
     item.tooltip = buildTooltip(previous, result.message);
     item.backgroundColor = undefined;
     item.color = ageMs >= STALE_AFTER_MS ? new vscode.ThemeColor('disabledForeground') : undefined;
@@ -640,10 +680,10 @@ function renderLive(provider: LiveProvider): void {
   }
 
   const usage = result.usage;
-  item.text = statusText(provider, formatUsageLabel(usage, false), usage.title);
+  item.text = statusText(provider, formatUsageLabel(usage, false, statusBarStyle().usage), usage.title);
   item.tooltip = buildTooltip(usage);
 
-  const worst = Math.max(...usage.windows.map((window) => window.usedPercent));
+  const worst = worstPercent(usage);
   if (worst >= ERROR_PERCENT) {
     item.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground');
   } else if (worst >= WARNING_PERCENT) {
@@ -669,10 +709,6 @@ function titleFor(provider: LiveProvider): string {
   return provider.lastGood?.title ?? PROVIDER_TITLES[provider.id];
 }
 
-/** Whether status bar items show the service name next to the icon (`aiUsage.statusBar.labels`). */
-function showServiceLabels(): boolean {
-  return vscode.workspace.getConfiguration().get<string>('aiUsage.statusBar.labels', 'iconOnly') === 'iconAndName';
-}
 
 /** True when this extension's status bar items can be seen: enabled here and VS Code's status bar is visible. */
 function statusBarVisible(): boolean {
@@ -680,19 +716,30 @@ function statusBarVisible(): boolean {
   return config.get<boolean>('aiUsage.statusBar.enabled', true) && config.get<boolean>('workbench.statusBar.visible', true) !== false;
 }
 
-/** "Claude 17% (5h) 25% (7d)", "Codex 37% (7d)", "Copilot 75%" (Copilot has a single monthly window). */
-function formatUsageLabel(usage: LiveUsage, withTitle = true): string {
-  const primary = usage.windows.slice(0, 2);
-  const parts = primary.map((window) =>
-    usage.provider === 'copilot' ? `${window.usedPercent}%` : `${window.usedPercent}% (${window.label})`
-  );
+/** The most used window's percentage: the figure of simple mode and of the status bar colouring. */
+function worstPercent(usage: LiveUsage): number {
+  return Math.max(...usage.windows.map((window) => window.usedPercent));
+}
+
+/**
+ * Rich: "Claude 17% (5h) 25% (7d)", "Codex 37% (7d)", "Copilot 75%" (Copilot has a single monthly
+ * window). Simple: only the most used window, "Claude 25%".
+ */
+function formatUsageLabel(usage: LiveUsage, withTitle = true, style: UsageStyle = 'rich'): string {
+  const parts = style === 'simple'
+    ? [`${worstPercent(usage)}%`]
+    : usage.windows.slice(0, 2).map((window) =>
+        usage.provider === 'copilot' ? `${window.usedPercent}%` : `${window.usedPercent}% (${window.label})`
+      );
   return withTitle ? `${usage.title} ${parts.join(' ')}` : parts.join(' ');
 }
 
-/** Status bar text: vendor icon, optional service name, then the figures. */
+/** Status bar text: the figures behind whatever `aiUsage.statusBar.labels` puts in front of them. */
 function statusText(provider: LiveProvider, body: string, title?: string): string {
-  const name = showServiceLabels() && title ? `${title} ` : '';
-  return `$(${provider.icon}) ${name}${body}`.trimEnd();
+  const { labels } = statusBarStyle();
+  const icon = labels === 'iconOnly' || labels === 'iconAndName' ? `$(${provider.icon}) ` : '';
+  const name = (labels === 'nameOnly' || labels === 'iconAndName') && title ? `${title} ` : '';
+  return `${icon}${name}${body}`.trimEnd();
 }
 
 /** Text of a reading. The status bar tooltip and the details dialog are both rendered from it. */
