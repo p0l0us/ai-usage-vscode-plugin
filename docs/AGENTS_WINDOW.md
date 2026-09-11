@@ -49,5 +49,10 @@ or as keys in `settings.json`:
 **Output → AI Usage** (command **AI Usage: Open Log**) logs a `host:` line telling you whether the extension runs
 locally or remotely.
 
-Because the extension runs on your local computer in the Agents window, it shows the providers signed in **there**:
-Copilot always (via VS Code's GitHub account), Claude and Codex only if their CLIs are signed in locally.
+Because the extension runs on your local computer in the Agents window, it shows the providers signed in **there**,
+also for sessions that run on a remote machine: Copilot always (via VS Code's GitHub account), Claude and Codex only
+if their CLIs are signed in locally. A chat whose agent is not signed in locally shows the vendor icon and an `n/a`
+chip; click it for details. To see the numbers, sign in locally with the same account (`claude` once, or
+`codex login`): limits are per account, so the figures are the same as on the remote. Turning on
+`aiUsage.chatChips.debug` shows every provider's chips regardless of the chat's agent (that is why Copilot's chip
+appears in a Claude chat with debug on); it is a diagnostic, not the way to enable chips.

@@ -25,8 +25,14 @@ greyed out once it is older than 15 minutes.
 VS Code renders items in the `chat/input/status` menu with static titles from the manifest, so
 `scripts/generate-manifest.js` generates one command per provider, window and percent (`aiUsage.chip.claude.5h.17` …), so a click
 knows which agent it belongs to. The extension publishes the current values as context keys (`aiUsage.chip.<provider>.<window>`) and each menu item's
-`when` clause matches them against the chat's locked agent (`chatAgentHostProviderId`). Run `npm run generate`
-(also part of `npm run compile`) after editing the generator.
+`when` clause matches them against the chat's locked agent (`chatAgentHostProviderId`, `lockedCodingAgentId` or
+`chatSessionType`, e.g. `agent-host-claude`). Besides the percentages there are three per-provider state chips: the
+vendor icon, a warning when the last refresh failed, and `n/a` when the provider is not signed in where the
+extension runs (`aiUsage.chip.<provider>.unavailable`). The `n/a` chip only appears for the chat's own agent; it is
+what a Claude chat in the Agents window shows when Claude is signed in on the remote but not on the local computer
+whose extension the Agents window runs. `aiUsage.chatChips.debug` bypasses the agent match, so with it on every
+provider's chips show (Copilot's included). Run `npm run generate` (also part of `npm run compile`) after editing
+the generator.
 
 All windows share one cache file in the extension's global storage, so only one window calls a source per check
 interval and all windows respect the same backoff. Tokens are only read, never written or refreshed. If a token has expired, the item shows a warning and asks you to

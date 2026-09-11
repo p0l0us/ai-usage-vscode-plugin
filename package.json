@@ -2,7 +2,7 @@
   "name": "ai-usage-vscode-plugin",
   "displayName": "AI Usage",
   "description": "Live Claude Code, Codex and GitHub Copilot usage in the status bar and chat input: 5h/7d windows, premium requests, org billing, reset times on hover. Open source, contributions welcome.",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "publisher": "p0l0us",
   "license": "GPL-3.0-only",
   "repository": {
@@ -1088,6 +1088,11 @@
         "icon": "$(warning)"
       },
       {
+        "command": "aiUsage.chip.claude.unavailable",
+        "title": "n/a",
+        "category": "AI Usage"
+      },
+      {
         "command": "aiUsage.chip.codex.icon",
         "title": "Codex usage",
         "category": "AI Usage",
@@ -2110,6 +2115,11 @@
         "icon": "$(warning)"
       },
       {
+        "command": "aiUsage.chip.codex.unavailable",
+        "title": "n/a",
+        "category": "AI Usage"
+      },
+      {
         "command": "aiUsage.chip.copilot.icon",
         "title": "Copilot usage",
         "category": "AI Usage",
@@ -2627,6 +2637,11 @@
         "icon": "$(warning)"
       },
       {
+        "command": "aiUsage.chip.copilot.unavailable",
+        "title": "n/a",
+        "category": "AI Usage"
+      },
+      {
         "command": "aiUsage.chip.debug",
         "title": "AI Usage chips active",
         "category": "AI Usage",
@@ -2641,7 +2656,7 @@
           "aiUsage.chatChips.agentsWindow": {
             "type": "boolean",
             "default": true,
-            "markdownDescription": "Also show the usage chips beneath the chat input in the **Agents** (sessions) window. The Agents window only runs extensions installed locally and listed in `#extensions.supportAgentsWindow#` (local user settings). [Enable AI Usage there](command:aiUsage.enableAgentsWindow) · [Open user settings.json](command:workbench.action.openSettingsJson) · [Setup guide](command:aiUsage.openAgentsWindowSetup) · [README](https://github.com/p0l0us/ai-usage-vscode-plugin#agents-sessions-window).",
+            "markdownDescription": "Also show the usage chips beneath the chat input in the **Agents** (sessions) window. The Agents window only runs extensions installed locally and listed in `#extensions.supportAgentsWindow#` (local user settings). The extension there runs on your local computer and shows the logins found **there**, also for remote sessions; a chat whose agent is not signed in locally gets an `n/a` chip. [Enable AI Usage there](command:aiUsage.enableAgentsWindow) · [Open user settings.json](command:workbench.action.openSettingsJson) · [Setup guide](command:aiUsage.openAgentsWindowSetup) · [README](https://github.com/p0l0us/ai-usage-vscode-plugin#agents-sessions-window).",
             "order": 13
           },
           "aiUsage.chatChips.enabled": {
@@ -2817,7 +2832,7 @@
           "aiUsage.chatChips.debug": {
             "type": "boolean",
             "default": false,
-            "description": "Troubleshooting: show a test chip and show every service's chips regardless of which agent the chat uses. If the test chip appears but no percentages do, the extension has no readings in this window (check Output → AI Usage); if percentages appear only with this on, the agent detection failed for this chat.",
+            "description": "Troubleshooting: show a test chip and the chips of every service, including services the current chat does not use (for example Copilot's chip in a Claude chat). If the test chip appears but no percentages do, the extension has no readings where it runs (check Output → AI Usage); in the Agents window that is your local computer, even for remote sessions. If percentages appear only with this on, the agent detection failed for this chat.",
             "order": 1
           },
           "aiUsage.refreshIntervalMinutes": {
@@ -2889,7 +2904,7 @@
       "chat/input/status": [
         {
           "command": "aiUsage.chip.claude.icon",
-          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /claude|anthropic/i || lockedCodingAgentId =~ /claude|anthropic/i || chatSessionType =~ /claude|anthropic/i || sessionType =~ /claude|anthropic/i) && aiUsage.chip.icon && (aiUsage.chip.claude.5h || aiUsage.chip.claude.7d || aiUsage.chip.claude.error)",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /claude|anthropic/i || lockedCodingAgentId =~ /claude|anthropic/i || chatSessionType =~ /claude|anthropic/i || sessionType =~ /claude|anthropic/i) && aiUsage.chip.icon && (aiUsage.chip.claude.5h || aiUsage.chip.claude.7d || aiUsage.chip.claude.error || aiUsage.chip.claude.unavailable)",
           "group": "navigation@0"
         },
         {
@@ -3908,8 +3923,13 @@
           "group": "navigation@900"
         },
         {
+          "command": "aiUsage.chip.claude.unavailable",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /claude|anthropic/i || lockedCodingAgentId =~ /claude|anthropic/i || chatSessionType =~ /claude|anthropic/i || sessionType =~ /claude|anthropic/i) && aiUsage.chip.claude.unavailable",
+          "group": "navigation@950"
+        },
+        {
           "command": "aiUsage.chip.codex.icon",
-          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /codex|openai/i || lockedCodingAgentId =~ /codex|openai/i || chatSessionType =~ /codex|openai/i || sessionType =~ /codex|openai/i) && aiUsage.chip.icon && (aiUsage.chip.codex.5h || aiUsage.chip.codex.7d || aiUsage.chip.codex.error)",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /codex|openai/i || lockedCodingAgentId =~ /codex|openai/i || chatSessionType =~ /codex|openai/i || sessionType =~ /codex|openai/i) && aiUsage.chip.icon && (aiUsage.chip.codex.5h || aiUsage.chip.codex.7d || aiUsage.chip.codex.error || aiUsage.chip.codex.unavailable)",
           "group": "navigation@1000"
         },
         {
@@ -4928,8 +4948,13 @@
           "group": "navigation@1900"
         },
         {
+          "command": "aiUsage.chip.codex.unavailable",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /codex|openai/i || lockedCodingAgentId =~ /codex|openai/i || chatSessionType =~ /codex|openai/i || sessionType =~ /codex|openai/i) && aiUsage.chip.codex.unavailable",
+          "group": "navigation@1950"
+        },
+        {
           "command": "aiUsage.chip.copilot.icon",
-          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (!lockedToCodingAgent || (aiUsage.chip.debug || chatAgentHostProviderId =~ /copilot/i || lockedCodingAgentId =~ /copilot/i || chatSessionType =~ /copilot/i || sessionType =~ /copilot/i)) && aiUsage.chip.icon && (aiUsage.chip.copilot.month || aiUsage.chip.copilot.error)",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (!lockedToCodingAgent || (aiUsage.chip.debug || chatAgentHostProviderId =~ /copilot/i || lockedCodingAgentId =~ /copilot/i || chatSessionType =~ /copilot/i || sessionType =~ /copilot/i)) && aiUsage.chip.icon && (aiUsage.chip.copilot.month || aiUsage.chip.copilot.error || aiUsage.chip.copilot.unavailable)",
           "group": "navigation@2000"
         },
         {
@@ -5441,6 +5466,11 @@
           "command": "aiUsage.chip.copilot.error",
           "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (!lockedToCodingAgent || (aiUsage.chip.debug || chatAgentHostProviderId =~ /copilot/i || lockedCodingAgentId =~ /copilot/i || chatSessionType =~ /copilot/i || sessionType =~ /copilot/i)) && aiUsage.chip.copilot.error",
           "group": "navigation@2900"
+        },
+        {
+          "command": "aiUsage.chip.copilot.unavailable",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (!lockedToCodingAgent || (aiUsage.chip.debug || chatAgentHostProviderId =~ /copilot/i || lockedCodingAgentId =~ /copilot/i || chatSessionType =~ /copilot/i || sessionType =~ /copilot/i)) && aiUsage.chip.copilot.unavailable",
+          "group": "navigation@2950"
         },
         {
           "command": "aiUsage.chip.debug",
@@ -6266,6 +6296,10 @@
           "when": "false"
         },
         {
+          "command": "aiUsage.chip.claude.unavailable",
+          "when": "false"
+        },
+        {
           "command": "aiUsage.chip.codex.icon",
           "when": "false"
         },
@@ -7082,6 +7116,10 @@
           "when": "false"
         },
         {
+          "command": "aiUsage.chip.codex.unavailable",
+          "when": "false"
+        },
+        {
           "command": "aiUsage.chip.copilot.icon",
           "when": "false"
         },
@@ -7494,6 +7532,10 @@
           "when": "false"
         },
         {
+          "command": "aiUsage.chip.copilot.unavailable",
+          "when": "false"
+        },
+        {
           "command": "aiUsage.chip.debug",
           "when": "false"
         }
@@ -7553,7 +7595,10 @@
     "bump:patch": "node scripts/bump-version.js patch",
     "bump:minor": "node scripts/bump-version.js minor",
     "bump:major": "node scripts/bump-version.js major",
-    "release": "npm run compile && npx @vscode/vsce publish --no-dependencies"
+    "publish": "node scripts/publish.js",
+    "publish:pre": "node scripts/publish.js --pre-release",
+    "publish:all": "node scripts/publish.js --ovsx",
+    "publish:dry": "node scripts/publish.js --dry-run"
   },
   "devDependencies": {
     "@types/node": "^24.4.0",

@@ -7,5 +7,4 @@ tsconfig.json
 **/*.map
 *.vsix
 images/icon.svg
-images/screenshots/**
 docs/**

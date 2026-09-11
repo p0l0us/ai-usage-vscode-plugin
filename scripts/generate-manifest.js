@@ -11,7 +11,8 @@ const path = require('path');
 // Commands are generated per provider (aiUsage.chip.<provider>.<window>.<percent>) so that a
 // click can open the details of that particular agent. Each provider lists the windows its
 // service reports.
-// `aiUsage.chip.debug` bypasses the agent match so a missing chip can be told apart from a missing value.
+// `aiUsage.chip.debug` bypasses the agent match so a missing chip can be told apart from a missing value
+// (with it on, every service's chips show, e.g. Copilot's in a Claude chat).
 const agentMatch = (re) =>
   `(aiUsage.chip.debug || chatAgentHostProviderId =~ /${re}/i || lockedCodingAgentId =~ /${re}/i || chatSessionType =~ /${re}/i || sessionType =~ /${re}/i)`;
 
@@ -52,7 +53,11 @@ PROVIDERS.forEach((provider, providerIndex) => {
 
   // Service icon chip (aiUsage.chatChips.icon), placed before that provider's figures. Menu items
   // with an icon render icon-only, so the icon and the percentages have to be separate chips.
-  const hasValue = [...provider.windows.map((window) => `aiUsage.chip.${provider.id}.${window}`), `aiUsage.chip.${provider.id}.error`].join(' || ');
+  const hasValue = [
+    ...provider.windows.map((window) => `aiUsage.chip.${provider.id}.${window}`),
+    `aiUsage.chip.${provider.id}.error`,
+    `aiUsage.chip.${provider.id}.unavailable`
+  ].join(' || ');
   const iconCommand = `${CHIP_PREFIX}${provider.id}.icon`;
   commands.push({ command: iconCommand, title: `${provider.id[0].toUpperCase()}${provider.id.slice(1)} usage`, category: 'AI Usage', icon: provider.icon });
   statusMenu.push({
@@ -88,6 +93,19 @@ PROVIDERS.forEach((provider, providerIndex) => {
     group: `${CHIP_GROUP}@${base + 900}`
   });
   paletteMenu.push({ command: errorCommand, when: 'false' });
+  generated++;
+
+  // "n/a" chip when the chat's agent is not signed in where the extension runs (for example a
+  // Claude chat in the Agents window, whose local extension cannot see a remote login). Clicking
+  // it opens the details, which say where to sign in.
+  const unavailableCommand = `${CHIP_PREFIX}${provider.id}.unavailable`;
+  commands.push({ command: unavailableCommand, title: 'n/a', category: 'AI Usage' });
+  statusMenu.push({
+    command: unavailableCommand,
+    when: `${WINDOW_GATE} && ${provider.match} && aiUsage.chip.${provider.id}.unavailable`,
+    group: `${CHIP_GROUP}@${base + 950}`
+  });
+  paletteMenu.push({ command: unavailableCommand, when: 'false' });
   generated++;
 });
 

@@ -46,31 +46,34 @@ The manifest already carries the publisher id (`p0l0us`), repository, license, i
 ### Release steps
 
 ```bash
-# 1. Bump the version (patch | minor | major, or an explicit x.y.z); this also dates the previous
-#    changelog section and opens a new "(unreleased)" one for you to fill in
-npm run bump            # same as: npm run bump:patch   |  npm run bump minor  |  npm run bump 1.2.0
-
-# 2. Build: regenerates chat-chip commands in package.json and compiles TypeScript
-npm run compile
-
-# 3. Package and smoke-test locally
-npx @vscode/vsce package --no-dependencies -o ai-usage.vsix
-code --install-extension ai-usage.vsix --force     # reload the window, check status bar and chips
-
-# 4. Publish (uses VSCE_PAT or the stored login); `npm run release` does compile + publish in one go
-npx @vscode/vsce publish --no-dependencies
-
-# 5. Commit and tag
-git add package.json package-lock.json CHANGELOG.md
-git commit -m "Release vX.Y.Z"
-git tag vX.Y.Z && git push && git push --tags
+npm run publish            # checks the Marketplace, offers a bump if the version is taken, builds, packages, publishes
+npm run publish:pre        # same, as a pre-release
+npm run publish:all        # also publishes to Open VSX (needs OVSX_PAT)
+npm run publish -- --yes   # non-interactive: auto-bumps patch when needed, no confirmation prompts
+npm run publish:dry        # everything except the publish step (builds and packages to a temp folder)
 ```
 
+`npm run publish` queries the Marketplace for the versions already published. If `package.json` has a version that
+exists there or is not newer than the latest, it offers to bump patch/minor/major (via `npm run bump`, which also
+opens a new changelog section) and refuses to continue otherwise. It then compiles, packages to a temporary folder
+and publishes with `VSCE_PAT` or the stored `vsce login`. Nothing is committed or tagged; afterwards:
+
+```bash
+# fill in CHANGELOG.md, then
+git add -A && git commit -m "Release vX.Y.Z" && git tag vX.Y.Z && git push && git push --tags
+```
+
+Manual equivalent: `npm run bump`, `npm run compile`, `npx @vscode/vsce package --no-dependencies`,
+`npx @vscode/vsce publish --no-dependencies`.
+
 `--no-dependencies` is required: the extension has no runtime npm dependencies and the flag stops `vsce` from
-inspecting `node_modules`. Do **not** add `enabledApiProposals` to the manifest: the Marketplace rejects extensions
-that declare proposed APIs, and installed-from-Marketplace extensions cannot use them anyway. Agents-window support
-is enabled per user through the `extensions.supportAgentsWindow` setting (see the walkthrough), which needs no proposal. Optionally add `--pre-release` for a preview build. The listing appears within a few
-minutes; the Marketplace verifies the icon, README links (must be absolute URLs) and the license file.
+inspecting `node_modules`.
+
+README screenshots live in `images/screenshots/` and are bundled in the VSIX. `dev:install` packages with
+`--no-rewrite-relative-links`, so the extension page of a local install renders them from the bundle. A release
+package lets `vsce` rewrite the links to `https://github.com/p0l0us/ai-usage-vscode-plugin/raw/HEAD/...` (the
+Marketplace needs absolute URLs), so new or changed screenshots must be pushed to `main` before publishing. Do **not** add `enabledApiProposals` to the manifest: the Marketplace rejects extensions
+that declare proposed APIs (the publish script checks this too).
 
 ### Open VSX (VSCodium, Cursor, Gitpod)
 

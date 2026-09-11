@@ -83,6 +83,10 @@ backoff work and how the chips are built: [docs/INTERNALS.md](docs/INTERNALS.md)
 
 - **A service is missing**: it is not signed in on the machine the extension runs on (see the remote note above).
   **Output → AI Usage** shows what was found.
+- **A chat shows `n/a` instead of a percentage**: the chat's agent is not signed in where the extension runs. In
+  the Agents window that is your local computer even for remote sessions; sign in there with the same account
+  (`claude` once, or `codex login`) and the figures appear. Do not use `aiUsage.chatChips.debug` for this: it shows
+  every service's chips, including Copilot's in a Claude chat.
 - **Copilot shows “connect”**: click it and allow access to your GitHub account.
 - **Numbers are grey**: the last refresh failed; the tooltip says why. Rate limits clear on their own.
 

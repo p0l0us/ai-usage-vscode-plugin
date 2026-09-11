@@ -33,5 +33,9 @@ Each service has a `source` setting that selects where its usage is read from:
 - `aiUsage.copilot.account`: GitHub login to use when several are signed in.
 - `aiUsage.chatChips.enabled`: toggle the chips beneath the chat input (default on).
 - `aiUsage.chatChips.agentsWindow`: also show the chips in the Agents window (default on; see
-  [Agents (sessions) window](#agents-sessions-window) for the required one-time setup).
+  [Agents (sessions) window](#agents-sessions-window) for the required one-time setup). The extension there runs
+  on your local computer and shows the logins found there, also for remote sessions; a chat whose agent is not
+  signed in locally gets an `n/a` chip.
+- `aiUsage.chatChips.debug` (default off): diagnostic. Adds a test chip and shows every service's chips regardless
+  of the chat's agent (Copilot's in a Claude chat, for example). Not needed to enable chips.
 - `aiUsage.accounts`: optional manual figures; the `AI xx%` item appears only when set.

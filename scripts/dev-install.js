@@ -49,7 +49,9 @@ function findCli() {
 }
 
 run('npm', ['run', 'compile']);
-run('npx', ['--yes', '@vscode/vsce', 'package', '--no-dependencies', '-o', vsix]);
+// Keep README image links relative so the locally installed extension page renders the bundled
+// screenshots without needing them on GitHub (the publish script rewrites them for the Marketplace).
+run('npx', ['--yes', '@vscode/vsce', 'package', '--no-dependencies', '--no-rewrite-relative-links', '-o', vsix]);
 
 const clis = findCli();
 if (!clis.length) {

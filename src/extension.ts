@@ -584,6 +584,7 @@ async function updateChipContext(provider: LiveProvider, enabled: boolean): Prom
     values.set(window, undefined);
   }
   values.set('error', false);
+  values.set('unavailable', false);
 
   const usage = result?.kind === 'ok' ? result.usage : result?.kind === 'error' ? provider.lastGood : undefined;
   if (enabled && usage) {
@@ -594,6 +595,11 @@ async function updateChipContext(provider: LiveProvider, enabled: boolean): Prom
     }
   } else if (enabled && result?.kind === 'error') {
     values.set('error', true);
+  } else if (enabled && result?.kind === 'unavailable') {
+    // Not signed in where the extension runs. Shown only for the chat's own agent, so a Claude
+    // chat in the Agents window (local extension, remote login) gets an "n/a" chip instead of
+    // nothing; the details explain where the login has to be.
+    values.set('unavailable', true);
   }
 
   await Promise.all(
@@ -664,6 +670,16 @@ function renderLive(provider: LiveProvider): void {
 }
 
 const PROVIDER_TITLES: Record<ProviderId, string> = { claude: 'Claude', codex: 'Codex', copilot: 'Copilot' };
+const SIGN_IN_HINTS: Record<ProviderId, string> = {
+  claude: 'run `claude` once and log in',
+  codex: 'run `codex login`',
+  copilot: 'sign in to GitHub in VS Code'
+};
+
+/** "this computer" or "the remote (ssh-remote)": where this extension host, and so the login it reads, lives. */
+function hostDescription(): string {
+  return vscode.env.remoteName ? `the remote (${vscode.env.remoteName})` : 'this computer';
+}
 function titleFor(provider: LiveProvider): string {
   return provider.lastGood?.title ?? PROVIDER_TITLES[provider.id];
 }
@@ -767,7 +783,11 @@ function providerItems(provider: LiveProvider): DetailItem[] {
     }
     items.push({
       label: '$(circle-slash) Not available',
-      detail: result.reason ?? 'Not installed or not signed in on this machine.'
+      detail: result.reason ?? `Not installed or not signed in ${hostDescription()}.`
+    });
+    items.push({
+      label: '$(info) Where the login has to be',
+      detail: `The extension reads ${PROVIDER_TITLES[provider.id]} where it runs (${hostDescription()}). In the Agents window that is always your local computer, even for remote sessions. Sign in there with the same account (${SIGN_IN_HINTS[provider.id]}); limits are per account, so the figures match.`
     });
     return items;
   }
