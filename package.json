@@ -2,7 +2,7 @@
   "name": "ai-usage-vscode-plugin",
   "displayName": "AI Usage",
   "description": "Live usage of Claude Code, Codex and GitHub Copilot in the status bar and chat input: 5-hour/7-day windows, premium requests, org billing. Works in the Agents window too (see README for setup). Open source, contributions welcome.",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "publisher": "p0l0us",
   "license": "GPL-3.0-only",
   "repository": {
@@ -7517,13 +7517,7 @@
     "workspace",
     "ui"
   ],
-  "enabledApiProposals": [
-    "agentsWindowActivation"
-  ],
   "capabilities": {
-    "agentsWindow": {
-      "supported": true
-    },
     "untrustedWorkspaces": {
       "supported": true
     },

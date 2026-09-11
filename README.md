@@ -225,7 +225,9 @@ git tag vX.Y.Z && git push && git push --tags
 ```
 
 `--no-dependencies` is required: the extension has no runtime npm dependencies and the flag stops `vsce` from
-inspecting `node_modules`. Optionally add `--pre-release` for a preview build. The listing appears within a few
+inspecting `node_modules`. Do **not** add `enabledApiProposals` to the manifest: the Marketplace rejects extensions
+that declare proposed APIs, and installed-from-Marketplace extensions cannot use them anyway. Agents-window support
+is enabled per user through the `extensions.supportAgentsWindow` setting (see the walkthrough), which needs no proposal. Optionally add `--pre-release` for a preview build. The listing appears within a few
 minutes; the Marketplace verifies the icon, README links (must be absolute URLs) and the license file.
 
 ### Open VSX (VSCodium, Cursor, Gitpod)
