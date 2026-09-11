@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2b2f45"/>
+      <stop offset="1" stop-color="#171a2b"/>
+    </linearGradient>
+    <linearGradient id="arc" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#5ee0c4"/>
+      <stop offset="0.6" stop-color="#7aa2ff"/>
+      <stop offset="1" stop-color="#c58cff"/>
+    </linearGradient>
+  </defs>
+  <!-- rounded tile -->
+  <rect x="4" y="4" width="120" height="120" rx="28" fill="url(#bg)"/>
+  <!-- gauge track: 240 degree arc, open at the bottom -->
+  <path d="M 30.4 92.6 A 42 42 0 1 1 97.6 92.6" fill="none" stroke="#ffffff" stroke-opacity="0.16" stroke-width="10" stroke-linecap="round"/>
+  <!-- gauge fill: ~65 % of the track -->
+  <path d="M 30.4 92.6 A 42 42 0 0 1 91.3 34.5" fill="none" stroke="url(#arc)" stroke-width="10" stroke-linecap="round"/>
+  <!-- AI sparkle in the centre -->
+  <path d="M 64 42 C 65.5 55 70 59.5 83 61 C 70 62.5 65.5 67 64 80 C 62.5 67 58 62.5 45 61 C 58 59.5 62.5 55 64 42 Z" fill="#ffffff"/>
+  <path d="M 86 78 C 86.7 83.3 88.7 85.3 94 86 C 88.7 86.7 86.7 88.7 86 94 C 85.3 88.7 83.3 86.7 78 86 C 83.3 85.3 85.3 83.3 86 78 Z" fill="#ffffff" fill-opacity="0.85"/>
+</svg>
