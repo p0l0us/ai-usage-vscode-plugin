@@ -1,9 +1,8 @@
 # Check the result
 
-Open any session in the Agents window. Beneath the chat input, next to the context indicator, the icon of the
-session's agent appears (Claude, OpenAI or Copilot) followed by its most used window, for example `17%`. Click it
-for the breakdown: plan, account or organization, every window with its reset time, the same text the status bar
-tooltip shows.
+Open any session in the Agents window. Beneath the chat input, next to the context indicator, a chip such as
+`Claude 17%` appears: the session's agent and its most used window. Click it for the breakdown: plan, account or
+organization, every window with its reset time, the same text the status bar tooltip shows.
 
 - The chip in the Agents window follows [aiUsage.chatChips.agentsWindow](command:workbench.action.openSettings?%5B%22aiUsage.chatChips.agentsWindow%22%5D)
   (on by default) and [aiUsage.chatChips.enabled](command:workbench.action.openSettings?%5B%22aiUsage.chatChips.enabled%22%5D).

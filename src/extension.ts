@@ -303,8 +303,8 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   };
 
-  // Every generated chat chip command (aiUsage.chip.<provider> and aiUsage.chip.<provider>.<percent>,
-  // see scripts/generate-manifest.js) opens the details of that provider; the debug chip opens all. The list is read from
+  // Every generated chat chip command (aiUsage.chip.<provider>.<state>, see
+  // scripts/generate-manifest.js) opens the details of that provider; the debug chip opens all. The list is read from
   // the manifest so the two stay in sync.
   const manifestCommands = (context.extension.packageJSON as { contributes?: { commands?: Array<{ command: string }> } })
     .contributes?.commands ?? [];
@@ -573,21 +573,25 @@ async function getWorkspaceOwners(): Promise<string[]> {
 }
 
 /**
- * Publishes the provider's chip beneath the chat input as context keys matched by the generated
- * `chat/input/status` menu items in package.json: `aiUsage.chip.<provider>` shows the vendor icon
- * while the provider is enabled and chips are on, `aiUsage.chip.<provider>.percent` the figure next
- * to it (the most used window, as in the status bar colouring). The icon stays without a figure when
- * the provider is not signed in where the extension runs or nothing has been read yet; a click opens
- * the details, which say so.
+ * Publishes the state of the provider's chip beneath the chat input as the `aiUsage.chip.<provider>`
+ * context key, matched by the generated `chat/input/status` menu items in package.json. Each state is
+ * a separate text command whose title is the chip ("Claude 17%"): the percent of the most used window
+ * (the one that colours the status bar), or `unavailable`, `error` and `pending`. Unset hides the chip.
  */
 async function updateChipContext(provider: LiveProvider, enabled: boolean): Promise<void> {
   const result = provider.last;
-  const usage = result?.kind === 'ok' ? result.usage : result?.kind === 'error' ? provider.lastGood : undefined;
-  const percent = enabled && usage?.windows.length ? String(Math.max(...usage.windows.map((window) => window.usedPercent))) : undefined;
-  await Promise.all([
-    vscode.commands.executeCommand('setContext', `${CHIP_COMMAND_PREFIX}${provider.id}`, enabled),
-    vscode.commands.executeCommand('setContext', `${CHIP_COMMAND_PREFIX}${provider.id}.percent`, percent)
-  ]);
+  let state: string | undefined;
+  if (enabled) {
+    const usage = result?.kind === 'ok' ? result.usage : result?.kind === 'error' ? provider.lastGood : undefined;
+    if (usage?.windows.length) {
+      state = String(Math.max(...usage.windows.map((window) => window.usedPercent)));
+    } else if (!result) {
+      state = 'pending';
+    } else {
+      state = result.kind === 'error' ? 'error' : 'unavailable';
+    }
+  }
+  await vscode.commands.executeCommand('setContext', `${CHIP_COMMAND_PREFIX}${provider.id}`, state);
 }
 
 function renderLive(provider: LiveProvider): void {

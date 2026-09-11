@@ -22,14 +22,14 @@ greyed out once it is older than 15 minutes.
 
 ## How the chat chip works
 
-VS Code renders items in the `chat/input/status` menu with the static title and icon from the manifest, and an
-item with an icon renders icon-only. `scripts/generate-manifest.js` therefore generates, per provider, one icon
-command (`aiUsage.chip.claude` …) and one text command per percent value (`aiUsage.chip.claude.17` …). Their `when`
-clauses match the chat's locked agent (`chatAgentHostProviderId`, `lockedCodingAgentId`, `chatSessionType` such as
-`agent-host-claude`, or `sessionType` in the Agents window) and the context keys the extension sets:
-`aiUsage.chip.<provider>` while the provider is enabled and chips are on, `aiUsage.chip.<provider>.percent` with the
-most used window's figure. The icon stays without a figure when the provider is not signed in where the extension
-runs or nothing has been read yet; clicking either chip runs `aiUsage.showDetails` for that provider, which opens a dialog with the same text as
+VS Code renders an item of the `chat/input/status` menu as its static title (or, if the command has an icon, as the
+icon alone). `scripts/generate-manifest.js` therefore generates, per provider, one text command per chip state:
+`aiUsage.chip.claude.17` (title "Claude 17%") for every percent value, plus `.pending` ("Claude …"), `.unavailable`
+("Claude n/a") and `.error` ("Claude !"). Their `when` clauses match the chat's locked agent
+(`chatAgentHostProviderId`, `lockedCodingAgentId`, `chatSessionType` such as `agent-host-claude`, or `sessionType` in
+the Agents window) and the `aiUsage.chip.<provider>` context key, which the extension sets to the most used window's
+percent or to one of the three state names, and unsets when the provider is disabled or chips are off. Clicking the
+chip runs `aiUsage.showDetails` for that provider, which opens a dialog with the same text as
 the status bar tooltip (both are rendered from one description of the reading). VS Code gives extensions no way to
 open an anchored hover from a toolbar item or a status bar entry, which is why the chip uses a dialog and the status
 bar items have no click command. `aiUsage.chatChips.debug` bypasses the agent match, so with it on every provider's
