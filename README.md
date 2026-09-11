@@ -6,8 +6,8 @@ a chip beneath the chat input.
 
 - **Status bar**: `17% (5h) 25% (7d)` for Claude, `37% (7d)` for Codex, `42%` for Copilot, each behind its vendor
   icon. Hover for plan, account or organization and reset times; the item turns yellow at 80% and red at 95%.
-- **Chat chip**: the icon of the agent the current chat is using, beneath the chat input; click it for the same
-  figures the status bar tooltip shows.
+- **Chat chip**: the icon of the agent the current chat is using and its most used window, `17%`, beneath the
+  chat input; click it for the same breakdown the status bar tooltip shows.
 - **Organization aware**: Copilot follows the GitHub account whose Copilot organization owns the workspace
   repository, so org-billed seats show org data.
 - **Gentle on the services**: one shared cache for all open windows, per-service check intervals and

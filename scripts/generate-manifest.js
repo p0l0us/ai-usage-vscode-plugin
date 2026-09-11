@@ -1,9 +1,9 @@
 // Generates the chat-input usage chips in package.json.
 //
 // The chat input's status toolbar (`chat/input/status`) renders menu items with the static title
-// and icon from the manifest, so each provider gets one icon-only chip whose `when` clause
-// matches the chat's agent against the context keys the extension sets at runtime. Clicking a
-// chip runs `aiUsage.showDetails` for that provider. This script is idempotent: it removes all
+// and icon from the manifest, so each provider gets an icon-only chip plus one text chip per
+// percent value; `when` clauses pick the pair matching the chat's agent and the context keys the
+// extension sets at runtime. Clicking a chip runs `aiUsage.showDetails` for that provider. This script is idempotent: it removes all
 // previously generated `aiUsage.chip.*` entries and regenerates them.
 const fs = require('fs');
 const path = require('path');
@@ -44,23 +44,38 @@ const paletteMenu = (pkg.contributes.menus.commandPalette || []).filter((m) => !
 const WINDOW_GATE = '((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench))';
 let generated = 0;
 PROVIDERS.forEach((provider, index) => {
-  // One icon-only chip per provider; `aiUsage.chip.<provider>` is set by the extension while the
-  // provider is enabled and chips are on. The figures live in the details opened by a click.
-  const command = `${CHIP_PREFIX}${provider.id}`;
-  commands.push({ command, title: provider.title, category: 'AI Usage', icon: provider.icon });
+  const base = index * 200;
+  // Icon chip; `aiUsage.chip.<provider>` is set by the extension while the provider is enabled and
+  // chips are on. A toolbar item with an icon renders icon-only, so the figure is a second item.
+  const iconCommand = `${CHIP_PREFIX}${provider.id}`;
+  commands.push({ command: iconCommand, title: provider.title, category: 'AI Usage', icon: provider.icon });
   statusMenu.push({
-    command,
-    when: `${WINDOW_GATE} && ${provider.match} && ${command}`,
-    group: `${CHIP_GROUP}@${index}`
+    command: iconCommand,
+    when: `${WINDOW_GATE} && ${provider.match} && ${iconCommand}`,
+    group: `${CHIP_GROUP}@${base}`
   });
-  paletteMenu.push({ command, when: 'false' });
+  paletteMenu.push({ command: iconCommand, when: 'false' });
   generated++;
+
+  // Percentage chip right after the icon, like the context indicator ("◌ 1%"). Labels are static,
+  // so there is one command per value; `aiUsage.chip.<provider>.percent` selects it.
+  for (let percent = 0; percent <= 100; percent++) {
+    const command = `${CHIP_PREFIX}${provider.id}.${percent}`;
+    commands.push({ command, title: `${percent}%`, category: 'AI Usage' });
+    statusMenu.push({
+      command,
+      when: `${WINDOW_GATE} && ${provider.match} && ${iconCommand}.percent == '${percent}'`,
+      group: `${CHIP_GROUP}@${base + 1 + percent}`
+    });
+    paletteMenu.push({ command, when: 'false' });
+    generated++;
+  }
 });
 
 // Debug chip (aiUsage.chatChips.debug) to confirm the toolbar renders at all.
 const debugCommand = `${CHIP_PREFIX}debug`;
 commands.push({ command: debugCommand, title: 'AI Usage chips active', category: 'AI Usage', icon: '$(debug)' });
-statusMenu.push({ command: debugCommand, when: `${WINDOW_GATE} && aiUsage.chip.debug`, group: `${CHIP_GROUP}@${PROVIDERS.length}` });
+statusMenu.push({ command: debugCommand, when: `${WINDOW_GATE} && aiUsage.chip.debug`, group: `${CHIP_GROUP}@${PROVIDERS.length * 200}` });
 paletteMenu.push({ command: debugCommand, when: 'false' });
 generated++;
 

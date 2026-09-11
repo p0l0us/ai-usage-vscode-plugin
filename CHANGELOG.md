@@ -1,13 +1,17 @@
 # Changelog
 
-## 0.0.5 (unreleased)
+## 0.0.6 (unreleased)
+
+- 
+
+## 0.0.5 (2026-09-11)
 
 - 
 
 ## 0.0.4 (2026-09-11)
 
-- Chat chip is now the agent's icon alone; the percentage, warning and `n/a` chips are gone. Clicking the icon
-  opens a dialog with the same text as the status bar tooltip (plan, account or organization, per-window usage,
+- Chat chip is now the agent's icon followed by one figure, the most used window (`✳ 17%`), like the context
+  indicator; the per-window, warning and `n/a` chips are gone. Clicking the chip opens a dialog with the same text as the status bar tooltip (plan, account or organization, per-window usage,
   reset times, last update). `aiUsage.chatChips.icon` was removed.
 - Status bar items no longer open a quick pick on click; the figures are in the hover. The Copilot item still
   opens the GitHub access request when access is missing. **AI Usage: Show Details** shows the same dialog for

@@ -56,12 +56,15 @@ npm run publish:dry        # everything except the publish step (builds and pack
 `npm run publish` queries the Marketplace for the versions already published. If `package.json` has a version that
 exists there or is not newer than the latest, it offers to bump patch/minor/major (via `npm run bump`, which also
 opens a new changelog section) and refuses to continue otherwise. It then compiles, packages to a temporary folder
-and publishes with `VSCE_PAT` or the stored `vsce login`. Nothing is committed or tagged; afterwards:
+and publishes with `VSCE_PAT` or the stored `vsce login`. After a successful publish it asks whether to commit,
+tag and push; fill in `CHANGELOG.md` before answering `y`. Confirming runs:
 
 ```bash
-# fill in CHANGELOG.md, then
 git add -A && git commit -m "Release vX.Y.Z" && git tag vX.Y.Z && git push && git push --tags
 ```
+
+The step is skipped (and the commands printed for manual use) when you answer `n`, when running with `--yes` or
+without a terminal, or when the tag already exists.
 
 Manual equivalent: `npm run bump`, `npm run compile`, `npx @vscode/vsce package --no-dependencies`,
 `npx @vscode/vsce publish --no-dependencies`.

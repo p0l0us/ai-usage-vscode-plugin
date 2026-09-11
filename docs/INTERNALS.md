@@ -23,12 +23,13 @@ greyed out once it is older than 15 minutes.
 ## How the chat chip works
 
 VS Code renders items in the `chat/input/status` menu with the static title and icon from the manifest, and an
-item with an icon renders icon-only. `scripts/generate-manifest.js` therefore generates one icon command per
-provider (`aiUsage.chip.claude`, `aiUsage.chip.codex`, `aiUsage.chip.copilot`) whose `when` clause matches the chat's
-locked agent (`chatAgentHostProviderId`, `lockedCodingAgentId`, `chatSessionType` such as `agent-host-claude`, or
-`sessionType` in the Agents window) and a context key of the same name that the extension sets while the provider
-is enabled and chips are on. The chip stays when the provider is not signed in where the extension runs or the last
-refresh failed; clicking it runs `aiUsage.showDetails` for that provider, which opens a dialog with the same text as
+item with an icon renders icon-only. `scripts/generate-manifest.js` therefore generates, per provider, one icon
+command (`aiUsage.chip.claude` …) and one text command per percent value (`aiUsage.chip.claude.17` …). Their `when`
+clauses match the chat's locked agent (`chatAgentHostProviderId`, `lockedCodingAgentId`, `chatSessionType` such as
+`agent-host-claude`, or `sessionType` in the Agents window) and the context keys the extension sets:
+`aiUsage.chip.<provider>` while the provider is enabled and chips are on, `aiUsage.chip.<provider>.percent` with the
+most used window's figure. The icon stays without a figure when the provider is not signed in where the extension
+runs or nothing has been read yet; clicking either chip runs `aiUsage.showDetails` for that provider, which opens a dialog with the same text as
 the status bar tooltip (both are rendered from one description of the reading). VS Code gives extensions no way to
 open an anchored hover from a toolbar item or a status bar entry, which is why the chip uses a dialog and the status
 bar items have no click command. `aiUsage.chatChips.debug` bypasses the agent match, so with it on every provider's

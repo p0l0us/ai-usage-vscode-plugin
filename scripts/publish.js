@@ -8,7 +8,8 @@
 //
 // Before publishing it checks that the version in package.json is not already on the
 // Marketplace. If it is, it offers to bump (patch/minor/major) using scripts/bump-version.js,
-// then builds, packages to a temp folder and publishes. Nothing is committed or tagged.
+// then builds, packages to a temp folder and publishes. Afterwards it offers to commit, tag
+// (v<version>) and push; that step is skipped when non-interactive (--yes or no TTY).
 const { spawnSync } = require('child_process');
 const fs = require('fs');
 const os = require('os');
@@ -147,6 +148,29 @@ function publishedVersions(id) {
   }
 
   console.log(`\nPublished ${id}@${pkg.version}.`);
-  console.log('Next: fill in CHANGELOG.md if needed, then');
-  console.log(`  git add -A && git commit -m "Release v${pkg.version}" && git tag v${pkg.version} && git push && git push --tags`);
+
+  const tag = `v${pkg.version}`;
+  const manual = `  git add -A && git commit -m "Release ${tag}" && git tag ${tag} && git push && git push --tags`;
+  const dirty = (capture('git', ['status', '--porcelain']).stdout || '').trim().length > 0;
+  const tagExists = capture('git', ['rev-parse', '-q', '--verify', `refs/tags/${tag}`]).status === 0;
+  if (tagExists) {
+    console.log(`Tag ${tag} already exists; not committing or pushing. If needed, run by hand:\n${manual}`);
+    return;
+  }
+  console.log('Fill in CHANGELOG.md now if needed, before confirming.');
+  const commit = await ask(`Commit${dirty ? ' changes' : ''}, tag ${tag} and push?`, ['y', 'n'], 'n');
+  if (commit !== 'y') {
+    console.log(`Skipped. To do it by hand:\n${manual}`);
+    return;
+  }
+  if (dirty) {
+    run('git', ['add', '-A']);
+    run('git', ['commit', '-m', `Release ${tag}`]);
+  } else {
+    console.log('Working tree is clean; tagging the current commit.');
+  }
+  run('git', ['tag', tag]);
+  run('git', ['push']);
+  run('git', ['push', '--tags']);
+  console.log(`Committed, tagged ${tag} and pushed.`);
 })();
