@@ -22,7 +22,7 @@ can be read from (CLI command, local file, or API) and how the tool stores its l
 2. Make your change. Keep `src/live.ts` and `src/cache.ts` free of `vscode` imports so they stay testable with Node.
 3. Run `npm run compile`. It regenerates the chat-chip commands in `package.json` and type-checks the code.
 4. Test in VS Code: package with `npx @vscode/vsce package --no-dependencies` and install the VSIX.
-5. Update `README.md` if you added or changed a setting, and add a line to `CHANGELOG.md`.
+5. Update `docs/CONFIGURATION.md` (and the README table if it is a common setting) when you add or change a setting, and add a line to `CHANGELOG.md`.
 6. Open the pull request with a short description of what changed and why. Link the issue if there is one.
 
 Small, focused pull requests are reviewed fastest. For larger changes, open an issue first so the approach can be

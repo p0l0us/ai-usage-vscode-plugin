@@ -26,13 +26,6 @@ type AccountUsage = {
   budgetLimit: number;
 };
 
-type SessionUsage = {
-  session: string;
-  account: string;
-  usedTokens: number;
-  remainingTokens: number;
-};
-
 const WARNING_PERCENT = 80;
 const ERROR_PERCENT = 95;
 
@@ -52,30 +45,6 @@ const GITHUB_SCOPE_CANDIDATES: string[][] = [
  */
 const STATUS_ALIGNMENT = vscode.StatusBarAlignment.Right;
 const STATUS_PRIORITY = { manual: 100.19, claude: 100.18, codex: 100.17, copilot: 100.16 };
-
-class ChatSessionsProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
-  private readonly onDidChangeTreeDataEmitter = new vscode.EventEmitter<void>();
-  readonly onDidChangeTreeData = this.onDidChangeTreeDataEmitter.event;
-
-  refresh(): void {
-    this.onDidChangeTreeDataEmitter.fire();
-  }
-
-  getTreeItem(element: vscode.TreeItem): vscode.TreeItem {
-    return element;
-  }
-
-  getChildren(): vscode.TreeItem[] {
-    const sessions = getSessionUsage();
-    return sessions.map((session) => {
-      const item = new vscode.TreeItem(session.session, vscode.TreeItemCollapsibleState.None);
-      item.description = `${session.remainingTokens.toLocaleString()} left`;
-      item.tooltip = `${session.account}\nUsed: ${session.usedTokens.toLocaleString()}\nRemaining: ${session.remainingTokens.toLocaleString()}`;
-      item.contextValue = 'aiUsageSession';
-      return item;
-    });
-  }
-}
 
 type LiveProvider = {
   id: ProviderId;
@@ -185,9 +154,6 @@ export function activate(context: vscode.ExtensionContext): void {
     context.subscriptions.push(provider.status);
   }
 
-  const sessionsProvider = new ChatSessionsProvider();
-  context.subscriptions.push(vscode.window.registerTreeDataProvider('aiUsage.chatSessions', sessionsProvider));
-
   const refreshManual = () => {
     const accounts = getAccountUsage();
     const summary = summarize(accounts);
@@ -195,12 +161,11 @@ export function activate(context: vscode.ExtensionContext): void {
     status.tooltip = summary.lines.join('\n');
     // The manual item only makes sense once the user has entered their own figures;
     // the sample defaults would otherwise sit next to the live items.
-    if (hasUserConfiguredAccounts()) {
+    if (hasUserConfiguredAccounts() && statusBarVisible()) {
       status.show();
     } else {
       status.hide();
     }
-    sessionsProvider.refresh();
   };
 
 
@@ -366,6 +331,19 @@ export function activate(context: vscode.ExtensionContext): void {
       vscode.workspace.getConfiguration().get<boolean>('aiUsage.chatChips.agentsWindow', true)
     );
   void updateAgentsWindowChip();
+
+  // Chip visibility in a regular VS Code window and the optional service-icon chip.
+  const updateChipPresentation = async () => {
+    const config = vscode.workspace.getConfiguration();
+    const mode = config.get<string>('aiUsage.chatChips.workbench', 'whenNoStatusBar');
+    const chipsEnabled = config.get<boolean>('aiUsage.chatChips.enabled', true);
+    const inWorkbench = chipsEnabled && (mode === 'always' || (mode === 'whenNoStatusBar' && !statusBarVisible()));
+    await Promise.all([
+      vscode.commands.executeCommand('setContext', `${CHIP_COMMAND_PREFIX}workbench`, inWorkbench),
+      vscode.commands.executeCommand('setContext', `${CHIP_COMMAND_PREFIX}icon`, config.get<boolean>('aiUsage.chatChips.icon', true))
+    ]);
+  };
+  void updateChipPresentation();
   log(`host: ${vscode.env.appName} · uiKind=${vscode.env.uiKind === vscode.UIKind.Desktop ? 'desktop' : 'web'} · remote=${vscode.env.remoteName ?? 'none'} · extensionKind=${context.extension.extensionKind === vscode.ExtensionKind.UI ? 'ui' : 'workspace'}`);
 
   // The workspace's repositories decide which Copilot account/organization applies.
@@ -379,7 +357,7 @@ export function activate(context: vscode.ExtensionContext): void {
   }));
 
   context.subscriptions.push(vscode.workspace.onDidChangeConfiguration((event) => {
-    if (event.affectsConfiguration('aiUsage.accounts') || event.affectsConfiguration('aiUsage.chatSessions')) {
+    if (event.affectsConfiguration('aiUsage.accounts')) {
       refreshManual();
     }
     if (
@@ -398,6 +376,19 @@ export function activate(context: vscode.ExtensionContext): void {
     }
     if (event.affectsConfiguration('aiUsage.updateIntervalMinutes')) {
       scheduleTimer();
+    }
+    if (event.affectsConfiguration('aiUsage.statusBar')) {
+      refreshManual();
+      for (const provider of liveProviders) {
+        renderLive(provider);
+      }
+    }
+    if (
+      event.affectsConfiguration('aiUsage.statusBar') ||
+      event.affectsConfiguration('aiUsage.chatChips') ||
+      event.affectsConfiguration('workbench.statusBar.visible')
+    ) {
+      void updateChipPresentation();
     }
   }));
 
@@ -617,11 +608,15 @@ function renderLive(provider: LiveProvider): void {
   const item = provider.status;
   item.color = undefined;
   item.command = 'aiUsage.showDetails';
+  if (!statusBarVisible()) {
+    item.hide();
+    return;
+  }
 
   if (!result || result.kind === 'unavailable') {
     if (result?.reason && provider.id === 'copilot') {
       const needsAccess = result.reason.includes('No GitHub sign-in');
-      item.text = `$(${provider.icon}) ${needsAccess ? 'Copilot · connect' : 'Copilot n/a'}`;
+      item.text = statusText(provider, needsAccess ? 'connect' : 'n/a', 'Copilot');
       item.tooltip = needsAccess
         ? 'Copilot\nClick to allow AI Usage to read your GitHub Copilot quota with the account VS Code is signed in to.'
         : `Copilot\n${result.reason}\nSee Output → AI Usage for details.`;
@@ -637,7 +632,7 @@ function renderLive(provider: LiveProvider): void {
   if (result.kind === 'error') {
     const previous = provider.lastGood;
     if (!previous) {
-      item.text = `$(${provider.icon}) ${result.title} $(warning)`;
+      item.text = statusText(provider, '$(warning)', result.title);
       item.tooltip = `${result.title}\n${result.message}`;
       item.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
       item.show();
@@ -645,7 +640,7 @@ function renderLive(provider: LiveProvider): void {
     }
     // Keep the last reading visible; grey it out once it is old enough to mislead.
     const ageMs = Date.now() - previous.fetchedAt.getTime();
-    item.text = `$(${provider.icon}) ${formatUsageLabel(previous)}`;
+    item.text = statusText(provider, formatUsageLabel(previous, false), previous.title);
     item.tooltip = buildTooltip(previous, result.message);
     item.backgroundColor = undefined;
     item.color = ageMs >= STALE_AFTER_MS ? new vscode.ThemeColor('disabledForeground') : undefined;
@@ -654,7 +649,7 @@ function renderLive(provider: LiveProvider): void {
   }
 
   const usage = result.usage;
-  item.text = `$(${provider.icon}) ${formatUsageLabel(usage)}`;
+  item.text = statusText(provider, formatUsageLabel(usage, false), usage.title);
   item.tooltip = buildTooltip(usage);
 
   const worst = Math.max(...usage.windows.map((window) => window.usedPercent));
@@ -673,13 +668,30 @@ function titleFor(provider: LiveProvider): string {
   return provider.lastGood?.title ?? PROVIDER_TITLES[provider.id];
 }
 
+/** Whether status bar items show the service name next to the icon (`aiUsage.statusBar.labels`). */
+function showServiceLabels(): boolean {
+  return vscode.workspace.getConfiguration().get<string>('aiUsage.statusBar.labels', 'iconOnly') === 'iconAndName';
+}
+
+/** True when this extension's status bar items can be seen: enabled here and VS Code's status bar is visible. */
+function statusBarVisible(): boolean {
+  const config = vscode.workspace.getConfiguration();
+  return config.get<boolean>('aiUsage.statusBar.enabled', true) && config.get<boolean>('workbench.statusBar.visible', true) !== false;
+}
+
 /** "Claude 17% (5h) 25% (7d)", "Codex 37% (7d)", "Copilot 75%" (Copilot has a single monthly window). */
-function formatUsageLabel(usage: LiveUsage): string {
+function formatUsageLabel(usage: LiveUsage, withTitle = true): string {
   const primary = usage.windows.slice(0, 2);
   const parts = primary.map((window) =>
     usage.provider === 'copilot' ? `${window.usedPercent}%` : `${window.usedPercent}% (${window.label})`
   );
-  return `${usage.title} ${parts.join(' ')}`;
+  return withTitle ? `${usage.title} ${parts.join(' ')}` : parts.join(' ');
+}
+
+/** Status bar text: vendor icon, optional service name, then the figures. */
+function statusText(provider: LiveProvider, body: string, title?: string): string {
+  const name = showServiceLabels() && title ? `${title} ` : '';
+  return `$(${provider.icon}) ${name}${body}`.trimEnd();
 }
 
 function buildTooltip(usage: LiveUsage, refreshError?: string): vscode.MarkdownString {
@@ -895,16 +907,6 @@ function getAccountUsage(): AccountUsage[] {
     Number.isFinite(entry?.usedBudget) &&
     Number.isFinite(entry?.budgetLimit) &&
     entry.tokenLimit > 0
-  );
-}
-
-function getSessionUsage(): SessionUsage[] {
-  const configured = vscode.workspace.getConfiguration().get<SessionUsage[]>('aiUsage.chatSessions', []);
-  return configured.filter((entry) =>
-    Boolean(entry?.session) &&
-    Boolean(entry?.account) &&
-    Number.isFinite(entry?.usedTokens) &&
-    Number.isFinite(entry?.remainingTokens)
   );
 }
 

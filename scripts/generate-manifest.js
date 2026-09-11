@@ -11,13 +11,20 @@ const path = require('path');
 // Commands are generated per provider (aiUsage.chip.<provider>.<window>.<percent>) so that a
 // click can open the details of that particular agent. Each provider lists the windows its
 // service reports.
+// `aiUsage.chip.debug` bypasses the agent match so a missing chip can be told apart from a missing value.
+const agentMatch = (re) =>
+  `(aiUsage.chip.debug || chatAgentHostProviderId =~ /${re}/i || lockedCodingAgentId =~ /${re}/i || chatSessionType =~ /${re}/i || sessionType =~ /${re}/i)`;
+
 const PROVIDERS = [
   // Locked agent-host session ids look like "claude", "codex", "copilotcli"; the coding
   // agent id is the chat session contribution type (e.g. "agent-host-claude").
-  { id: 'claude', windows: ['5h', '7d'], match: '(chatAgentHostProviderId =~ /claude/i || lockedCodingAgentId =~ /claude/i)' },
-  { id: 'codex', windows: ['5h', '7d'], match: '(chatAgentHostProviderId =~ /codex|openai/i || lockedCodingAgentId =~ /codex|openai/i)' },
+  // Agent identity is exposed through several context keys depending on the surface: the locked
+  // agent-host provider id ("claude"), the locked coding agent id, the chat session type
+  // ("agent-host-claude") and, in the Agents window, the session type. Match any of them.
+  { id: 'claude', icon: '$(claude)', windows: ['5h', '7d'], match: agentMatch('claude|anthropic') },
+  { id: 'codex', icon: '$(openai)', windows: ['5h', '7d'], match: agentMatch('codex|openai') },
   // Copilot: regular (unlocked) chat, or a Copilot CLI / cloud agent session.
-  { id: 'copilot', windows: ['month'], match: '(!lockedToCodingAgent || chatAgentHostProviderId =~ /copilot/i || lockedCodingAgentId =~ /copilot/i)' }
+  { id: 'copilot', icon: '$(copilot)', windows: ['month'], match: `(!lockedToCodingAgent || ${agentMatch('copilot')})` }
 ];
 const CHIP_PREFIX = 'aiUsage.chip.';
 // Only the `navigation` group is rendered inline by the chat input status toolbar; other groups
@@ -34,12 +41,28 @@ const commands = (pkg.contributes.commands || []).filter((c) => !isChip(c));
 const statusMenu = (pkg.contributes.menus['chat/input/status'] || []).filter((m) => !isChip(m));
 const paletteMenu = (pkg.contributes.menus.commandPalette || []).filter((m) => !isChip(m));
 
-// `isSessionsWindow` is VS Code's context key for the Agents window; `aiUsage.chip.agentsWindow`
-// mirrors the aiUsage.chatChips.agentsWindow setting.
-const WINDOW_GATE = '(!isSessionsWindow || aiUsage.chip.agentsWindow)';
+// `isSessionsWindow` is VS Code's context key for the Agents window (which has no status bar);
+// `aiUsage.chip.agentsWindow` mirrors aiUsage.chatChips.agentsWindow. In a regular VS Code window
+// `aiUsage.chip.workbench` is set by the extension from aiUsage.chatChips.workbench and whether a
+// status bar with the same figures is visible.
+const WINDOW_GATE = '((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench))';
 let generated = 0;
 PROVIDERS.forEach((provider, providerIndex) => {
   const base = providerIndex * 1000;
+
+  // Service icon chip (aiUsage.chatChips.icon), placed before that provider's figures. Menu items
+  // with an icon render icon-only, so the icon and the percentages have to be separate chips.
+  const hasValue = [...provider.windows.map((window) => `aiUsage.chip.${provider.id}.${window}`), `aiUsage.chip.${provider.id}.error`].join(' || ');
+  const iconCommand = `${CHIP_PREFIX}${provider.id}.icon`;
+  commands.push({ command: iconCommand, title: `${provider.id[0].toUpperCase()}${provider.id.slice(1)} usage`, category: 'AI Usage', icon: provider.icon });
+  statusMenu.push({
+    command: iconCommand,
+    when: `${WINDOW_GATE} && ${provider.match} && aiUsage.chip.icon && (${hasValue})`,
+    group: `${CHIP_GROUP}@${base}`
+  });
+  paletteMenu.push({ command: iconCommand, when: 'false' });
+  generated++;
+
   provider.windows.forEach((window, windowIndex) => {
     for (let percent = 0; percent <= 100; percent++) {
       const command = `${CHIP_PREFIX}${provider.id}.${window}.${percent}`;
@@ -49,7 +72,7 @@ PROVIDERS.forEach((provider, providerIndex) => {
       statusMenu.push({
         command,
         when: `${WINDOW_GATE} && ${provider.match} && aiUsage.chip.${provider.id}.${window} == '${percent}'`,
-        group: `${CHIP_GROUP}@${base + windowIndex * 101 + percent}`
+        group: `${CHIP_GROUP}@${base + 1 + windowIndex * 101 + percent}`
       });
       paletteMenu.push({ command, when: 'false' });
       generated++;
