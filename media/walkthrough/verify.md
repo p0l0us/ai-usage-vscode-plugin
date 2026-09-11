@@ -1,10 +1,10 @@
 # Check the result
 
-Open any session in the Agents window. Beneath the chat input, next to the context indicator, the chips for the
-session's agent appear, for example `17% (5h)` `25% (7d)` for Claude or `42%` for Copilot. Click a chip to open the
-details of that agent.
+Open any session in the Agents window. Beneath the chat input, next to the context indicator, the icon of the
+session's agent appears (Claude, OpenAI or Copilot). Click it for that agent's usage: plan, account or
+organization, per-window percentages and reset times, the same text the status bar tooltip shows.
 
-- The chips in the Agents window follow [aiUsage.chatChips.agentsWindow](command:workbench.action.openSettings?%5B%22aiUsage.chatChips.agentsWindow%22%5D)
+- The chip in the Agents window follows [aiUsage.chatChips.agentsWindow](command:workbench.action.openSettings?%5B%22aiUsage.chatChips.agentsWindow%22%5D)
   (on by default) and [aiUsage.chatChips.enabled](command:workbench.action.openSettings?%5B%22aiUsage.chatChips.enabled%22%5D).
   All extension settings: [open AI Usage settings](command:workbench.action.openSettings?%5B%22%40ext%3Ap0l0us.ai-usage-vscode-plugin%22%5D)
   or edit `aiUsage.*` keys in [settings.json](command:workbench.action.openSettingsJson).

@@ -29,8 +29,7 @@ type AccountUsage = {
 const WARNING_PERCENT = 80;
 const ERROR_PERCENT = 95;
 
-/** Window labels that have generated chip commands in package.json (see scripts/generate-manifest.js). */
-const CHIP_WINDOWS = ['5h', '7d', 'month'];
+/** Prefix of the chat chip commands generated into package.json (see scripts/generate-manifest.js). */
 const CHIP_COMMAND_PREFIX = 'aiUsage.chip.';
 /** Scope sets Copilot itself signs in with; any of them is enough to read the quota endpoint. */
 const GITHUB_SCOPE_CANDIDATES: string[][] = [
@@ -97,8 +96,9 @@ function log(message: string): void {
 export function activate(context: vscode.ExtensionContext): void {
   output = vscode.window.createOutputChannel('AI Usage');
   context.subscriptions.push(output);
+  // Status bar items carry their figures in the tooltip and have no click action: VS Code only
+  // lets its own entries open the tooltip on click, and a quick pick would duplicate the hover.
   const status = vscode.window.createStatusBarItem(STATUS_ALIGNMENT, STATUS_PRIORITY.manual);
-  status.command = 'aiUsage.showDetails';
   status.name = 'AI Usage';
   context.subscriptions.push(status);
 
@@ -149,7 +149,6 @@ export function activate(context: vscode.ExtensionContext): void {
   const cache = new SharedCache(path.join(context.globalStorageUri.fsPath, 'usage-cache.json'));
   log(`cache: ${path.join(context.globalStorageUri.fsPath, 'usage-cache.json')}`);
   for (const provider of liveProviders) {
-    provider.status.command = 'aiUsage.showDetails';
     provider.status.name = `AI Usage: ${provider.id}`;
     context.subscriptions.push(provider.status);
   }
@@ -186,6 +185,9 @@ export function activate(context: vscode.ExtensionContext): void {
         await updateChipContext(provider, false);
         return;
       }
+
+      // Show the chat chip right away; until the first reading arrives a click says it is waiting.
+      await updateChipContext(provider, config.get<boolean>('aiUsage.chatChips.enabled', true));
 
       const { source, checkIntervalMs } = settingsFor(provider.id);
       // Each source has its own cache entry so switching sources never shows another source's reading.
@@ -263,7 +265,7 @@ export function activate(context: vscode.ExtensionContext): void {
   };
 
   context.subscriptions.push(vscode.commands.registerCommand('aiUsage.showDetails', (providerId?: unknown) =>
-    showDetailsPanel(liveProviders, refreshAll, typeof providerId === 'string' ? (providerId as ProviderId) : undefined)
+    showDetailsDialog(liveProviders, refreshAll, typeof providerId === 'string' ? (providerId as ProviderId) : undefined)
   ));
 
   context.subscriptions.push(vscode.commands.registerCommand('aiUsage.refresh', refreshAll));
@@ -301,8 +303,8 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   };
 
-  // Every generated chat chip command (aiUsage.chip.<provider>.<window>.<percent>, see
-  // scripts/generate-manifest.js) opens the details of that provider. The list is read from
+  // Every generated chat chip command (aiUsage.chip.<provider>, see scripts/generate-manifest.js)
+  // opens the details of that provider; the debug chip opens all of them. The list is read from
   // the manifest so the two stay in sync.
   const manifestCommands = (context.extension.packageJSON as { contributes?: { commands?: Array<{ command: string }> } })
     .contributes?.commands ?? [];
@@ -332,16 +334,13 @@ export function activate(context: vscode.ExtensionContext): void {
     );
   void updateAgentsWindowChip();
 
-  // Chip visibility in a regular VS Code window and the optional service-icon chip.
+  // Chip visibility in a regular VS Code window.
   const updateChipPresentation = async () => {
     const config = vscode.workspace.getConfiguration();
     const mode = config.get<string>('aiUsage.chatChips.workbench', 'whenNoStatusBar');
     const chipsEnabled = config.get<boolean>('aiUsage.chatChips.enabled', true);
     const inWorkbench = chipsEnabled && (mode === 'always' || (mode === 'whenNoStatusBar' && !statusBarVisible()));
-    await Promise.all([
-      vscode.commands.executeCommand('setContext', `${CHIP_COMMAND_PREFIX}workbench`, inWorkbench),
-      vscode.commands.executeCommand('setContext', `${CHIP_COMMAND_PREFIX}icon`, config.get<boolean>('aiUsage.chatChips.icon', true))
-    ]);
+    await vscode.commands.executeCommand('setContext', `${CHIP_COMMAND_PREFIX}workbench`, inWorkbench);
   };
   void updateChipPresentation();
   log(`host: ${vscode.env.appName} · uiKind=${vscode.env.uiKind === vscode.UIKind.Desktop ? 'desktop' : 'web'} · remote=${vscode.env.remoteName ?? 'none'} · extensionKind=${context.extension.extensionKind === vscode.ExtensionKind.UI ? 'ui' : 'workspace'}`);
@@ -574,46 +573,21 @@ async function getWorkspaceOwners(): Promise<string[]> {
 }
 
 /**
- * Publishes the provider's usage as context keys so the generated `chat/input/status` menu
- * items in package.json can show the matching chip for the chat's selected agent.
+ * Publishes whether the provider's chip beneath the chat input is shown (`aiUsage.chip.<provider>`,
+ * matched by the generated `chat/input/status` menu items in package.json). The chip is the vendor
+ * icon alone and stays for the chat's own agent while the provider is enabled and chips are on, also
+ * when the provider is not signed in where the extension runs or the last refresh failed: a click
+ * opens the details, which say so.
  */
 async function updateChipContext(provider: LiveProvider, enabled: boolean): Promise<void> {
-  const result = provider.last;
-  const values = new Map<string, string | boolean | undefined>();
-  for (const window of CHIP_WINDOWS) {
-    values.set(window, undefined);
-  }
-  values.set('error', false);
-  values.set('unavailable', false);
-
-  const usage = result?.kind === 'ok' ? result.usage : result?.kind === 'error' ? provider.lastGood : undefined;
-  if (enabled && usage) {
-    for (const window of usage.windows) {
-      if (CHIP_WINDOWS.includes(window.label)) {
-        values.set(window.label, String(window.usedPercent));
-      }
-    }
-  } else if (enabled && result?.kind === 'error') {
-    values.set('error', true);
-  } else if (enabled && result?.kind === 'unavailable') {
-    // Not signed in where the extension runs. Shown only for the chat's own agent, so a Claude
-    // chat in the Agents window (local extension, remote login) gets an "n/a" chip instead of
-    // nothing; the details explain where the login has to be.
-    values.set('unavailable', true);
-  }
-
-  await Promise.all(
-    [...values].map(([key, value]) =>
-      vscode.commands.executeCommand('setContext', `${CHIP_COMMAND_PREFIX}${provider.id}.${key}`, value)
-    )
-  );
+  await vscode.commands.executeCommand('setContext', `${CHIP_COMMAND_PREFIX}${provider.id}`, enabled);
 }
 
 function renderLive(provider: LiveProvider): void {
   const result = provider.last;
   const item = provider.status;
   item.color = undefined;
-  item.command = 'aiUsage.showDetails';
+  item.command = undefined;
   if (!statusBarVisible()) {
     item.hide();
     return;
@@ -626,7 +600,7 @@ function renderLive(provider: LiveProvider): void {
       item.tooltip = needsAccess
         ? 'Copilot\nClick to allow AI Usage to read your GitHub Copilot quota with the account VS Code is signed in to.'
         : `Copilot\n${result.reason}\nSee Output → AI Usage for details.`;
-      item.command = needsAccess ? 'aiUsage.connectGitHub' : 'aiUsage.showDetails';
+      item.command = needsAccess ? 'aiUsage.connectGitHub' : undefined;
       item.backgroundColor = undefined;
       item.show();
     } else {
@@ -710,200 +684,155 @@ function statusText(provider: LiveProvider, body: string, title?: string): strin
   return `$(${provider.icon}) ${name}${body}`.trimEnd();
 }
 
+/** Text of a reading. The status bar tooltip and the details dialog are both rendered from it. */
+type UsageText = {
+  /** "Copilot · CircleHash" */
+  heading: string;
+  plan?: string;
+  /** "(reason). Showing the reading from N min ago." when shown in place of a failed refresh. */
+  refreshFailed?: string;
+  /** "50% used · resets in 19d 6h" per window. */
+  windows: Array<{ label: string; text: string }>;
+  details: string[];
+  updated: string;
+};
+
+function describeUsage(usage: LiveUsage, refreshError?: string): UsageText {
+  const minutes = Math.round((Date.now() - usage.fetchedAt.getTime()) / 60_000);
+  return {
+    heading: usage.subtitle ? `${usage.title} · ${usage.subtitle}` : usage.title,
+    plan: usage.plan,
+    refreshFailed: refreshError ? `(${refreshError}). Showing the reading from ${minutes} min ago.` : undefined,
+    windows: usage.windows.map((window) => {
+      const reset = formatResetIn(window.resetsAt);
+      return { label: window.label, text: `${window.usedPercent}% used${reset ? ` · ${reset}` : ''}` };
+    }),
+    details: usage.details ?? [],
+    updated: `Updated ${usage.fetchedAt.toLocaleTimeString()}`
+  };
+}
+
 function buildTooltip(usage: LiveUsage, refreshError?: string): vscode.MarkdownString {
+  const text = describeUsage(usage, refreshError);
   const md = new vscode.MarkdownString(undefined, true);
-  if (refreshError) {
-    const minutes = Math.round((Date.now() - usage.fetchedAt.getTime()) / 60_000);
-    md.appendMarkdown(`$(warning) **Refresh failed** (${refreshError}). Showing the reading from ${minutes} min ago.\n\n`);
+  if (text.refreshFailed) {
+    md.appendMarkdown(`$(warning) **Refresh failed** ${text.refreshFailed}\n\n`);
   }
-  const heading = usage.subtitle ? `${usage.title} · ${usage.subtitle}` : usage.title;
-  md.appendMarkdown(`**${heading}**${usage.plan ? ` · ${usage.plan}` : ''}\n\n`);
-  for (const window of usage.windows) {
-    const reset = formatResetIn(window.resetsAt);
-    md.appendMarkdown(`- **${window.label}**: ${window.usedPercent}% used${reset ? ` · ${reset}` : ''}\n`);
+  md.appendMarkdown(`**${text.heading}**${text.plan ? ` · ${text.plan}` : ''}\n\n`);
+  for (const window of text.windows) {
+    md.appendMarkdown(`- **${window.label}**: ${window.text}\n`);
   }
-  if (usage.details?.length) {
+  if (text.details.length) {
     md.appendMarkdown('\n');
-    for (const line of usage.details) {
+    for (const line of text.details) {
       md.appendMarkdown(`${line}  \n`);
     }
   }
-  md.appendMarkdown(`\n_Updated ${usage.fetchedAt.toLocaleTimeString()}_`);
+  md.appendMarkdown(`\n_${text.updated}_`);
   return md;
 }
 
-type DetailItem = vscode.QuickPickItem & { action?: 'refresh' | 'log' | 'settings' | 'connect' | 'all' };
+/** The tooltip's lines as plain text, for the details dialog. */
+function plainText(text: UsageText): { heading: string; lines: string[] } {
+  const lines: string[] = [];
+  if (text.refreshFailed) {
+    lines.push(`Refresh failed ${text.refreshFailed}`, '');
+  }
+  lines.push(...text.windows.map((window) => `${window.label}: ${window.text}`));
+  if (text.details.length) {
+    lines.push('', ...text.details);
+  }
+  lines.push('', text.updated);
+  return { heading: text.plan ? `${text.heading} · ${text.plan}` : text.heading, lines };
+}
 
-const WINDOW_NAMES: Record<string, string> = {
-  '5h': '5-hour window',
-  '7d': '7-day window',
-  month: 'Premium requests (month)',
-  chat: 'Chat',
-  completions: 'Completions'
+type DetailsAction = 'connect' | 'refresh' | 'log';
+const ACTION_LABELS: Record<DetailsAction, string> = {
+  connect: 'Connect GitHub account',
+  refresh: 'Refresh',
+  log: 'Open log'
 };
 
-function windowName(label: string): string {
-  if (WINDOW_NAMES[label]) {
-    return WINDOW_NAMES[label];
-  }
-  const scoped = /^7d (.+)$/.exec(label);
-  return scoped ? `7-day window · ${scoped[1]}` : label;
-}
-
-function usageIcon(percent: number): string {
-  if (percent >= ERROR_PERCENT) {
-    return '$(error)';
-  }
-  if (percent >= WARNING_PERCENT) {
-    return '$(warning)';
-  }
-  return '$(pass)';
-}
-
-function providerItems(provider: LiveProvider): DetailItem[] {
+/** One provider's part of the details dialog: heading, body lines and the buttons that make sense. */
+function providerText(provider: LiveProvider): { heading: string; lines: string[]; actions: DetailsAction[] } {
   const result = provider.last;
-  const items: DetailItem[] = [];
-  const title = result?.kind === 'ok' ? result.usage.title : result?.kind === 'error' ? result.title : provider.id;
-  const plan = result?.kind === 'ok' && result.usage.plan ? ` · ${result.usage.plan}` : '';
-  const who = result?.kind === 'ok' && result.usage.subtitle ? ` · ${result.usage.subtitle}` : '';
-  items.push({ label: `${title}${who}${plan}`, kind: vscode.QuickPickItemKind.Separator });
-
+  const title = PROVIDER_TITLES[provider.id];
+  if (!vscode.workspace.getConfiguration().get<boolean>(provider.settingKey, true)) {
+    return { heading: title, lines: [`Disabled by the ${provider.settingKey} setting.`], actions: [] };
+  }
   if (!result) {
-    items.push({ label: '$(clock) Waiting for first reading…' });
-    return items;
+    return { heading: title, lines: ['Waiting for the first reading…'], actions: ['refresh'] };
   }
   if (result.kind === 'unavailable') {
     if (provider.id === 'copilot' && result.reason?.includes('No GitHub sign-in')) {
-      items.push({
-        label: '$(github) Connect GitHub account',
-        detail: 'Allow AI Usage to read Copilot quota with the account VS Code is signed in to.',
-        action: 'connect'
-      });
-      return items;
+      return {
+        heading: title,
+        lines: ['Allow AI Usage to read your GitHub Copilot quota with the account VS Code is signed in to.'],
+        actions: ['connect', 'refresh']
+      };
     }
-    items.push({
-      label: '$(circle-slash) Not available',
-      detail: result.reason ?? `Not installed or not signed in ${hostDescription()}.`
-    });
-    items.push({
-      label: '$(info) Where the login has to be',
-      detail: `The extension reads ${PROVIDER_TITLES[provider.id]} where it runs (${hostDescription()}). In the Agents window that is always your local computer, even for remote sessions. Sign in there with the same account (${SIGN_IN_HINTS[provider.id]}); limits are per account, so the figures match.`
-    });
-    return items;
+    return {
+      heading: title,
+      lines: [
+        `Not available: ${result.reason ?? `not installed or not signed in ${hostDescription()}`}`,
+        '',
+        `The extension reads ${title} where it runs (${hostDescription()}). In the Agents window that is always your local computer, even for remote sessions. Sign in there with the same account (${SIGN_IN_HINTS[provider.id]}); limits are per account, so the figures match.`
+      ],
+      actions: ['refresh', 'log']
+    };
   }
-  const usage = result.kind === 'ok' ? result.usage : provider.lastGood;
   if (result.kind === 'error') {
-    items.push({
-      label: '$(warning) Last refresh failed',
-      detail: usage ? `${result.message} — showing the reading from ${usage.fetchedAt.toLocaleTimeString()}.` : result.message
-    });
-    if (!usage) {
-      return items;
+    const previous = provider.lastGood;
+    if (!previous) {
+      return { heading: result.title, lines: [`Refresh failed: ${result.message}`], actions: ['refresh', 'log'] };
     }
+    return { ...plainText(describeUsage(previous, result.message)), actions: ['refresh', 'log'] };
   }
-
-  for (const window of usage!.windows) {
-    const reset = formatResetIn(window.resetsAt);
-    items.push({
-      label: `${usageIcon(window.usedPercent)} ${windowName(window.label)}`,
-      description: `${window.usedPercent}% used · ${100 - window.usedPercent}% left`,
-      detail: reset ? `${reset[0].toUpperCase()}${reset.slice(1)}${window.resetsAt ? ` (${window.resetsAt.toLocaleString()})` : ''}` : undefined
-    });
-  }
-  for (const line of usage!.details ?? []) {
-    const [key, ...rest] = line.split(': ');
-    items.push(rest.length ? { label: `$(info) ${key}`, description: rest.join(': ') } : { label: `$(info) ${line}` });
-  }
-  const { source, checkIntervalMs } = settingsFor(provider.id);
-  items.push({
-    label: '$(history) Updated',
-    description: usage!.fetchedAt.toLocaleTimeString(),
-    detail: `Source: ${SOURCE_LABELS[source] ?? source} · checked every ${Math.round(checkIntervalMs / 60_000)} min · display refreshed every ${Math.round(updateIntervalMs() / 60_000)} min`
-  });
-  return items;
+  return { ...plainText(describeUsage(result.usage)), actions: ['refresh'] };
 }
 
 /**
- * Details panel. With `focus` set (a chat chip was clicked) only that provider is shown, with
- * an action to expand to all providers; without it every provider is listed.
+ * Details dialog with the same text as the status bar tooltips. With `focus` set (a chat chip was
+ * clicked) only that provider is shown; without it (AI Usage: Show Details) every enabled provider
+ * is listed. VS Code offers extensions no anchored popup, so this is a modal message with the
+ * figures as its detail text.
  */
-async function showDetailsPanel(providers: LiveProvider[], refreshAll: () => Promise<void>, focus?: ProviderId): Promise<void> {
-  let focused: LiveProvider | undefined = providers.find((provider) => provider.id === focus);
-  const build = (): DetailItem[] => {
-    const items: DetailItem[] = [];
-    for (const provider of focused ? [focused] : providers) {
-      items.push(...providerItems(provider));
-    }
-    if (focused) {
-      items.push({ label: 'Actions', kind: vscode.QuickPickItemKind.Separator });
-      items.push({ label: '$(list-flat) Show all providers', action: 'all' });
-    }
-    if (!focused && hasUserConfiguredAccounts()) {
-      items.push({ label: 'Configured accounts', kind: vscode.QuickPickItemKind.Separator });
-      for (const account of getAccountUsage()) {
-        const usedPercent = Math.round((account.usedTokens / account.tokenLimit) * 100);
-        items.push({
-          label: `${usageIcon(usedPercent)} ${account.name}`,
-          description: `${usedPercent}% used · ${Math.max(0, account.tokenLimit - account.usedTokens).toLocaleString()} tokens left`,
-          detail: `${account.period} · budget ${Math.max(0, account.budgetLimit - account.usedBudget)}/${account.budgetLimit} left`
-        });
-      }
-    }
-    if (!focused) {
-      items.push({ label: 'Actions', kind: vscode.QuickPickItemKind.Separator });
-    }
-    items.push({ label: '$(refresh) Refresh now', action: 'refresh' });
-    items.push({ label: '$(output) Open log', description: 'Output → AI Usage', action: 'log' });
-    items.push({ label: '$(gear) Settings', description: 'aiUsage.*', action: 'settings' });
-    return items;
-  };
+async function showDetailsDialog(providers: LiveProvider[], refreshAll: () => Promise<void>, focus?: ProviderId): Promise<void> {
+  const shown = focus
+    ? providers.filter((provider) => provider.id === focus)
+    : providers.filter((provider) => vscode.workspace.getConfiguration().get<boolean>(provider.settingKey, true));
+  const texts = shown.map(providerText);
 
-  const picker = vscode.window.createQuickPick<DetailItem>();
-  const setTitle = () => {
-    picker.title = focused ? `AI Usage · ${titleFor(focused)}` : 'AI Usage';
-    picker.placeholder = focused
-      ? `${titleFor(focused)} usage. Pick an action or press Escape to close.`
-      : 'Usage per provider. Pick an action or press Escape to close.';
-  };
-  setTitle();
-  picker.matchOnDescription = true;
-  picker.matchOnDetail = true;
-  picker.items = build();
+  let message: string;
+  let detail: string;
+  if (texts.length === 1) {
+    message = texts[0].heading;
+    detail = texts[0].lines.join('\n');
+  } else {
+    message = 'AI Usage';
+    const sections = texts.map((text) => [text.heading, ...text.lines].join('\n'));
+    if (hasUserConfiguredAccounts()) {
+      sections.push(['Configured accounts', ...summarize(getAccountUsage()).lines].join('\n'));
+    }
+    detail = sections.length
+      ? sections.join('\n\n')
+      : 'No service is enabled. Turn on aiUsage.claude.enabled, aiUsage.codex.enabled or aiUsage.copilot.enabled.';
+  }
 
-  picker.onDidAccept(async () => {
-    const picked = picker.selectedItems[0];
-    if (!picked?.action) {
-      return;
-    }
-    if (picked.action === 'refresh') {
-      picker.busy = true;
-      await refreshAll();
-      picker.items = build();
-      picker.busy = false;
-      return;
-    }
-    if (picked.action === 'all') {
-      focused = undefined;
-      setTitle();
-      picker.items = build();
-      return;
-    }
-    if (picked.action === 'connect') {
-      picker.busy = true;
-      await vscode.commands.executeCommand('aiUsage.connectGitHub');
-      picker.items = build();
-      picker.busy = false;
-      return;
-    }
-    picker.hide();
-    if (picked.action === 'log') {
-      output?.show(true);
-    } else {
-      await vscode.commands.executeCommand('workbench.action.openSettings', '@ext:p0l0us.ai-usage-vscode-plugin');
-    }
-  });
-  picker.onDidHide(() => picker.dispose());
-  picker.show();
+  const actions = (['connect', 'refresh', 'log'] as DetailsAction[]).filter((action) => texts.some((text) => text.actions.includes(action)));
+  const choice = await vscode.window.showInformationMessage(message, { modal: true, detail: detail.trim() }, ...actions.map((action) => ACTION_LABELS[action]));
+  const action = actions.find((candidate) => ACTION_LABELS[candidate] === choice);
+  if (action === 'refresh') {
+    await refreshAll();
+    return showDetailsDialog(providers, refreshAll, focus);
+  }
+  if (action === 'connect') {
+    await vscode.commands.executeCommand('aiUsage.connectGitHub');
+    return showDetailsDialog(providers, refreshAll, focus);
+  }
+  if (action === 'log') {
+    output?.show(true);
+  }
 }
 
 function summarizeResult(result: LiveResult): string {
