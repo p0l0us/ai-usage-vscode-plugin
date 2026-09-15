@@ -64,3 +64,12 @@ All windows share one cache file in the extension's global storage, so only one 
 interval and all windows respect the same backoff. Usage polling only reads tokens and never refreshes them. The
 profile manager writes the native credential file only after an explicit activation. If a token has expired, the
 item shows a warning and asks you to run the CLI once so it refreshes its own login.
+
+### Per-chat token chip
+
+Claude and Codex write provider-reported token counts into their local JSONL session logs. Every ten seconds the
+extension selects the newest session belonging to the current workspace, totals Claude's de-duplicated message
+usage or reads Codex's cumulative `token_count`, and publishes a compact label such as `400k tokens`. Clicking the
+chip shows the exact input/output/cache breakdown. The chat toolbar API scopes `when` clauses to the displayed
+agent but does not expose the active chat id to third-party extensions; with concurrent chats, the newest matching
+session is therefore the best available association. Copilot's private per-chat telemetry cannot be read here.

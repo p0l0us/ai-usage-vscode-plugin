@@ -17,6 +17,7 @@ import {
   formatResetIn,
   formatResetRemaining
 } from './live';
+import { compactTokenCount, readCurrentSessionTokens, SessionTokenUsage } from './sessionTokens';
 
 type BillingPeriod = 'daily' | 'weekly' | 'monthly';
 
@@ -34,6 +35,7 @@ const ERROR_PERCENT = 95;
 
 /** Prefix of the chat chip commands generated into package.json (see scripts/generate-manifest.js). */
 const CHIP_COMMAND_PREFIX = 'aiUsage.chip.';
+const CHAT_TOKEN_COMMAND_PREFIX = 'aiUsage.chatTokens.chip.';
 /** Window labels with generated rich-mode chip commands per provider (keep in sync with the generator). */
 const CHIP_WINDOWS: Record<ProviderId, string[]> = { claude: ['5h', '7d'], codex: ['5h', '7d'], copilot: [] };
 
@@ -179,6 +181,7 @@ export function activate(context: vscode.ExtensionContext): void {
   ];
 
   const cache = new SharedCache(path.join(context.globalStorageUri.fsPath, 'usage-cache.json'));
+  const sessionTokens = new Map<'claude' | 'codex', SessionTokenUsage>();
   log(`cache: ${path.join(context.globalStorageUri.fsPath, 'usage-cache.json')}`);
   for (const provider of liveProviders) {
     provider.status.command = 'aiUsage.showDetails';
@@ -371,6 +374,62 @@ export function activate(context: vscode.ExtensionContext): void {
       vscode.commands.executeCommand('aiUsage.showDetails', target)
     ));
   }
+
+  // A chat input status item has a static manifest title. The generated commands select a compact
+  // token label through a context key, while this command provides the exact breakdown on click.
+  context.subscriptions.push(vscode.commands.registerCommand('aiUsage.showChatTokens', (providerId?: unknown) => {
+    if (providerId !== 'claude' && providerId !== 'codex') {
+      return;
+    }
+    const usage = sessionTokens.get(providerId);
+    if (!usage) {
+      void vscode.window.showInformationMessage(`AI Usage: no ${providerId === 'claude' ? 'Claude' : 'Codex'} token data was found for this workspace.`);
+      return;
+    }
+    const cached = usage.cachedInputTokens
+      ? ` (${usage.cachedInputTokens.toLocaleString()} cached)`
+      : '';
+    void vscode.window.showInformationMessage(
+      `${providerId === 'claude' ? 'Claude' : 'Codex'} chat: ${usage.totalTokens.toLocaleString()} tokens · ` +
+      `${usage.inputTokens.toLocaleString()} input${cached} · ${usage.outputTokens.toLocaleString()} output`
+    );
+  }));
+  for (const { command } of manifestCommands) {
+    if (!command.startsWith(CHAT_TOKEN_COMMAND_PREFIX)) {
+      continue;
+    }
+    const providerId = command.slice(CHAT_TOKEN_COMMAND_PREFIX.length).split('.')[0];
+    if (providerId === 'claude' || providerId === 'codex') {
+      context.subscriptions.push(vscode.commands.registerCommand(command, () =>
+        vscode.commands.executeCommand('aiUsage.showChatTokens', providerId)
+      ));
+    }
+  }
+
+  const updateSessionTokens = async () => {
+    const config = vscode.workspace.getConfiguration();
+    const enabled = config.get<boolean>('aiUsage.chatChips.enabled', true) &&
+      config.get<boolean>('aiUsage.chatTokens.enabled', true);
+    const workspaces = (vscode.workspace.workspaceFolders ?? [])
+      .filter((folder) => folder.uri.scheme === 'file')
+      .map((folder) => folder.uri.fsPath);
+    await Promise.all((['claude', 'codex'] as const).map(async (provider) => {
+      const usage = enabled ? readCurrentSessionTokens(provider, workspaces) : undefined;
+      if (usage) {
+        sessionTokens.set(provider, usage);
+      } else {
+        sessionTokens.delete(provider);
+      }
+      await vscode.commands.executeCommand(
+        'setContext',
+        `aiUsage.chatTokens.${provider}`,
+        usage ? compactTokenCount(usage.totalTokens) : undefined
+      );
+    }));
+  };
+  void updateSessionTokens();
+  const sessionTokenTimer = setInterval(() => void updateSessionTokens(), 10_000);
+  context.subscriptions.push({ dispose: () => clearInterval(sessionTokenTimer) });
   const updateDebugChip = () =>
     vscode.commands.executeCommand(
       'setContext',
@@ -402,6 +461,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
   // The workspace's repositories decide which Copilot account/organization applies.
   context.subscriptions.push(vscode.workspace.onDidChangeWorkspaceFolders(() => void refreshLive()));
+  context.subscriptions.push(vscode.workspace.onDidChangeWorkspaceFolders(() => void updateSessionTokens()));
 
   // Refresh live data when the GitHub sign-in state changes (affects Copilot).
   context.subscriptions.push(vscode.authentication.onDidChangeSessions((event) => {
@@ -430,6 +490,12 @@ export function activate(context: vscode.ExtensionContext): void {
     }
     if (event.affectsConfiguration('aiUsage.updateIntervalMinutes')) {
       scheduleTimer();
+    }
+    if (
+      event.affectsConfiguration('aiUsage.chatTokens.enabled') ||
+      event.affectsConfiguration('aiUsage.chatChips.enabled')
+    ) {
+      void updateSessionTokens();
     }
     if (event.affectsConfiguration('aiUsage.statusBar')) {
       refreshManual();

@@ -8,6 +8,8 @@ a chip beneath the chat input.
   quota-window length. The item turns yellow at 80% and red at 95%.
 - **Chat chips**: compact percentages such as `Claude 17%` `25%` beneath the chat input for the agent the current
   chat is using; click for the named windows and reset countdowns.
+- **Per-chat tokens**: `400k tokens` for the newest Claude or Codex chat in the current workspace; click for the
+  exact input, output and cached-input breakdown.
 - **Details panel**: click any status bar item or chip for plan, account or organization, reset countdowns and
   source, with Refresh, Open log and Settings actions.
 - **Organization aware**: Copilot follows the GitHub account whose Copilot organization owns the workspace
@@ -113,6 +115,7 @@ it is installed and runs on the remote machine, so:
 | `aiUsage.statusBar.labels` | `iconOnly` | What precedes the figures: `none`, `nameOnly`, `iconOnly` or `iconAndName`. |
 | `aiUsage.statusBar.usage` | `rich` | `simple` shows one figure, the most used window, instead of every window. |
 | `aiUsage.chatChips.labels` / `.usage` | `name` / `rich` | The same two choices for the chat chips (no icon there). |
+| `aiUsage.chatTokens.enabled` | on | Show the local Claude/Codex chat's consumed-token chip. |
 | `aiUsage.codex.source` | `cli` | `api` calls the ChatGPT endpoint; `sessionLog` is fully offline. |
 | `aiUsage.<service>.checkIntervalMinutes` | 10 / 5 / 5 | How often Claude / Codex / Copilot are queried. |
 | `aiUsage.copilot.account` | (auto) | GitHub login to use when several are signed in. |
