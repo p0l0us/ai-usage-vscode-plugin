@@ -41,6 +41,10 @@ Each service has a `source` setting that selects where its usage is read from:
 - `aiUsage.chatChips.enabled`: toggle the chips beneath the chat input (default on). Clicking a chip opens the
   details panel for that agent. Hovering a chip only repeats its text; VS Code offers extensions no richer tooltip
   on that toolbar.
+- `aiUsage.chatTokens.enabled`: show the consumed-token chip for the newest local Claude or Codex session in the
+  current workspace (default on). Its compact value is rounded; clicking it shows exact input, output and cached
+  input counts. VS Code does not expose another extension's active chat id, so if several chats run concurrently,
+  the most recently updated matching session is shown. Copilot's per-chat telemetry is not available to extensions.
 - `aiUsage.chatChips.agentsWindow`: also show the chip in the Agents window (default on; see
   [Agents (sessions) window](AGENTS_WINDOW.md) for the required one-time setup). The extension there runs
   on your local computer and shows the logins found there, also for remote sessions; a chat whose agent is not signed in

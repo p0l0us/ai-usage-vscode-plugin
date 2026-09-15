@@ -2626,6 +2626,331 @@
         "category": "AI Usage"
       },
       {
+        "command": "aiUsage.chatTokens.chip.claude.0",
+        "title": "0 tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.claude.1bplus",
+        "title": "1b+ tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.claude.100",
+        "title": "100 tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.claude.200",
+        "title": "200 tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.claude.300",
+        "title": "300 tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.claude.400",
+        "title": "400 tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.claude.500",
+        "title": "500 tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.claude.600",
+        "title": "600 tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.claude.700",
+        "title": "700 tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.claude.800",
+        "title": "800 tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.claude.900",
+        "title": "900 tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.claude.1k",
+        "title": "1k tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.claude.2k",
+        "title": "2k tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.claude.3k",
+        "title": "3k tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.claude.4k",
+        "title": "4k tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.claude.5k",
+        "title": "5k tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.claude.6k",
+        "title": "6k tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.claude.7k",
+        "title": "7k tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.claude.8k",
+        "title": "8k tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.claude.9k",
+        "title": "9k tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.claude.10k",
+        "title": "10k tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.claude.20k",
+        "title": "20k tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.claude.30k",
+        "title": "30k tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.claude.40k",
+        "title": "40k tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.claude.50k",
+        "title": "50k tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.claude.60k",
+        "title": "60k tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.claude.70k",
+        "title": "70k tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.claude.80k",
+        "title": "80k tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.claude.90k",
+        "title": "90k tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.claude.100k",
+        "title": "100k tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.claude.200k",
+        "title": "200k tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.claude.300k",
+        "title": "300k tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.claude.400k",
+        "title": "400k tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.claude.500k",
+        "title": "500k tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.claude.600k",
+        "title": "600k tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.claude.700k",
+        "title": "700k tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.claude.800k",
+        "title": "800k tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.claude.900k",
+        "title": "900k tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.claude.1m",
+        "title": "1m tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.claude.2m",
+        "title": "2m tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.claude.3m",
+        "title": "3m tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.claude.4m",
+        "title": "4m tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.claude.5m",
+        "title": "5m tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.claude.6m",
+        "title": "6m tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.claude.7m",
+        "title": "7m tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.claude.8m",
+        "title": "8m tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.claude.9m",
+        "title": "9m tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.claude.10m",
+        "title": "10m tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.claude.20m",
+        "title": "20m tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.claude.30m",
+        "title": "30m tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.claude.40m",
+        "title": "40m tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.claude.50m",
+        "title": "50m tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.claude.60m",
+        "title": "60m tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.claude.70m",
+        "title": "70m tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.claude.80m",
+        "title": "80m tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.claude.90m",
+        "title": "90m tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.claude.100m",
+        "title": "100m tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.claude.200m",
+        "title": "200m tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.claude.300m",
+        "title": "300m tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.claude.400m",
+        "title": "400m tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.claude.500m",
+        "title": "500m tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.claude.600m",
+        "title": "600m tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.claude.700m",
+        "title": "700m tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.claude.800m",
+        "title": "800m tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.claude.900m",
+        "title": "900m tokens",
+        "category": "AI Usage"
+      },
+      {
         "command": "aiUsage.chip.codex.simple.pending",
         "title": "…",
         "category": "AI Usage"
@@ -5181,6 +5506,331 @@
         "category": "AI Usage"
       },
       {
+        "command": "aiUsage.chatTokens.chip.codex.0",
+        "title": "0 tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.codex.1bplus",
+        "title": "1b+ tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.codex.100",
+        "title": "100 tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.codex.200",
+        "title": "200 tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.codex.300",
+        "title": "300 tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.codex.400",
+        "title": "400 tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.codex.500",
+        "title": "500 tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.codex.600",
+        "title": "600 tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.codex.700",
+        "title": "700 tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.codex.800",
+        "title": "800 tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.codex.900",
+        "title": "900 tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.codex.1k",
+        "title": "1k tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.codex.2k",
+        "title": "2k tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.codex.3k",
+        "title": "3k tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.codex.4k",
+        "title": "4k tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.codex.5k",
+        "title": "5k tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.codex.6k",
+        "title": "6k tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.codex.7k",
+        "title": "7k tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.codex.8k",
+        "title": "8k tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.codex.9k",
+        "title": "9k tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.codex.10k",
+        "title": "10k tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.codex.20k",
+        "title": "20k tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.codex.30k",
+        "title": "30k tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.codex.40k",
+        "title": "40k tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.codex.50k",
+        "title": "50k tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.codex.60k",
+        "title": "60k tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.codex.70k",
+        "title": "70k tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.codex.80k",
+        "title": "80k tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.codex.90k",
+        "title": "90k tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.codex.100k",
+        "title": "100k tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.codex.200k",
+        "title": "200k tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.codex.300k",
+        "title": "300k tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.codex.400k",
+        "title": "400k tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.codex.500k",
+        "title": "500k tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.codex.600k",
+        "title": "600k tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.codex.700k",
+        "title": "700k tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.codex.800k",
+        "title": "800k tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.codex.900k",
+        "title": "900k tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.codex.1m",
+        "title": "1m tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.codex.2m",
+        "title": "2m tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.codex.3m",
+        "title": "3m tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.codex.4m",
+        "title": "4m tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.codex.5m",
+        "title": "5m tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.codex.6m",
+        "title": "6m tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.codex.7m",
+        "title": "7m tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.codex.8m",
+        "title": "8m tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.codex.9m",
+        "title": "9m tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.codex.10m",
+        "title": "10m tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.codex.20m",
+        "title": "20m tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.codex.30m",
+        "title": "30m tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.codex.40m",
+        "title": "40m tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.codex.50m",
+        "title": "50m tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.codex.60m",
+        "title": "60m tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.codex.70m",
+        "title": "70m tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.codex.80m",
+        "title": "80m tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.codex.90m",
+        "title": "90m tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.codex.100m",
+        "title": "100m tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.codex.200m",
+        "title": "200m tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.codex.300m",
+        "title": "300m tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.codex.400m",
+        "title": "400m tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.codex.500m",
+        "title": "500m tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.codex.600m",
+        "title": "600m tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.codex.700m",
+        "title": "700m tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.codex.800m",
+        "title": "800m tokens",
+        "category": "AI Usage"
+      },
+      {
+        "command": "aiUsage.chatTokens.chip.codex.900m",
+        "title": "900m tokens",
+        "category": "AI Usage"
+      },
+      {
         "command": "aiUsage.chip.copilot.simple.pending",
         "title": "…",
         "category": "AI Usage"
@@ -6243,6 +6893,12 @@
             "default": true,
             "description": "Show the current chat's agent usage (Copilot, Claude Code, Codex) as chips beneath the chat input, next to the context usage indicator, e.g. \"Claude 4% (5h)\" \"26% (7d)\". Click a chip to open that agent's details panel. The hover of a chip only repeats its text; VS Code allows no richer tooltip there.",
             "order": 10
+          },
+          "aiUsage.chatTokens.enabled": {
+            "type": "boolean",
+            "default": true,
+            "description": "Show a chip with tokens consumed by the newest Claude or Codex chat in the current workspace. The value comes from the local agent session log, is compactly rounded in the chip, and opens an exact breakdown when clicked. Copilot does not expose per-chat token telemetry to extensions.",
+            "order": 15
           },
           "aiUsage.updateIntervalMinutes": {
             "type": "number",
@@ -9077,6 +9733,331 @@
           "group": "navigation@2"
         },
         {
+          "command": "aiUsage.chatTokens.chip.claude.0",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /claude|anthropic/i || lockedCodingAgentId =~ /claude|anthropic/i || chatSessionType =~ /claude|anthropic/i || sessionType =~ /claude|anthropic/i) && aiUsage.chatTokens.claude == '0'",
+          "group": "navigation@100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.1bplus",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /claude|anthropic/i || lockedCodingAgentId =~ /claude|anthropic/i || chatSessionType =~ /claude|anthropic/i || sessionType =~ /claude|anthropic/i) && aiUsage.chatTokens.claude == '1b+'",
+          "group": "navigation@100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.100",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /claude|anthropic/i || lockedCodingAgentId =~ /claude|anthropic/i || chatSessionType =~ /claude|anthropic/i || sessionType =~ /claude|anthropic/i) && aiUsage.chatTokens.claude == '100'",
+          "group": "navigation@100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.200",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /claude|anthropic/i || lockedCodingAgentId =~ /claude|anthropic/i || chatSessionType =~ /claude|anthropic/i || sessionType =~ /claude|anthropic/i) && aiUsage.chatTokens.claude == '200'",
+          "group": "navigation@100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.300",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /claude|anthropic/i || lockedCodingAgentId =~ /claude|anthropic/i || chatSessionType =~ /claude|anthropic/i || sessionType =~ /claude|anthropic/i) && aiUsage.chatTokens.claude == '300'",
+          "group": "navigation@100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.400",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /claude|anthropic/i || lockedCodingAgentId =~ /claude|anthropic/i || chatSessionType =~ /claude|anthropic/i || sessionType =~ /claude|anthropic/i) && aiUsage.chatTokens.claude == '400'",
+          "group": "navigation@100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.500",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /claude|anthropic/i || lockedCodingAgentId =~ /claude|anthropic/i || chatSessionType =~ /claude|anthropic/i || sessionType =~ /claude|anthropic/i) && aiUsage.chatTokens.claude == '500'",
+          "group": "navigation@100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.600",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /claude|anthropic/i || lockedCodingAgentId =~ /claude|anthropic/i || chatSessionType =~ /claude|anthropic/i || sessionType =~ /claude|anthropic/i) && aiUsage.chatTokens.claude == '600'",
+          "group": "navigation@100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.700",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /claude|anthropic/i || lockedCodingAgentId =~ /claude|anthropic/i || chatSessionType =~ /claude|anthropic/i || sessionType =~ /claude|anthropic/i) && aiUsage.chatTokens.claude == '700'",
+          "group": "navigation@100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.800",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /claude|anthropic/i || lockedCodingAgentId =~ /claude|anthropic/i || chatSessionType =~ /claude|anthropic/i || sessionType =~ /claude|anthropic/i) && aiUsage.chatTokens.claude == '800'",
+          "group": "navigation@100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.900",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /claude|anthropic/i || lockedCodingAgentId =~ /claude|anthropic/i || chatSessionType =~ /claude|anthropic/i || sessionType =~ /claude|anthropic/i) && aiUsage.chatTokens.claude == '900'",
+          "group": "navigation@100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.1k",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /claude|anthropic/i || lockedCodingAgentId =~ /claude|anthropic/i || chatSessionType =~ /claude|anthropic/i || sessionType =~ /claude|anthropic/i) && aiUsage.chatTokens.claude == '1k'",
+          "group": "navigation@100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.2k",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /claude|anthropic/i || lockedCodingAgentId =~ /claude|anthropic/i || chatSessionType =~ /claude|anthropic/i || sessionType =~ /claude|anthropic/i) && aiUsage.chatTokens.claude == '2k'",
+          "group": "navigation@100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.3k",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /claude|anthropic/i || lockedCodingAgentId =~ /claude|anthropic/i || chatSessionType =~ /claude|anthropic/i || sessionType =~ /claude|anthropic/i) && aiUsage.chatTokens.claude == '3k'",
+          "group": "navigation@100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.4k",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /claude|anthropic/i || lockedCodingAgentId =~ /claude|anthropic/i || chatSessionType =~ /claude|anthropic/i || sessionType =~ /claude|anthropic/i) && aiUsage.chatTokens.claude == '4k'",
+          "group": "navigation@100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.5k",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /claude|anthropic/i || lockedCodingAgentId =~ /claude|anthropic/i || chatSessionType =~ /claude|anthropic/i || sessionType =~ /claude|anthropic/i) && aiUsage.chatTokens.claude == '5k'",
+          "group": "navigation@100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.6k",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /claude|anthropic/i || lockedCodingAgentId =~ /claude|anthropic/i || chatSessionType =~ /claude|anthropic/i || sessionType =~ /claude|anthropic/i) && aiUsage.chatTokens.claude == '6k'",
+          "group": "navigation@100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.7k",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /claude|anthropic/i || lockedCodingAgentId =~ /claude|anthropic/i || chatSessionType =~ /claude|anthropic/i || sessionType =~ /claude|anthropic/i) && aiUsage.chatTokens.claude == '7k'",
+          "group": "navigation@100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.8k",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /claude|anthropic/i || lockedCodingAgentId =~ /claude|anthropic/i || chatSessionType =~ /claude|anthropic/i || sessionType =~ /claude|anthropic/i) && aiUsage.chatTokens.claude == '8k'",
+          "group": "navigation@100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.9k",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /claude|anthropic/i || lockedCodingAgentId =~ /claude|anthropic/i || chatSessionType =~ /claude|anthropic/i || sessionType =~ /claude|anthropic/i) && aiUsage.chatTokens.claude == '9k'",
+          "group": "navigation@100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.10k",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /claude|anthropic/i || lockedCodingAgentId =~ /claude|anthropic/i || chatSessionType =~ /claude|anthropic/i || sessionType =~ /claude|anthropic/i) && aiUsage.chatTokens.claude == '10k'",
+          "group": "navigation@100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.20k",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /claude|anthropic/i || lockedCodingAgentId =~ /claude|anthropic/i || chatSessionType =~ /claude|anthropic/i || sessionType =~ /claude|anthropic/i) && aiUsage.chatTokens.claude == '20k'",
+          "group": "navigation@100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.30k",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /claude|anthropic/i || lockedCodingAgentId =~ /claude|anthropic/i || chatSessionType =~ /claude|anthropic/i || sessionType =~ /claude|anthropic/i) && aiUsage.chatTokens.claude == '30k'",
+          "group": "navigation@100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.40k",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /claude|anthropic/i || lockedCodingAgentId =~ /claude|anthropic/i || chatSessionType =~ /claude|anthropic/i || sessionType =~ /claude|anthropic/i) && aiUsage.chatTokens.claude == '40k'",
+          "group": "navigation@100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.50k",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /claude|anthropic/i || lockedCodingAgentId =~ /claude|anthropic/i || chatSessionType =~ /claude|anthropic/i || sessionType =~ /claude|anthropic/i) && aiUsage.chatTokens.claude == '50k'",
+          "group": "navigation@100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.60k",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /claude|anthropic/i || lockedCodingAgentId =~ /claude|anthropic/i || chatSessionType =~ /claude|anthropic/i || sessionType =~ /claude|anthropic/i) && aiUsage.chatTokens.claude == '60k'",
+          "group": "navigation@100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.70k",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /claude|anthropic/i || lockedCodingAgentId =~ /claude|anthropic/i || chatSessionType =~ /claude|anthropic/i || sessionType =~ /claude|anthropic/i) && aiUsage.chatTokens.claude == '70k'",
+          "group": "navigation@100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.80k",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /claude|anthropic/i || lockedCodingAgentId =~ /claude|anthropic/i || chatSessionType =~ /claude|anthropic/i || sessionType =~ /claude|anthropic/i) && aiUsage.chatTokens.claude == '80k'",
+          "group": "navigation@100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.90k",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /claude|anthropic/i || lockedCodingAgentId =~ /claude|anthropic/i || chatSessionType =~ /claude|anthropic/i || sessionType =~ /claude|anthropic/i) && aiUsage.chatTokens.claude == '90k'",
+          "group": "navigation@100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.100k",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /claude|anthropic/i || lockedCodingAgentId =~ /claude|anthropic/i || chatSessionType =~ /claude|anthropic/i || sessionType =~ /claude|anthropic/i) && aiUsage.chatTokens.claude == '100k'",
+          "group": "navigation@100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.200k",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /claude|anthropic/i || lockedCodingAgentId =~ /claude|anthropic/i || chatSessionType =~ /claude|anthropic/i || sessionType =~ /claude|anthropic/i) && aiUsage.chatTokens.claude == '200k'",
+          "group": "navigation@100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.300k",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /claude|anthropic/i || lockedCodingAgentId =~ /claude|anthropic/i || chatSessionType =~ /claude|anthropic/i || sessionType =~ /claude|anthropic/i) && aiUsage.chatTokens.claude == '300k'",
+          "group": "navigation@100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.400k",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /claude|anthropic/i || lockedCodingAgentId =~ /claude|anthropic/i || chatSessionType =~ /claude|anthropic/i || sessionType =~ /claude|anthropic/i) && aiUsage.chatTokens.claude == '400k'",
+          "group": "navigation@100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.500k",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /claude|anthropic/i || lockedCodingAgentId =~ /claude|anthropic/i || chatSessionType =~ /claude|anthropic/i || sessionType =~ /claude|anthropic/i) && aiUsage.chatTokens.claude == '500k'",
+          "group": "navigation@100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.600k",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /claude|anthropic/i || lockedCodingAgentId =~ /claude|anthropic/i || chatSessionType =~ /claude|anthropic/i || sessionType =~ /claude|anthropic/i) && aiUsage.chatTokens.claude == '600k'",
+          "group": "navigation@100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.700k",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /claude|anthropic/i || lockedCodingAgentId =~ /claude|anthropic/i || chatSessionType =~ /claude|anthropic/i || sessionType =~ /claude|anthropic/i) && aiUsage.chatTokens.claude == '700k'",
+          "group": "navigation@100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.800k",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /claude|anthropic/i || lockedCodingAgentId =~ /claude|anthropic/i || chatSessionType =~ /claude|anthropic/i || sessionType =~ /claude|anthropic/i) && aiUsage.chatTokens.claude == '800k'",
+          "group": "navigation@100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.900k",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /claude|anthropic/i || lockedCodingAgentId =~ /claude|anthropic/i || chatSessionType =~ /claude|anthropic/i || sessionType =~ /claude|anthropic/i) && aiUsage.chatTokens.claude == '900k'",
+          "group": "navigation@100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.1m",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /claude|anthropic/i || lockedCodingAgentId =~ /claude|anthropic/i || chatSessionType =~ /claude|anthropic/i || sessionType =~ /claude|anthropic/i) && aiUsage.chatTokens.claude == '1m'",
+          "group": "navigation@100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.2m",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /claude|anthropic/i || lockedCodingAgentId =~ /claude|anthropic/i || chatSessionType =~ /claude|anthropic/i || sessionType =~ /claude|anthropic/i) && aiUsage.chatTokens.claude == '2m'",
+          "group": "navigation@100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.3m",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /claude|anthropic/i || lockedCodingAgentId =~ /claude|anthropic/i || chatSessionType =~ /claude|anthropic/i || sessionType =~ /claude|anthropic/i) && aiUsage.chatTokens.claude == '3m'",
+          "group": "navigation@100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.4m",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /claude|anthropic/i || lockedCodingAgentId =~ /claude|anthropic/i || chatSessionType =~ /claude|anthropic/i || sessionType =~ /claude|anthropic/i) && aiUsage.chatTokens.claude == '4m'",
+          "group": "navigation@100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.5m",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /claude|anthropic/i || lockedCodingAgentId =~ /claude|anthropic/i || chatSessionType =~ /claude|anthropic/i || sessionType =~ /claude|anthropic/i) && aiUsage.chatTokens.claude == '5m'",
+          "group": "navigation@100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.6m",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /claude|anthropic/i || lockedCodingAgentId =~ /claude|anthropic/i || chatSessionType =~ /claude|anthropic/i || sessionType =~ /claude|anthropic/i) && aiUsage.chatTokens.claude == '6m'",
+          "group": "navigation@100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.7m",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /claude|anthropic/i || lockedCodingAgentId =~ /claude|anthropic/i || chatSessionType =~ /claude|anthropic/i || sessionType =~ /claude|anthropic/i) && aiUsage.chatTokens.claude == '7m'",
+          "group": "navigation@100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.8m",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /claude|anthropic/i || lockedCodingAgentId =~ /claude|anthropic/i || chatSessionType =~ /claude|anthropic/i || sessionType =~ /claude|anthropic/i) && aiUsage.chatTokens.claude == '8m'",
+          "group": "navigation@100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.9m",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /claude|anthropic/i || lockedCodingAgentId =~ /claude|anthropic/i || chatSessionType =~ /claude|anthropic/i || sessionType =~ /claude|anthropic/i) && aiUsage.chatTokens.claude == '9m'",
+          "group": "navigation@100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.10m",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /claude|anthropic/i || lockedCodingAgentId =~ /claude|anthropic/i || chatSessionType =~ /claude|anthropic/i || sessionType =~ /claude|anthropic/i) && aiUsage.chatTokens.claude == '10m'",
+          "group": "navigation@100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.20m",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /claude|anthropic/i || lockedCodingAgentId =~ /claude|anthropic/i || chatSessionType =~ /claude|anthropic/i || sessionType =~ /claude|anthropic/i) && aiUsage.chatTokens.claude == '20m'",
+          "group": "navigation@100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.30m",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /claude|anthropic/i || lockedCodingAgentId =~ /claude|anthropic/i || chatSessionType =~ /claude|anthropic/i || sessionType =~ /claude|anthropic/i) && aiUsage.chatTokens.claude == '30m'",
+          "group": "navigation@100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.40m",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /claude|anthropic/i || lockedCodingAgentId =~ /claude|anthropic/i || chatSessionType =~ /claude|anthropic/i || sessionType =~ /claude|anthropic/i) && aiUsage.chatTokens.claude == '40m'",
+          "group": "navigation@100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.50m",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /claude|anthropic/i || lockedCodingAgentId =~ /claude|anthropic/i || chatSessionType =~ /claude|anthropic/i || sessionType =~ /claude|anthropic/i) && aiUsage.chatTokens.claude == '50m'",
+          "group": "navigation@100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.60m",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /claude|anthropic/i || lockedCodingAgentId =~ /claude|anthropic/i || chatSessionType =~ /claude|anthropic/i || sessionType =~ /claude|anthropic/i) && aiUsage.chatTokens.claude == '60m'",
+          "group": "navigation@100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.70m",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /claude|anthropic/i || lockedCodingAgentId =~ /claude|anthropic/i || chatSessionType =~ /claude|anthropic/i || sessionType =~ /claude|anthropic/i) && aiUsage.chatTokens.claude == '70m'",
+          "group": "navigation@100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.80m",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /claude|anthropic/i || lockedCodingAgentId =~ /claude|anthropic/i || chatSessionType =~ /claude|anthropic/i || sessionType =~ /claude|anthropic/i) && aiUsage.chatTokens.claude == '80m'",
+          "group": "navigation@100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.90m",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /claude|anthropic/i || lockedCodingAgentId =~ /claude|anthropic/i || chatSessionType =~ /claude|anthropic/i || sessionType =~ /claude|anthropic/i) && aiUsage.chatTokens.claude == '90m'",
+          "group": "navigation@100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.100m",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /claude|anthropic/i || lockedCodingAgentId =~ /claude|anthropic/i || chatSessionType =~ /claude|anthropic/i || sessionType =~ /claude|anthropic/i) && aiUsage.chatTokens.claude == '100m'",
+          "group": "navigation@100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.200m",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /claude|anthropic/i || lockedCodingAgentId =~ /claude|anthropic/i || chatSessionType =~ /claude|anthropic/i || sessionType =~ /claude|anthropic/i) && aiUsage.chatTokens.claude == '200m'",
+          "group": "navigation@100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.300m",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /claude|anthropic/i || lockedCodingAgentId =~ /claude|anthropic/i || chatSessionType =~ /claude|anthropic/i || sessionType =~ /claude|anthropic/i) && aiUsage.chatTokens.claude == '300m'",
+          "group": "navigation@100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.400m",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /claude|anthropic/i || lockedCodingAgentId =~ /claude|anthropic/i || chatSessionType =~ /claude|anthropic/i || sessionType =~ /claude|anthropic/i) && aiUsage.chatTokens.claude == '400m'",
+          "group": "navigation@100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.500m",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /claude|anthropic/i || lockedCodingAgentId =~ /claude|anthropic/i || chatSessionType =~ /claude|anthropic/i || sessionType =~ /claude|anthropic/i) && aiUsage.chatTokens.claude == '500m'",
+          "group": "navigation@100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.600m",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /claude|anthropic/i || lockedCodingAgentId =~ /claude|anthropic/i || chatSessionType =~ /claude|anthropic/i || sessionType =~ /claude|anthropic/i) && aiUsage.chatTokens.claude == '600m'",
+          "group": "navigation@100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.700m",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /claude|anthropic/i || lockedCodingAgentId =~ /claude|anthropic/i || chatSessionType =~ /claude|anthropic/i || sessionType =~ /claude|anthropic/i) && aiUsage.chatTokens.claude == '700m'",
+          "group": "navigation@100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.800m",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /claude|anthropic/i || lockedCodingAgentId =~ /claude|anthropic/i || chatSessionType =~ /claude|anthropic/i || sessionType =~ /claude|anthropic/i) && aiUsage.chatTokens.claude == '800m'",
+          "group": "navigation@100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.900m",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /claude|anthropic/i || lockedCodingAgentId =~ /claude|anthropic/i || chatSessionType =~ /claude|anthropic/i || sessionType =~ /claude|anthropic/i) && aiUsage.chatTokens.claude == '900m'",
+          "group": "navigation@100"
+        },
+        {
           "command": "aiUsage.chip.codex.simple.pending",
           "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /codex|openai/i || lockedCodingAgentId =~ /codex|openai/i || chatSessionType =~ /codex|openai/i || sessionType =~ /codex|openai/i) && aiUsage.chip.codex.simple == 'pending' && !aiUsage.chip.named",
           "group": "navigation@1000"
@@ -11630,6 +12611,331 @@
           "command": "aiUsage.chip.codex.7d.100",
           "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /codex|openai/i || lockedCodingAgentId =~ /codex|openai/i || chatSessionType =~ /codex|openai/i || sessionType =~ /codex|openai/i) && aiUsage.chip.codex.7d == '100'",
           "group": "navigation@1002"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.0",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /codex|openai/i || lockedCodingAgentId =~ /codex|openai/i || chatSessionType =~ /codex|openai/i || sessionType =~ /codex|openai/i) && aiUsage.chatTokens.codex == '0'",
+          "group": "navigation@1100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.1bplus",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /codex|openai/i || lockedCodingAgentId =~ /codex|openai/i || chatSessionType =~ /codex|openai/i || sessionType =~ /codex|openai/i) && aiUsage.chatTokens.codex == '1b+'",
+          "group": "navigation@1100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.100",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /codex|openai/i || lockedCodingAgentId =~ /codex|openai/i || chatSessionType =~ /codex|openai/i || sessionType =~ /codex|openai/i) && aiUsage.chatTokens.codex == '100'",
+          "group": "navigation@1100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.200",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /codex|openai/i || lockedCodingAgentId =~ /codex|openai/i || chatSessionType =~ /codex|openai/i || sessionType =~ /codex|openai/i) && aiUsage.chatTokens.codex == '200'",
+          "group": "navigation@1100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.300",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /codex|openai/i || lockedCodingAgentId =~ /codex|openai/i || chatSessionType =~ /codex|openai/i || sessionType =~ /codex|openai/i) && aiUsage.chatTokens.codex == '300'",
+          "group": "navigation@1100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.400",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /codex|openai/i || lockedCodingAgentId =~ /codex|openai/i || chatSessionType =~ /codex|openai/i || sessionType =~ /codex|openai/i) && aiUsage.chatTokens.codex == '400'",
+          "group": "navigation@1100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.500",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /codex|openai/i || lockedCodingAgentId =~ /codex|openai/i || chatSessionType =~ /codex|openai/i || sessionType =~ /codex|openai/i) && aiUsage.chatTokens.codex == '500'",
+          "group": "navigation@1100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.600",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /codex|openai/i || lockedCodingAgentId =~ /codex|openai/i || chatSessionType =~ /codex|openai/i || sessionType =~ /codex|openai/i) && aiUsage.chatTokens.codex == '600'",
+          "group": "navigation@1100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.700",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /codex|openai/i || lockedCodingAgentId =~ /codex|openai/i || chatSessionType =~ /codex|openai/i || sessionType =~ /codex|openai/i) && aiUsage.chatTokens.codex == '700'",
+          "group": "navigation@1100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.800",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /codex|openai/i || lockedCodingAgentId =~ /codex|openai/i || chatSessionType =~ /codex|openai/i || sessionType =~ /codex|openai/i) && aiUsage.chatTokens.codex == '800'",
+          "group": "navigation@1100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.900",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /codex|openai/i || lockedCodingAgentId =~ /codex|openai/i || chatSessionType =~ /codex|openai/i || sessionType =~ /codex|openai/i) && aiUsage.chatTokens.codex == '900'",
+          "group": "navigation@1100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.1k",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /codex|openai/i || lockedCodingAgentId =~ /codex|openai/i || chatSessionType =~ /codex|openai/i || sessionType =~ /codex|openai/i) && aiUsage.chatTokens.codex == '1k'",
+          "group": "navigation@1100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.2k",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /codex|openai/i || lockedCodingAgentId =~ /codex|openai/i || chatSessionType =~ /codex|openai/i || sessionType =~ /codex|openai/i) && aiUsage.chatTokens.codex == '2k'",
+          "group": "navigation@1100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.3k",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /codex|openai/i || lockedCodingAgentId =~ /codex|openai/i || chatSessionType =~ /codex|openai/i || sessionType =~ /codex|openai/i) && aiUsage.chatTokens.codex == '3k'",
+          "group": "navigation@1100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.4k",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /codex|openai/i || lockedCodingAgentId =~ /codex|openai/i || chatSessionType =~ /codex|openai/i || sessionType =~ /codex|openai/i) && aiUsage.chatTokens.codex == '4k'",
+          "group": "navigation@1100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.5k",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /codex|openai/i || lockedCodingAgentId =~ /codex|openai/i || chatSessionType =~ /codex|openai/i || sessionType =~ /codex|openai/i) && aiUsage.chatTokens.codex == '5k'",
+          "group": "navigation@1100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.6k",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /codex|openai/i || lockedCodingAgentId =~ /codex|openai/i || chatSessionType =~ /codex|openai/i || sessionType =~ /codex|openai/i) && aiUsage.chatTokens.codex == '6k'",
+          "group": "navigation@1100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.7k",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /codex|openai/i || lockedCodingAgentId =~ /codex|openai/i || chatSessionType =~ /codex|openai/i || sessionType =~ /codex|openai/i) && aiUsage.chatTokens.codex == '7k'",
+          "group": "navigation@1100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.8k",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /codex|openai/i || lockedCodingAgentId =~ /codex|openai/i || chatSessionType =~ /codex|openai/i || sessionType =~ /codex|openai/i) && aiUsage.chatTokens.codex == '8k'",
+          "group": "navigation@1100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.9k",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /codex|openai/i || lockedCodingAgentId =~ /codex|openai/i || chatSessionType =~ /codex|openai/i || sessionType =~ /codex|openai/i) && aiUsage.chatTokens.codex == '9k'",
+          "group": "navigation@1100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.10k",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /codex|openai/i || lockedCodingAgentId =~ /codex|openai/i || chatSessionType =~ /codex|openai/i || sessionType =~ /codex|openai/i) && aiUsage.chatTokens.codex == '10k'",
+          "group": "navigation@1100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.20k",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /codex|openai/i || lockedCodingAgentId =~ /codex|openai/i || chatSessionType =~ /codex|openai/i || sessionType =~ /codex|openai/i) && aiUsage.chatTokens.codex == '20k'",
+          "group": "navigation@1100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.30k",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /codex|openai/i || lockedCodingAgentId =~ /codex|openai/i || chatSessionType =~ /codex|openai/i || sessionType =~ /codex|openai/i) && aiUsage.chatTokens.codex == '30k'",
+          "group": "navigation@1100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.40k",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /codex|openai/i || lockedCodingAgentId =~ /codex|openai/i || chatSessionType =~ /codex|openai/i || sessionType =~ /codex|openai/i) && aiUsage.chatTokens.codex == '40k'",
+          "group": "navigation@1100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.50k",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /codex|openai/i || lockedCodingAgentId =~ /codex|openai/i || chatSessionType =~ /codex|openai/i || sessionType =~ /codex|openai/i) && aiUsage.chatTokens.codex == '50k'",
+          "group": "navigation@1100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.60k",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /codex|openai/i || lockedCodingAgentId =~ /codex|openai/i || chatSessionType =~ /codex|openai/i || sessionType =~ /codex|openai/i) && aiUsage.chatTokens.codex == '60k'",
+          "group": "navigation@1100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.70k",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /codex|openai/i || lockedCodingAgentId =~ /codex|openai/i || chatSessionType =~ /codex|openai/i || sessionType =~ /codex|openai/i) && aiUsage.chatTokens.codex == '70k'",
+          "group": "navigation@1100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.80k",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /codex|openai/i || lockedCodingAgentId =~ /codex|openai/i || chatSessionType =~ /codex|openai/i || sessionType =~ /codex|openai/i) && aiUsage.chatTokens.codex == '80k'",
+          "group": "navigation@1100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.90k",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /codex|openai/i || lockedCodingAgentId =~ /codex|openai/i || chatSessionType =~ /codex|openai/i || sessionType =~ /codex|openai/i) && aiUsage.chatTokens.codex == '90k'",
+          "group": "navigation@1100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.100k",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /codex|openai/i || lockedCodingAgentId =~ /codex|openai/i || chatSessionType =~ /codex|openai/i || sessionType =~ /codex|openai/i) && aiUsage.chatTokens.codex == '100k'",
+          "group": "navigation@1100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.200k",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /codex|openai/i || lockedCodingAgentId =~ /codex|openai/i || chatSessionType =~ /codex|openai/i || sessionType =~ /codex|openai/i) && aiUsage.chatTokens.codex == '200k'",
+          "group": "navigation@1100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.300k",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /codex|openai/i || lockedCodingAgentId =~ /codex|openai/i || chatSessionType =~ /codex|openai/i || sessionType =~ /codex|openai/i) && aiUsage.chatTokens.codex == '300k'",
+          "group": "navigation@1100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.400k",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /codex|openai/i || lockedCodingAgentId =~ /codex|openai/i || chatSessionType =~ /codex|openai/i || sessionType =~ /codex|openai/i) && aiUsage.chatTokens.codex == '400k'",
+          "group": "navigation@1100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.500k",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /codex|openai/i || lockedCodingAgentId =~ /codex|openai/i || chatSessionType =~ /codex|openai/i || sessionType =~ /codex|openai/i) && aiUsage.chatTokens.codex == '500k'",
+          "group": "navigation@1100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.600k",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /codex|openai/i || lockedCodingAgentId =~ /codex|openai/i || chatSessionType =~ /codex|openai/i || sessionType =~ /codex|openai/i) && aiUsage.chatTokens.codex == '600k'",
+          "group": "navigation@1100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.700k",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /codex|openai/i || lockedCodingAgentId =~ /codex|openai/i || chatSessionType =~ /codex|openai/i || sessionType =~ /codex|openai/i) && aiUsage.chatTokens.codex == '700k'",
+          "group": "navigation@1100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.800k",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /codex|openai/i || lockedCodingAgentId =~ /codex|openai/i || chatSessionType =~ /codex|openai/i || sessionType =~ /codex|openai/i) && aiUsage.chatTokens.codex == '800k'",
+          "group": "navigation@1100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.900k",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /codex|openai/i || lockedCodingAgentId =~ /codex|openai/i || chatSessionType =~ /codex|openai/i || sessionType =~ /codex|openai/i) && aiUsage.chatTokens.codex == '900k'",
+          "group": "navigation@1100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.1m",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /codex|openai/i || lockedCodingAgentId =~ /codex|openai/i || chatSessionType =~ /codex|openai/i || sessionType =~ /codex|openai/i) && aiUsage.chatTokens.codex == '1m'",
+          "group": "navigation@1100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.2m",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /codex|openai/i || lockedCodingAgentId =~ /codex|openai/i || chatSessionType =~ /codex|openai/i || sessionType =~ /codex|openai/i) && aiUsage.chatTokens.codex == '2m'",
+          "group": "navigation@1100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.3m",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /codex|openai/i || lockedCodingAgentId =~ /codex|openai/i || chatSessionType =~ /codex|openai/i || sessionType =~ /codex|openai/i) && aiUsage.chatTokens.codex == '3m'",
+          "group": "navigation@1100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.4m",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /codex|openai/i || lockedCodingAgentId =~ /codex|openai/i || chatSessionType =~ /codex|openai/i || sessionType =~ /codex|openai/i) && aiUsage.chatTokens.codex == '4m'",
+          "group": "navigation@1100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.5m",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /codex|openai/i || lockedCodingAgentId =~ /codex|openai/i || chatSessionType =~ /codex|openai/i || sessionType =~ /codex|openai/i) && aiUsage.chatTokens.codex == '5m'",
+          "group": "navigation@1100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.6m",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /codex|openai/i || lockedCodingAgentId =~ /codex|openai/i || chatSessionType =~ /codex|openai/i || sessionType =~ /codex|openai/i) && aiUsage.chatTokens.codex == '6m'",
+          "group": "navigation@1100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.7m",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /codex|openai/i || lockedCodingAgentId =~ /codex|openai/i || chatSessionType =~ /codex|openai/i || sessionType =~ /codex|openai/i) && aiUsage.chatTokens.codex == '7m'",
+          "group": "navigation@1100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.8m",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /codex|openai/i || lockedCodingAgentId =~ /codex|openai/i || chatSessionType =~ /codex|openai/i || sessionType =~ /codex|openai/i) && aiUsage.chatTokens.codex == '8m'",
+          "group": "navigation@1100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.9m",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /codex|openai/i || lockedCodingAgentId =~ /codex|openai/i || chatSessionType =~ /codex|openai/i || sessionType =~ /codex|openai/i) && aiUsage.chatTokens.codex == '9m'",
+          "group": "navigation@1100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.10m",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /codex|openai/i || lockedCodingAgentId =~ /codex|openai/i || chatSessionType =~ /codex|openai/i || sessionType =~ /codex|openai/i) && aiUsage.chatTokens.codex == '10m'",
+          "group": "navigation@1100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.20m",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /codex|openai/i || lockedCodingAgentId =~ /codex|openai/i || chatSessionType =~ /codex|openai/i || sessionType =~ /codex|openai/i) && aiUsage.chatTokens.codex == '20m'",
+          "group": "navigation@1100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.30m",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /codex|openai/i || lockedCodingAgentId =~ /codex|openai/i || chatSessionType =~ /codex|openai/i || sessionType =~ /codex|openai/i) && aiUsage.chatTokens.codex == '30m'",
+          "group": "navigation@1100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.40m",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /codex|openai/i || lockedCodingAgentId =~ /codex|openai/i || chatSessionType =~ /codex|openai/i || sessionType =~ /codex|openai/i) && aiUsage.chatTokens.codex == '40m'",
+          "group": "navigation@1100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.50m",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /codex|openai/i || lockedCodingAgentId =~ /codex|openai/i || chatSessionType =~ /codex|openai/i || sessionType =~ /codex|openai/i) && aiUsage.chatTokens.codex == '50m'",
+          "group": "navigation@1100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.60m",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /codex|openai/i || lockedCodingAgentId =~ /codex|openai/i || chatSessionType =~ /codex|openai/i || sessionType =~ /codex|openai/i) && aiUsage.chatTokens.codex == '60m'",
+          "group": "navigation@1100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.70m",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /codex|openai/i || lockedCodingAgentId =~ /codex|openai/i || chatSessionType =~ /codex|openai/i || sessionType =~ /codex|openai/i) && aiUsage.chatTokens.codex == '70m'",
+          "group": "navigation@1100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.80m",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /codex|openai/i || lockedCodingAgentId =~ /codex|openai/i || chatSessionType =~ /codex|openai/i || sessionType =~ /codex|openai/i) && aiUsage.chatTokens.codex == '80m'",
+          "group": "navigation@1100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.90m",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /codex|openai/i || lockedCodingAgentId =~ /codex|openai/i || chatSessionType =~ /codex|openai/i || sessionType =~ /codex|openai/i) && aiUsage.chatTokens.codex == '90m'",
+          "group": "navigation@1100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.100m",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /codex|openai/i || lockedCodingAgentId =~ /codex|openai/i || chatSessionType =~ /codex|openai/i || sessionType =~ /codex|openai/i) && aiUsage.chatTokens.codex == '100m'",
+          "group": "navigation@1100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.200m",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /codex|openai/i || lockedCodingAgentId =~ /codex|openai/i || chatSessionType =~ /codex|openai/i || sessionType =~ /codex|openai/i) && aiUsage.chatTokens.codex == '200m'",
+          "group": "navigation@1100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.300m",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /codex|openai/i || lockedCodingAgentId =~ /codex|openai/i || chatSessionType =~ /codex|openai/i || sessionType =~ /codex|openai/i) && aiUsage.chatTokens.codex == '300m'",
+          "group": "navigation@1100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.400m",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /codex|openai/i || lockedCodingAgentId =~ /codex|openai/i || chatSessionType =~ /codex|openai/i || sessionType =~ /codex|openai/i) && aiUsage.chatTokens.codex == '400m'",
+          "group": "navigation@1100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.500m",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /codex|openai/i || lockedCodingAgentId =~ /codex|openai/i || chatSessionType =~ /codex|openai/i || sessionType =~ /codex|openai/i) && aiUsage.chatTokens.codex == '500m'",
+          "group": "navigation@1100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.600m",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /codex|openai/i || lockedCodingAgentId =~ /codex|openai/i || chatSessionType =~ /codex|openai/i || sessionType =~ /codex|openai/i) && aiUsage.chatTokens.codex == '600m'",
+          "group": "navigation@1100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.700m",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /codex|openai/i || lockedCodingAgentId =~ /codex|openai/i || chatSessionType =~ /codex|openai/i || sessionType =~ /codex|openai/i) && aiUsage.chatTokens.codex == '700m'",
+          "group": "navigation@1100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.800m",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /codex|openai/i || lockedCodingAgentId =~ /codex|openai/i || chatSessionType =~ /codex|openai/i || sessionType =~ /codex|openai/i) && aiUsage.chatTokens.codex == '800m'",
+          "group": "navigation@1100"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.900m",
+          "when": "((isSessionsWindow && aiUsage.chip.agentsWindow) || (!isSessionsWindow && aiUsage.chip.workbench)) && (aiUsage.chip.debug || chatAgentHostProviderId =~ /codex|openai/i || lockedCodingAgentId =~ /codex|openai/i || chatSessionType =~ /codex|openai/i || sessionType =~ /codex|openai/i) && aiUsage.chatTokens.codex == '900m'",
+          "group": "navigation@1100"
         },
         {
           "command": "aiUsage.chip.copilot.simple.pending",
@@ -14723,6 +16029,266 @@
           "when": "false"
         },
         {
+          "command": "aiUsage.chatTokens.chip.claude.0",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.1bplus",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.100",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.200",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.300",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.400",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.500",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.600",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.700",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.800",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.900",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.1k",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.2k",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.3k",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.4k",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.5k",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.6k",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.7k",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.8k",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.9k",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.10k",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.20k",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.30k",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.40k",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.50k",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.60k",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.70k",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.80k",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.90k",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.100k",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.200k",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.300k",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.400k",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.500k",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.600k",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.700k",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.800k",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.900k",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.1m",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.2m",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.3m",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.4m",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.5m",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.6m",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.7m",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.8m",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.9m",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.10m",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.20m",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.30m",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.40m",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.50m",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.60m",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.70m",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.80m",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.90m",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.100m",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.200m",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.300m",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.400m",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.500m",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.600m",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.700m",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.800m",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.claude.900m",
+          "when": "false"
+        },
+        {
           "command": "aiUsage.chip.codex.simple.pending",
           "when": "false"
         },
@@ -16767,6 +18333,266 @@
           "when": "false"
         },
         {
+          "command": "aiUsage.chatTokens.chip.codex.0",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.1bplus",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.100",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.200",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.300",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.400",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.500",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.600",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.700",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.800",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.900",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.1k",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.2k",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.3k",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.4k",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.5k",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.6k",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.7k",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.8k",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.9k",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.10k",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.20k",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.30k",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.40k",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.50k",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.60k",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.70k",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.80k",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.90k",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.100k",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.200k",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.300k",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.400k",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.500k",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.600k",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.700k",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.800k",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.900k",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.1m",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.2m",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.3m",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.4m",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.5m",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.6m",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.7m",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.8m",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.9m",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.10m",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.20m",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.30m",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.40m",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.50m",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.60m",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.70m",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.80m",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.90m",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.100m",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.200m",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.300m",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.400m",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.500m",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.600m",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.700m",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.800m",
+          "when": "false"
+        },
+        {
+          "command": "aiUsage.chatTokens.chip.codex.900m",
+          "when": "false"
+        },
+        {
           "command": "aiUsage.chip.copilot.simple.pending",
           "when": "false"
         },
@@ -17650,6 +19476,7 @@
   },
   "scripts": {
     "compile": "node scripts/generate-manifest.js && tsc -p ./",
+    "test": "npm run compile && node --test test/*.test.js",
     "watch": "tsc -watch -p ./",
     "generate": "node scripts/generate-manifest.js",
     "dev:install": "node scripts/dev-install.js",

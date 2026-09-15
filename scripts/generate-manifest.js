@@ -29,6 +29,7 @@ const PROVIDERS = [
   { id: 'copilot', title: 'Copilot', windows: [], match: `(!lockedToCodingAgent || ${agentMatch('copilot')})` }
 ];
 const CHIP_PREFIX = 'aiUsage.chip.';
+const TOKEN_CHIP_PREFIX = 'aiUsage.chatTokens.chip.';
 const NAMED_KEY = `${CHIP_PREFIX}named`;
 // Only the `navigation` group is rendered inline by the chat input status toolbar; other groups
 // end up in a hidden overflow menu.
@@ -42,7 +43,8 @@ const pkg = JSON.parse(fs.readFileSync(file, 'utf8'));
 pkg.contributes = pkg.contributes || {};
 pkg.contributes.menus = pkg.contributes.menus || {};
 
-const isChip = (entry) => typeof entry.command === 'string' && entry.command.startsWith(CHIP_PREFIX);
+const isChip = (entry) => typeof entry.command === 'string' &&
+  (entry.command.startsWith(CHIP_PREFIX) || entry.command.startsWith(TOKEN_CHIP_PREFIX));
 const commands = (pkg.contributes.commands || []).filter((c) => !isChip(c));
 const statusMenu = (pkg.contributes.menus['chat/input/status'] || []).filter((m) => !isChip(m));
 const paletteMenu = (pkg.contributes.menus.commandPalette || []).filter((m) => !isChip(m));
@@ -85,6 +87,38 @@ PROVIDERS.forEach((provider, index) => {
       }
     }
   });
+
+  // Per-chat token totals are available from local Claude and Codex session logs. Titles are
+  // quantized to one significant digit so dynamic-looking labels need only a bounded command set.
+  if (provider.id !== 'copilot') {
+    const labels = new Set(['0', '1b+']);
+    for (const [start, end, step, divisor, suffix] of [
+      [0, 1_000, 100, 1, ''],
+      [1_000, 10_000, 1_000, 1_000, 'k'],
+      [10_000, 100_000, 10_000, 1_000, 'k'],
+      [100_000, 1_000_000, 100_000, 1_000, 'k'],
+      [1_000_000, 10_000_000, 1_000_000, 1_000_000, 'm'],
+      [10_000_000, 100_000_000, 10_000_000, 1_000_000, 'm'],
+      [100_000_000, 1_000_000_000, 100_000_000, 1_000_000, 'm']
+    ]) {
+      for (let value = start; value < end; value += step) {
+        const scaled = value / divisor;
+        labels.add(`${Number.isInteger(scaled) ? scaled : scaled.toFixed(1)}${suffix}`);
+      }
+    }
+    for (const label of labels) {
+      const encoded = label.replace('.', '_').replace('+', 'plus');
+      const command = `${TOKEN_CHIP_PREFIX}${provider.id}.${encoded}`;
+      commands.push({ command, title: `${label} tokens`, category: 'AI Usage' });
+      statusMenu.push({
+        command,
+        when: `${WINDOW_GATE} && ${provider.match} && aiUsage.chatTokens.${provider.id} == '${label}'`,
+        group: `${CHIP_GROUP}@${base + 100}`
+      });
+      paletteMenu.push({ command, when: 'false' });
+      generated++;
+    }
+  }
 });
 
 // Debug chip (aiUsage.chatChips.debug) to confirm the toolbar renders at all.
