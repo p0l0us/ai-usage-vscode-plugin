@@ -19,6 +19,17 @@ a chip beneath the chat input.
 Nothing is shown for a tool that is not installed or signed in. Usage checks only read the tools' own login files.
 The optional authentication-profile switcher writes a selected login only when you ask it to switch profiles.
 
+With the default icon-only labels, the status bar stays compact while showing each live reset countdown:
+
+![Status bar with icon-only labels and reset countdowns](images/screenshots/status-bar-icons.png)
+
+Hover a status item for its named limit windows, plan and reset times. Copilot also identifies the account and,
+for organization-billed seats, the organization and its premium-request usage:
+
+| Claude | Codex | Copilot |
+|---|---|---|
+| ![Claude usage tooltip](images/screenshots/tooltip-claude.png) | ![Codex usage tooltip](images/screenshots/tooltip-codex.png) | ![Copilot usage tooltip](images/screenshots/tooltip-copilot.png) |
+
 ## Authentication profiles
 
 Run **AI Usage: Manage Claude/Codex Authentication Profiles** from the Command Palette, or open a Claude/Codex
@@ -80,31 +91,6 @@ it is installed and runs on the remote machine, so:
   **AI Usage: Agents Window Setup Guide** from the Command Palette or see
   [docs/AGENTS_WINDOW.md](docs/AGENTS_WINDOW.md).
 
-## Screenshots
-
-Status bar with the default icon-only labels (`aiUsage.statusBar.labels: iconOnly`):
-
-![Status bar, icons only](images/screenshots/status-bar-icons.png)
-
-The same with service names (`iconAndName`):
-
-![Status bar with service names](images/screenshots/status-bar-labels.png)
-
-At 80% usage an item is highlighted yellow; at 95% it turns red. Here Claude's 92% window resets in 3 hours and
-is highlighted, while Codex remains neutral at 77%. Each countdown uses one largest unit only (`42m`, `3h`, or
-`4d`):
-
-![Claude high usage highlighted yellow beside neutral Codex usage](images/screenshots/status-bar-high-usage.png)
-
-Hover any item for the per-window breakdown, plan and reset times; click it or a chat chip for the details panel:
-
-| Claude | Codex | Copilot |
-|---|---|---|
-| ![Claude tooltip](images/screenshots/tooltip-claude.png) | ![Codex tooltip](images/screenshots/tooltip-codex.png) | ![Copilot tooltip](images/screenshots/tooltip-copilot.png) |
-
-The Copilot tooltip names the account and, for organization-billed seats, the organization and its premium-request
-usage.
-
 ## Settings you are most likely to touch
 
 | Setting | Default | What it does |
@@ -116,6 +102,10 @@ usage.
 | `aiUsage.<service>.checkIntervalMinutes` | 10 / 5 / 5 | How often Claude / Codex / Copilot are queried. |
 | `aiUsage.copilot.account` | (auto) | GitHub login to use when several are signed in. |
 | `aiUsage.<service>.enabled` | on | Hide a service you do not use. |
+
+For example, `iconAndName` adds the provider names without changing the usage figures:
+
+![Status bar with provider names and reset countdowns](images/screenshots/status-bar-labels.png)
 
 The full list is in [docs/CONFIGURATION.md](docs/CONFIGURATION.md). Where the numbers come from, how caching and
 backoff work and how the chat chip is built: [docs/INTERNALS.md](docs/INTERNALS.md).
@@ -130,6 +120,12 @@ backoff work and how the chat chip is built: [docs/INTERNALS.md](docs/INTERNALS.
   every service's chip, including Copilot's in a Claude chat.
 - **Copilot shows “connect”**: click it and allow access to your GitHub account.
 - **Numbers are grey**: the last refresh failed; the tooltip says why. Rate limits clear on their own.
+
+High usage is deliberately visible: an item turns yellow at 80% and red at 95%. Here Claude's 92% window resets
+in 3 hours while Codex remains neutral at 77%. Countdown labels always use one largest unit (`42m`, `3h`, or
+`4d`):
+
+![Claude high usage highlighted yellow beside neutral Codex usage](images/screenshots/status-bar-high-usage.png)
 
 ## Contributing
 
