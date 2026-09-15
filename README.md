@@ -30,6 +30,11 @@ for organization-billed seats, the organization and its premium-request usage:
 |---|---|---|
 | ![Claude usage tooltip](images/screenshots/tooltip-claude.png) | ![Codex usage tooltip](images/screenshots/tooltip-codex.png) | ![Copilot usage tooltip](images/screenshots/tooltip-copilot.png) |
 
+Click a status item or chat chip to open the complete provider breakdown and its profile, refresh, log and settings
+actions in one picker:
+
+![AI Usage details picker with Claude and Codex limits and actions](images/screenshots/details-panel.png)
+
 ## Authentication profiles
 
 Run **AI Usage: Manage Claude/Codex Authentication Profiles** from the Command Palette, or open a Claude/Codex
