@@ -2,7 +2,9 @@
 
 ## 0.0.9 (unreleased)
 
-- 
+- Add named Claude and Codex authentication profiles (up to 20 per service), backed by VS Code SecretStorage and
+  switchable from a quick-pick menu. Activation securely updates the provider-native credential file, preserves
+  Claude MCP credentials, and isolates cached usage by selected profile.
 
 ## 0.0.8 (2026-09-11)
 

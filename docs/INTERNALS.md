@@ -20,6 +20,23 @@ and the next-allowed time is stored in the same entry so every window backs off 
 a Claude rate limit never delays Codex or Copilot. During a backoff the last good reading stays visible and is
 greyed out once it is older than 15 minutes.
 
+Claude and Codex cache keys include the selected authentication-profile id. A switch therefore cannot reuse the
+previous account's usage reading or backoff entry.
+
+## Authentication profile storage and switching
+
+`src/authProfiles.ts` keeps only profile names, timestamps, ids, and the active id in extension `globalState`.
+Each credential body has its own namespaced `SecretStorage` entry, with a hard limit of 20 per provider.
+`src/authFiles.ts` validates native/imported JSON and performs the filesystem update. Claude profiles contain the
+`claudeAiOauth` object plus its root-level `organizationUuid` when present; activation replaces those account fields
+in the current `.credentials.json` while preserving MCP OAuth entries. Codex profiles contain the complete
+`auth.json` document.
+
+Before activation, a refreshed native credential is copied back to the selected secret only when it can be matched
+to the same owner (Codex `account_id`, matching refresh token, or an exact match). Writes go through a newly created
+mode-`0600` temporary file in the destination directory and an atomic rename; the resulting file is explicitly
+chmodded to `0600` on platforms that support POSIX modes.
+
 ## How the chat chip works
 
 VS Code renders an item of the `chat/input/status` menu as its static title (or, if the command has an icon, as the
@@ -39,5 +56,6 @@ chip shows (Copilot's included). Run `npm run generate` (also part of `npm run c
 generator.
 
 All windows share one cache file in the extension's global storage, so only one window calls a source per check
-interval and all windows respect the same backoff. Tokens are only read, never written or refreshed. If a token has expired, the item shows a warning and asks you to
-run the CLI once so it refreshes its own login.
+interval and all windows respect the same backoff. Usage polling only reads tokens and never refreshes them. The
+profile manager writes the native credential file only after an explicit activation. If a token has expired, the
+item shows a warning and asks you to run the CLI once so it refreshes its own login.

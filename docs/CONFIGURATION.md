@@ -48,3 +48,21 @@ Each service has a `source` setting that selects where its usage is read from:
 - `aiUsage.chatChips.debug` (default off): diagnostic. Adds a test chip and shows every service's chip regardless
   of the chat's agent (Copilot's in a Claude chat, for example). Not needed to enable the chip.
 - `aiUsage.accounts`: optional manual figures; the `AI xx%` item appears only when set.
+
+## Claude and Codex authentication profiles
+
+Authentication profiles are commands, not settings, because credentials must never appear in `settings.json`.
+Run **AI Usage: Manage Claude/Codex Authentication Profiles** to save the current native login, import a credential
+JSON file, rename/delete profiles, or activate one of up to 20 profiles per service. Profile names and the selected
+profile id are non-secret extension metadata; credential bodies are stored individually in VS Code
+`SecretStorage`.
+
+Switching updates the same provider-native credential file used by its CLI and VS Code extension. The write uses a
+mode-`0600` temporary file and atomic rename. For Claude only the `claudeAiOauth` object is replaced, so `mcpOAuth.*`
+entries remain untouched. Codex `auth.json` is replaced as a unit. When the native active login can be matched
+safely to its saved profile, refreshed token data is captured before switching away.
+
+The active native credential is necessarily still plaintext and readable by processes running as your OS user.
+SecretStorage protects the inactive saved copies from project files and ordinary extension storage; it does not
+change the security model of the vendor CLI. Credential files selected with **Import** are not deleted by the
+extension.

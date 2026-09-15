@@ -34,6 +34,7 @@
     "onCommand:aiUsage.enableAgentsWindow",
     "onCommand:aiUsage.openAgentsWindowSetup",
     "onCommand:aiUsage.openLog",
+    "onCommand:aiUsage.manageAuthProfiles",
     "onCommand:aiUsage.refresh",
     "onCommand:aiUsage.showDetails",
     "onStartupFinished"
@@ -64,6 +65,10 @@
       {
         "command": "aiUsage.openLog",
         "title": "AI Usage: Open Log"
+      },
+      {
+        "command": "aiUsage.manageAuthProfiles",
+        "title": "AI Usage: Manage Claude/Codex Authentication Profiles"
       },
       {
         "command": "aiUsage.chip.claude.simple.pending",

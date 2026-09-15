@@ -1,6 +1,8 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
+import { AuthProvider } from './authFiles';
+import { AuthProfileManager } from './authProfiles';
 import { SharedCache, deserializeUsage } from './cache';
 import {
   GitHubAccount,
@@ -76,6 +78,8 @@ type LiveProvider = {
   fetch: () => Promise<LiveResult>;
   /** Distinguishes cache entries when the result depends on the workspace (Copilot org). */
   cacheDiscriminator?: () => Promise<string | undefined>;
+  /** Name of the extension-managed authentication profile currently selected for this provider. */
+  activeProfileName?: () => string | undefined;
   last?: LiveResult;
   /** Most recent successful reading, kept so errors do not blank the item. */
   lastGood?: LiveUsage;
@@ -119,6 +123,7 @@ function log(message: string): void {
 export function activate(context: vscode.ExtensionContext): void {
   output = vscode.window.createOutputChannel('AI Usage');
   context.subscriptions.push(output);
+  const authProfiles = new AuthProfileManager(context, log);
   const status = vscode.window.createStatusBarItem(STATUS_ALIGNMENT, STATUS_PRIORITY.manual);
   status.command = 'aiUsage.showDetails';
   status.name = 'AI Usage';
@@ -131,7 +136,9 @@ export function activate(context: vscode.ExtensionContext): void {
       icon: 'claude',
       settingKey: 'aiUsage.claude.enabled',
       status: vscode.window.createStatusBarItem(STATUS_ALIGNMENT, STATUS_PRIORITY.claude),
-      fetch: fetchClaudeUsage
+      fetch: fetchClaudeUsage,
+      cacheDiscriminator: async () => authProfiles.cacheDiscriminator('claude'),
+      activeProfileName: () => authProfiles.activeProfileName('claude')
     },
     {
       id: 'codex',
@@ -147,7 +154,9 @@ export function activate(context: vscode.ExtensionContext): void {
           return fetchCodexUsageFromSessionLog();
         }
         return fetchCodexUsage();
-      }
+      },
+      cacheDiscriminator: async () => authProfiles.cacheDiscriminator('codex'),
+      activeProfileName: () => authProfiles.activeProfileName('codex')
     },
     {
       id: 'copilot',
@@ -292,6 +301,25 @@ export function activate(context: vscode.ExtensionContext): void {
   ));
 
   context.subscriptions.push(vscode.commands.registerCommand('aiUsage.refresh', refreshAll));
+  context.subscriptions.push(vscode.commands.registerCommand('aiUsage.manageAuthProfiles', async (value?: unknown) => {
+    const initial = value === 'claude' || value === 'codex' ? value as AuthProvider : undefined;
+    await authProfiles.show(initial, {
+      beforeActivate: async (provider) => {
+        await liveProviders.find((candidate) => candidate.id === provider)?.inFlight;
+      },
+      afterActivate: async (provider) => {
+        const live = liveProviders.find((candidate) => candidate.id === provider);
+        if (!live) {
+          return;
+        }
+        live.last = undefined;
+        live.lastGood = undefined;
+        renderLive(live);
+        await updateChipContext(live, vscode.workspace.getConfiguration().get<boolean>('aiUsage.chatChips.enabled', true));
+        await refreshProvider(live, true);
+      }
+    });
+  }));
   context.subscriptions.push(vscode.commands.registerCommand('aiUsage.openLog', () => output?.show(true)));
   context.subscriptions.push(vscode.commands.registerCommand('aiUsage.openAgentsWindowSetup', () =>
     vscode.commands.executeCommand('workbench.action.openWalkthrough', `${context.extension.id}#${AGENTS_WINDOW_WALKTHROUGH}`, false)
@@ -672,7 +700,7 @@ function renderLive(provider: LiveProvider): void {
     // Keep the last reading visible; grey it out once it is old enough to mislead.
     const ageMs = Date.now() - previous.fetchedAt.getTime();
     item.text = statusText(provider, formatUsageLabel(previous, false, statusBarStyle().usage), previous.title);
-    item.tooltip = buildTooltip(previous, result.message);
+    item.tooltip = buildTooltip(previous, result.message, provider.activeProfileName?.());
     item.backgroundColor = undefined;
     item.color = ageMs >= STALE_AFTER_MS ? new vscode.ThemeColor('disabledForeground') : undefined;
     item.show();
@@ -681,7 +709,7 @@ function renderLive(provider: LiveProvider): void {
 
   const usage = result.usage;
   item.text = statusText(provider, formatUsageLabel(usage, false, statusBarStyle().usage), usage.title);
-  item.tooltip = buildTooltip(usage);
+  item.tooltip = buildTooltip(usage, undefined, provider.activeProfileName?.());
 
   const worst = worstPercent(usage);
   if (worst >= ERROR_PERCENT) {
@@ -742,7 +770,7 @@ function statusText(provider: LiveProvider, body: string, title?: string): strin
   return `${icon}${name}${body}`.trimEnd();
 }
 
-function buildTooltip(usage: LiveUsage, refreshError?: string): vscode.MarkdownString {
+function buildTooltip(usage: LiveUsage, refreshError?: string, activeProfile?: string): vscode.MarkdownString {
   const md = new vscode.MarkdownString(undefined, true);
   if (refreshError) {
     const minutes = Math.round((Date.now() - usage.fetchedAt.getTime()) / 60_000);
@@ -761,10 +789,17 @@ function buildTooltip(usage: LiveUsage, refreshError?: string): vscode.MarkdownS
     }
   }
   md.appendMarkdown(`\n_Updated ${usage.fetchedAt.toLocaleTimeString()}_`);
+  if (usage.provider === 'claude' || usage.provider === 'codex') {
+    md.appendMarkdown('\n\n$(key) ');
+    md.appendText(activeProfile ? `Authentication profile: ${activeProfile}` : 'Manage authentication profiles');
+  }
   return md;
 }
 
-type DetailItem = vscode.QuickPickItem & { action?: 'refresh' | 'log' | 'settings' | 'connect' | 'all' };
+type DetailItem = vscode.QuickPickItem & {
+  action?: 'refresh' | 'log' | 'settings' | 'connect' | 'all' | 'profiles';
+  providerId?: AuthProvider;
+};
 
 const WINDOW_NAMES: Record<string, string> = {
   '5h': '5-hour window',
@@ -799,6 +834,16 @@ function providerItems(provider: LiveProvider): DetailItem[] {
   const plan = result?.kind === 'ok' && result.usage.plan ? ` · ${result.usage.plan}` : '';
   const who = result?.kind === 'ok' && result.usage.subtitle ? ` · ${result.usage.subtitle}` : '';
   items.push({ label: `${title}${who}${plan}`, kind: vscode.QuickPickItemKind.Separator });
+  if (provider.id === 'claude' || provider.id === 'codex') {
+    const name = provider.activeProfileName?.();
+    items.push({
+      label: '$(key) Authentication profile',
+      description: name ?? 'None saved',
+      detail: 'Save, name, and switch logins without leaving VS Code.',
+      action: 'profiles',
+      providerId: provider.id
+    });
+  }
 
   if (!result) {
     items.push({ label: '$(clock) Waiting for first reading…' });
@@ -928,7 +973,9 @@ async function showDetailsPanel(providers: LiveProvider[], refreshAll: () => Pro
       return;
     }
     picker.hide();
-    if (picked.action === 'log') {
+    if (picked.action === 'profiles') {
+      await vscode.commands.executeCommand('aiUsage.manageAuthProfiles', picked.providerId);
+    } else if (picked.action === 'log') {
       output?.show(true);
     } else {
       await vscode.commands.executeCommand('workbench.action.openSettings', '@ext:p0l0us.ai-usage-vscode-plugin');

@@ -15,8 +15,25 @@ a chip beneath the chat input.
   `Retry-After` aware backoff. Codex can be read from the local CLI with no network at all.
 - **Honest when things fail**: a failed refresh keeps the previous reading and greys it out after 15 minutes.
 
-Nothing is shown for a tool that is not installed or signed in. Tokens are only read from the tools' own login
-files, never written or refreshed.
+Nothing is shown for a tool that is not installed or signed in. Usage checks only read the tools' own login files.
+The optional authentication-profile switcher writes a selected login only when you ask it to switch profiles.
+
+## Authentication profiles
+
+Run **AI Usage: Manage Claude/Codex Authentication Profiles** from the Command Palette, or open a Claude/Codex
+usage item and choose **Authentication profile**. You can save and name the current login, import a credential JSON
+file, and switch among up to 20 profiles per service.
+
+Saved copies live in VS Code `SecretStorage`, not in project files, workspace settings, or the extension's ordinary
+global storage. Activating a profile atomically updates the native file already shared by the CLI and vendor
+extension (`~/.claude/.credentials.json` / `$CLAUDE_CONFIG_DIR`, or `~/.codex/auth.json` / `$CODEX_HOME`) with mode
+`0600`. Claude MCP credentials in the same file are preserved. This native active copy remains plaintext because
+Claude Code and Codex require that format; only one selected profile is exposed there at a time.
+
+A convenient setup is: sign in with the CLI, save the current login as a profile, sign in with the next account,
+and save again. An imported profile is saved but not activated until you choose it. New requests use a switched
+login; an already-running request or agent session may need to finish or be reopened first. In remote development,
+profiles belong to the extension host (local, SSH, WSL, or container) where the command is run.
 
 ## Installation
 
