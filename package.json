@@ -2,7 +2,7 @@
   "name": "ai-usage-vscode-plugin",
   "displayName": "AI Usage",
   "description": "Live Claude Code, Codex and GitHub Copilot usage in the status bar and chat input: 5h/7d windows, premium requests, org billing, reset times on hover. Open source, contributions welcome.",
-  "version": "0.0.8",
+  "version": "0.0.9",
   "publisher": "p0l0us",
   "license": "GPL-3.0-only",
   "repository": {
@@ -6230,13 +6230,13 @@
           "aiUsage.chatChips.agentsWindow": {
             "type": "boolean",
             "default": true,
-            "markdownDescription": "Also show the usage chips beneath the chat input in the **Agents** (sessions) window. The Agents window only runs extensions installed locally and listed in `#extensions.supportAgentsWindow#` (local user settings). The extension there runs on your local computer and shows the logins found **there**, also for remote sessions; clicking the chip of an agent that is not signed in locally says where to sign in. [Enable AI Usage there](command:aiUsage.enableAgentsWindow) · [Open user settings.json](command:workbench.action.openSettingsJson) · [Setup guide](command:aiUsage.openAgentsWindowSetup) · [README](https://github.com/p0l0us/ai-usage-vscode-plugin#agents-sessions-window).",
+            "markdownDescription": "Also show the usage chips beneath the chat input in the **Agents** (sessions) window. The Agents window only runs extensions installed locally and listed in `#extensions.supportAgentsWindow#` (local user settings). The extension there runs on your local computer and shows the logins found **there**, also for remote sessions; a chat whose agent is not signed in locally gets an `n/a` chip. [Enable AI Usage there](command:aiUsage.enableAgentsWindow) · [Open user settings.json](command:workbench.action.openSettingsJson) · [Setup guide](command:aiUsage.openAgentsWindowSetup) · [README](https://github.com/p0l0us/ai-usage-vscode-plugin#agents-sessions-window).",
             "order": 14
           },
           "aiUsage.chatChips.enabled": {
             "type": "boolean",
             "default": true,
-            "description": "Show the current chat's agent usage (Copilot, Claude Code, Codex) as chips beneath the chat input, next to the context usage indicator, e.g. \"Claude 4% (5h)\" \"26% (7d)\". Click a chip for the same breakdown the status bar tooltip shows. The hover of a chip only repeats its text; VS Code allows no richer tooltip there.",
+            "description": "Show the current chat's agent usage (Copilot, Claude Code, Codex) as chips beneath the chat input, next to the context usage indicator, e.g. \"Claude 4% (5h)\" \"26% (7d)\". Click a chip to open that agent's details panel. The hover of a chip only repeats its text; VS Code allows no richer tooltip there.",
             "order": 10
           },
           "aiUsage.updateIntervalMinutes": {
@@ -17631,7 +17631,7 @@
           {
             "id": "verify",
             "title": "Reload and check the chip",
-            "description": "Reload the Agents window and click the agent's chip beneath the chat input to see its usage.\n[Reload Window](command:workbench.action.reloadWindow)",
+            "description": "Reload the Agents window and click a chip beneath the chat input to open that agent's details.\n[Reload Window](command:workbench.action.reloadWindow)",
             "media": {
               "markdown": "media/walkthrough/verify.md"
             },

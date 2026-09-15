@@ -1,8 +1,13 @@
 # Changelog
 
-## 0.0.8 (unreleased)
+## 0.0.9 (unreleased)
 
 - 
+
+## 0.0.8 (2026-09-11)
+
+- The details quick pick is back: status bar items and chat chips open it again (chips focused on their agent,
+  with a "Show all providers" action), replacing the modal dialog from 0.0.4.
 
 ## 0.0.7 (2026-09-11)
 
@@ -21,14 +26,9 @@
 - Chat chips are text only, `Claude 4% (5h)` `26% (7d)` by default, `Claude n/a` when the agent is not signed in
   where the extension runs. New settings `aiUsage.chatChips.labels` (`none` / `name`) and `aiUsage.chatChips.usage`
   (`simple`, one figure for the most used window / `rich`, every window). The icon chip is gone: VS Code drops the
-  text of a toolbar item that has an icon. Clicking a chip opens a dialog with the same text as the status bar tooltip (plan, account or organization, per-window usage,
-  reset times, last update). `aiUsage.chatChips.icon` was removed.
+  text of a toolbar item that has an icon. `aiUsage.chatChips.icon` was removed.
 - Status bar: `aiUsage.statusBar.labels` gained `none` and `nameOnly`; new `aiUsage.statusBar.usage` (`simple` /
   `rich`) chooses between the most used window and every window.
-- Status bar items no longer open a quick pick on click; the figures are in the hover. The Copilot item still
-  opens the GitHub access request when access is missing. **AI Usage: Show Details** shows the same dialog for
-  every enabled service.
-- Removed the quick-pick details panel.
 
 ## 0.0.1 (unreleased)
 

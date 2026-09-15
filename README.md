@@ -6,8 +6,9 @@ a chip beneath the chat input.
 
 - **Status bar**: `17% (5h) 25% (7d)` for Claude, `37% (7d)` for Codex, `42%` for Copilot, each behind its vendor
   icon. Hover for plan, account or organization and reset times; the item turns yellow at 80% and red at 95%.
-- **Chat chips**: `Claude 17% (5h)` `25% (7d)` beneath the chat input for the agent the current chat is using;
-  click for the same breakdown the status bar tooltip shows.
+- **Chat chips**: `Claude 17% (5h)` `25% (7d)` beneath the chat input for the agent the current chat is using.
+- **Details panel**: click any status bar item or chip for plan, account or organization, reset countdowns and
+  source, with Refresh, Open log and Settings actions.
 - **Organization aware**: Copilot follows the GitHub account whose Copilot organization owns the workspace
   repository, so org-billed seats show org data.
 - **Gentle on the services**: one shared cache for all open windows, per-service check intervals and
@@ -57,7 +58,7 @@ The same with service names (`iconAndName`):
 
 ![Status bar with service names](images/screenshots/status-bar-labels.png)
 
-Hover any item for the per-window breakdown, plan and reset times (the chat chips show the same text on click):
+Hover any item for the per-window breakdown, plan and reset times; click it or a chat chip for the details panel:
 
 | Claude | Codex | Copilot |
 |---|---|---|
@@ -85,15 +86,12 @@ backoff work and how the chat chip is built: [docs/INTERNALS.md](docs/INTERNALS.
 
 - **A service is missing**: it is not signed in on the machine the extension runs on (see the remote note above).
   **Output → AI Usage** shows what was found.
-- **Clicking the chat chip says "Not available"**: the chat's agent is not signed in where the extension runs. In
+- **A chat chip shows `n/a`**: the chat's agent is not signed in where the extension runs. In
   the Agents window that is your local computer even for remote sessions; sign in there with the same account
   (`claude` once, or `codex login`) and the figures appear. Do not use `aiUsage.chatChips.debug` for this: it shows
   every service's chip, including Copilot's in a Claude chat.
 - **Copilot shows “connect”**: click it and allow access to your GitHub account.
 - **Numbers are grey**: the last refresh failed; the tooltip says why. Rate limits clear on their own.
-- **Clicking a status bar item does nothing**: that is by design. The figures are in the hover; VS Code lets only
-  its own status bar entries open the tooltip on click. **AI Usage: Show Details** and **AI Usage: Refresh** are in
-  the Command Palette.
 
 ## Contributing
 

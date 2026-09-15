@@ -38,13 +38,13 @@ Each service has a `source` setting that selects where its usage is read from:
 - `aiUsage.chatChips.workbench`: `whenNoStatusBar` (default) shows the chip in a regular VS Code window only when no status bar shows the same figures; `always` or `never` override that. The Agents window has no status bar, so the chip there follows `aiUsage.chatChips.agentsWindow`.
 - `aiUsage.claude.enabled` / `aiUsage.codex.enabled` / `aiUsage.copilot.enabled`: toggle the live items (default on).
 - `aiUsage.copilot.account`: GitHub login to use when several are signed in.
-- `aiUsage.chatChips.enabled`: toggle the chips beneath the chat input (default on). Clicking a chip opens a dialog
-  with the same text as the status bar tooltip. Hovering a chip only repeats its text; VS Code offers extensions no
-  richer tooltip on that toolbar.
+- `aiUsage.chatChips.enabled`: toggle the chips beneath the chat input (default on). Clicking a chip opens the
+  details panel for that agent. Hovering a chip only repeats its text; VS Code offers extensions no richer tooltip
+  on that toolbar.
 - `aiUsage.chatChips.agentsWindow`: also show the chip in the Agents window (default on; see
   [Agents (sessions) window](AGENTS_WINDOW.md) for the required one-time setup). The extension there runs
-  on your local computer and shows the logins found there, also for remote sessions; clicking the chip of an agent
-  that is not signed in locally says where to sign in.
+  on your local computer and shows the logins found there, also for remote sessions; a chat whose agent is not signed in
+  locally gets an `n/a` chip.
 - `aiUsage.chatChips.debug` (default off): diagnostic. Adds a test chip and shows every service's chip regardless
   of the chat's agent (Copilot's in a Claude chat, for example). Not needed to enable the chip.
 - `aiUsage.accounts`: optional manual figures; the `AI xx%` item appears only when set.

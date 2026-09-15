@@ -1,8 +1,8 @@
 # Check the result
 
 Open any session in the Agents window. Beneath the chat input, next to the context indicator, chips such as
-`Claude 4% (5h)` `26% (7d)` appear for the session's agent. Click one for the breakdown: plan, account or
-organization, every window with its reset time, the same text the status bar tooltip shows.
+`Claude 4% (5h)` `26% (7d)` appear for the session's agent. Click one to open the details panel of that agent: plan,
+account or organization, every window with its reset time, source and actions.
 [aiUsage.chatChips.labels](command:workbench.action.openSettings?%5B%22aiUsage.chatChips.labels%22%5D) and
 [aiUsage.chatChips.usage](command:workbench.action.openSettings?%5B%22aiUsage.chatChips.usage%22%5D) choose the
 name prefix and whether every window or just the most used one is shown.

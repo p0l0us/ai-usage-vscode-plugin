@@ -32,10 +32,9 @@ kind also exists with a `.named` suffix ("Claude 17% (5h)"), chosen by the `aiUs
 `lockedCodingAgentId`, `chatSessionType` such as `agent-host-claude`, or `sessionType` in the Agents window) and the
 per-provider keys the extension sets: `aiUsage.chip.<provider>.simple` with the most used window's percent or a state
 name, or in rich mode `aiUsage.chip.<provider>.<window>` per window (falling back to `simple` when no window label is
-in the manifest, as for Copilot's single monthly window). All unset hides the chips. Clicking a chip runs `aiUsage.showDetails` for that provider, which opens a dialog with the same text as
-the status bar tooltip (both are rendered from one description of the reading). VS Code gives extensions no way to
-open an anchored hover from a toolbar item or a status bar entry, which is why the chip uses a dialog and the status
-bar items have no click command. `aiUsage.chatChips.debug` bypasses the agent match, so with it on every provider's
+in the manifest, as for Copilot's single monthly window). All unset hides the chips. Clicking a chip runs `aiUsage.showDetails` for that provider, which opens the details quick pick focused on
+that provider; status bar items open the same quick pick for all providers. VS Code gives extensions no way to open
+an anchored hover from a toolbar item or a status bar entry. `aiUsage.chatChips.debug` bypasses the agent match, so with it on every provider's
 chip shows (Copilot's included). Run `npm run generate` (also part of `npm run compile`) after editing the
 generator.
 
