@@ -26,9 +26,10 @@ file, and switch among up to 20 profiles per service.
 
 Saved copies live in VS Code `SecretStorage`, not in project files, workspace settings, or the extension's ordinary
 global storage. Activating a profile atomically updates the native file already shared by the CLI and vendor
-extension (`~/.claude/.credentials.json` / `$CLAUDE_CONFIG_DIR`, or `~/.codex/auth.json` / `$CODEX_HOME`) with mode
-`0600`. Claude MCP credentials in the same file are preserved. This native active copy remains plaintext because
-Claude Code and Codex require that format; only one selected profile is exposed there at a time.
+extension (`~/.claude/.credentials.json` / `$CLAUDE_CONFIG_DIR`, or `~/.codex/auth.json` / `$CODEX_HOME`). The file
+is forced to mode `0600` on Linux/macOS and inherits the user-profile ACL on Windows. Claude MCP credentials in the
+same file are preserved. This native active copy remains plaintext because Claude Code and Codex require that
+format; only one selected profile is exposed there at a time.
 
 A convenient setup is: sign in with the CLI, save the current login as a profile, sign in with the next account,
 and save again. An imported profile is saved but not activated until you choose it. New requests use a switched
@@ -60,6 +61,8 @@ it is installed and runs on the remote machine, so:
   not appear; install the extension locally too, or sign in on the remote side.
 - Copilot uses the GitHub account VS Code is signed in with; that works in remote windows as usual.
 - Settings for sources and intervals belong in **Remote Settings**, not the local user settings.
+- Authentication profiles and their SecretStorage entries belong to that extension host too. A Remote-SSH window
+  manages the remote machine's profiles; a normal Windows/macOS/Linux window manages the local machine's profiles.
 - The **Agents window** is the exception: it runs only *local* extensions, and blocks extensions with code until
   you allow them. The chip there needs a local install plus a one-time allow step; run
   **AI Usage: Agents Window Setup Guide** from the Command Palette or see

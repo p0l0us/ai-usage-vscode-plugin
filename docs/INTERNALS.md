@@ -35,7 +35,8 @@ in the current `.credentials.json` while preserving MCP OAuth entries. Codex pro
 Before activation, a refreshed native credential is copied back to the selected secret only when it can be matched
 to the same owner (Codex `account_id`, matching refresh token, or an exact match). Writes go through a newly created
 mode-`0600` temporary file in the destination directory and an atomic rename; the resulting file is explicitly
-chmodded to `0600` on platforms that support POSIX modes.
+chmodded to `0600` on POSIX. Windows uses the destination directory's inherited user-profile ACL because its chmod
+implementation does not support POSIX ownership modes.
 
 ## How the chat chip works
 

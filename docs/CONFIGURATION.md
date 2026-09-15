@@ -57,10 +57,15 @@ JSON file, rename/delete profiles, or activate one of up to 20 profiles per serv
 profile id are non-secret extension metadata; credential bodies are stored individually in VS Code
 `SecretStorage`.
 
-Switching updates the same provider-native credential file used by its CLI and VS Code extension. The write uses a
-mode-`0600` temporary file and atomic rename. For Claude only the `claudeAiOauth` object is replaced, so `mcpOAuth.*`
+Switching updates the same provider-native credential file used by its CLI and VS Code extension. The write uses
+an atomic replacement; its temporary and resulting file use mode `0600` on Linux/macOS and the containing
+user-profile directory's ACL on Windows. For Claude only the `claudeAiOauth` object is replaced, so `mcpOAuth.*`
 entries remain untouched. Codex `auth.json` is replaced as a unit. When the native active login can be matched
 safely to its saved profile, refreshed token data is captured before switching away.
+
+The extension is workspace-first. In Remote-SSH, WSL, and dev-container windows it runs remotely and manages that
+host's native credential files and SecretStorage. In an ordinary Windows/macOS/Linux window it runs locally. These
+stores are intentionally separate; remote profiles do not leak into the local workstation or vice versa.
 
 The active native credential is necessarily still plaintext and readable by processes running as your OS user.
 SecretStorage protects the inactive saved copies from project files and ordinary extension storage; it does not

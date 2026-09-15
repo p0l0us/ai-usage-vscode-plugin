@@ -103,8 +103,11 @@ export function writeJsonAtomically(file: string, document: Record<string, unkno
       mode: 0o600
     });
     fs.renameSync(temporary, file);
-    // Existing files can carry broader permissions, and Windows simply ignores this mode.
-    fs.chmodSync(file, 0o600);
+    // Windows uses inherited ACLs and only implements a small subset of chmod. On POSIX, ensure
+    // replacing an existing file also tightens permissions rather than retaining a broader mode.
+    if (process.platform !== 'win32') {
+      fs.chmodSync(file, 0o600);
+    }
   } catch (error) {
     try {
       fs.unlinkSync(temporary);
