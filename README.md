@@ -23,6 +23,16 @@ With the default icon-only labels, the status bar stays compact while showing ea
 
 ![Status bar with icon-only labels and reset countdowns](images/screenshots/status-bar-icons.png)
 
+Labels are configurable; `iconAndName` adds provider names without changing the usage figures:
+
+![Status bar with provider names and reset countdowns](images/screenshots/status-bar-labels.png)
+
+High usage is deliberately visible: an item turns yellow at 80% and red at 95%. Here Claude's 92% window resets
+in 3 hours while Codex remains neutral at 77%. Countdown labels always use one largest unit (`42m`, `3h`, or
+`4d`):
+
+![Claude high usage highlighted yellow beside neutral Codex usage](images/screenshots/status-bar-high-usage.png)
+
 Hover a status item for its named limit windows, plan and reset times. Copilot also identifies the account and,
 for organization-billed seats, the organization and its premium-request usage:
 
@@ -108,10 +118,6 @@ it is installed and runs on the remote machine, so:
 | `aiUsage.copilot.account` | (auto) | GitHub login to use when several are signed in. |
 | `aiUsage.<service>.enabled` | on | Hide a service you do not use. |
 
-For example, `iconAndName` adds the provider names without changing the usage figures:
-
-![Status bar with provider names and reset countdowns](images/screenshots/status-bar-labels.png)
-
 The full list is in [docs/CONFIGURATION.md](docs/CONFIGURATION.md). Where the numbers come from, how caching and
 backoff work and how the chat chip is built: [docs/INTERNALS.md](docs/INTERNALS.md).
 
@@ -125,12 +131,6 @@ backoff work and how the chat chip is built: [docs/INTERNALS.md](docs/INTERNALS.
   every service's chip, including Copilot's in a Claude chat.
 - **Copilot shows “connect”**: click it and allow access to your GitHub account.
 - **Numbers are grey**: the last refresh failed; the tooltip says why. Rate limits clear on their own.
-
-High usage is deliberately visible: an item turns yellow at 80% and red at 95%. Here Claude's 92% window resets
-in 3 hours while Codex remains neutral at 77%. Countdown labels always use one largest unit (`42m`, `3h`, or
-`4d`):
-
-![Claude high usage highlighted yellow beside neutral Codex usage](images/screenshots/status-bar-high-usage.png)
 
 ## Contributing
 
