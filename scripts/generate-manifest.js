@@ -6,7 +6,7 @@
 // `when` clauses pick the one matching the chat's agent and the context keys the extension sets
 // at runtime:
 //   aiUsage.chip.<provider>.simple   "37%"-style single figure or a state (pending/unavailable/error)
-//   aiUsage.chip.<provider>.<window> the figure of that window in rich mode, e.g. "4% (5h)"
+//   aiUsage.chip.<provider>.<window> the figure of that window in rich mode, e.g. "4%"
 //   aiUsage.chip.named               whether the first item is prefixed with the service name
 // Clicking any chip runs `aiUsage.showDetails` for its provider. This script is idempotent: it
 // removes all previously generated `aiUsage.chip.*` entries and regenerates them.
@@ -72,11 +72,13 @@ PROVIDERS.forEach((provider, index) => {
   for (const [state, text] of [...Object.entries(STATES), ...PERCENTS.map((percent) => [percent, `${percent}%`])]) {
     addFirst(`${key}.simple.${state}`, text, `${key}.simple == '${state}'`, base);
   }
-  // Rich mode: one item per window, "4% (5h)" "26% (7d)", the first one optionally named.
+  // Rich mode: one percentage per window. A menu command's title is static, so the live reset
+  // countdown used by the status bar cannot be embedded here without generating every possible
+  // percentage/countdown combination. Details identify the window and its reset time.
   provider.windows.forEach((window, windowIndex) => {
     for (const percent of PERCENTS) {
       const command = `${key}.${window}.${percent}`;
-      const text = `${percent}% (${window})`;
+      const text = `${percent}%`;
       const when = `${key}.${window} == '${percent}'`;
       if (windowIndex === 0) {
         addFirst(command, text, when, base + 1 + windowIndex);

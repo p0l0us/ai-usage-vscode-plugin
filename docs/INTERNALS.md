@@ -44,8 +44,8 @@ VS Code renders an item of the `chat/input/status` menu as its static title (or,
 icon alone), and the item's hover repeats that title; there is no separate tooltip. Live text therefore needs one
 command per possible label, which `scripts/generate-manifest.js` produces per provider: `aiUsage.chip.claude.simple.<n>`
 (title "17%") for the single-figure item and its states `.pending` ("…"), `.unavailable` ("n/a") and `.error` ("!"),
-plus `aiUsage.chip.claude.5h.<n>` ("17% (5h)") and `aiUsage.chip.claude.7d.<n>` for rich mode. The first item of each
-kind also exists with a `.named` suffix ("Claude 17% (5h)"), chosen by the `aiUsage.chip.named` key from
+plus `aiUsage.chip.claude.5h.<n>` ("17%") and `aiUsage.chip.claude.7d.<n>` for rich mode. The first item of each
+kind also exists with a `.named` suffix ("Claude 17%"), chosen by the `aiUsage.chip.named` key from
 `aiUsage.chatChips.labels`. Their `when` clauses match the chat's locked agent (`chatAgentHostProviderId`,
 `lockedCodingAgentId`, `chatSessionType` such as `agent-host-claude`, or `sessionType` in the Agents window) and the
 per-provider keys the extension sets: `aiUsage.chip.<provider>.simple` with the most used window's percent or a state
@@ -55,6 +55,10 @@ that provider; status bar items open the same quick pick for all providers. VS C
 an anchored hover from a toolbar item or a status bar entry. `aiUsage.chatChips.debug` bypasses the agent match, so with it on every provider's
 chip shows (Copilot's included). Run `npm run generate` (also part of `npm run compile`) after editing the
 generator.
+
+Status-bar percentages use each window's live `resetsAt` value in parentheses. `formatResetRemaining` selects one
+largest whole unit only: minutes below one hour, hours below one day, then days. Chat-toolbar command titles are
+static, so their compact chips show percentages only; clicking one opens the live window names and countdowns.
 
 All windows share one cache file in the extension's global storage, so only one window calls a source per check
 interval and all windows respect the same backoff. Usage polling only reads tokens and never refreshes them. The

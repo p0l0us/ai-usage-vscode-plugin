@@ -28,13 +28,14 @@ Each service has a `source` setting that selects where its usage is read from:
 - `aiUsage.statusBar.enabled` (default on): show the usage items in the status bar at all.
 - `aiUsage.statusBar.labels`: what precedes the figures in a status bar item: `none` (figures only), `nameOnly`,
   `iconOnly` (default) or `iconAndName`.
-- `aiUsage.statusBar.usage`: `rich` (default) shows every window, `17% (5h) 25% (7d)`; `simple` shows one figure,
-  the most used window, `25%`. The hover always has the full breakdown.
-- `aiUsage.chatChips.labels`: `name` (default) prefixes the first chip with the service name, `Claude 4% (5h)`;
+- `aiUsage.statusBar.usage`: `rich` (default) shows every window, `17% (3h) 25% (3d)`; the value in parentheses
+  is time until reset, reduced to one largest unit (`42m`, `3h`, or `4d`). `simple` shows only the most-used window.
+- `aiUsage.chatChips.labels`: `name` (default) prefixes the first chip with the service name, `Claude 4%`;
   `none` shows figures only. Chips cannot carry the vendor icon: VS Code drops the text of a toolbar item that has
   an icon.
-- `aiUsage.chatChips.usage`: `rich` (default) shows one chip per window, `Claude 4% (5h)` `26% (7d)`; `simple` one
-  chip with the most used window, `Claude 26%`. Copilot has a single monthly window, so both look the same for it.
+- `aiUsage.chatChips.usage`: `rich` (default) shows one percentage chip per window, `Claude 4%` `26%`; `simple`
+  shows the most-used window only, `Claude 26%`. Click a chip to see window names and reset countdowns. Copilot has
+  a single monthly window, so both modes look the same for it.
 - `aiUsage.chatChips.workbench`: `whenNoStatusBar` (default) shows the chip in a regular VS Code window only when no status bar shows the same figures; `always` or `never` override that. The Agents window has no status bar, so the chip there follows `aiUsage.chatChips.agentsWindow`.
 - `aiUsage.claude.enabled` / `aiUsage.codex.enabled` / `aiUsage.copilot.enabled`: toggle the live items (default on).
 - `aiUsage.copilot.account`: GitHub login to use when several are signed in.
@@ -57,6 +58,14 @@ JSON file, rename/delete profiles, or activate one of up to 20 profiles per serv
 profile id are non-secret extension metadata; credential bodies are stored individually in VS Code
 `SecretStorage`.
 
+The profile manager shows the active account alongside the available management actions:
+
+![Codex authentication profile manager with two saved accounts](../images/screenshots/auth-profiles-codex.png)
+
+The details view confirms which profile is active and shows its detected plan:
+
+![Codex account 2 shown as the active authentication profile](../images/screenshots/auth-profile-active.png)
+
 Switching updates the same provider-native credential file used by its CLI and VS Code extension. The write uses
 an atomic replacement; its temporary and resulting file use mode `0600` on Linux/macOS and the containing
 user-profile directory's ACL on Windows. For Claude only the `claudeAiOauth` object is replaced, so `mcpOAuth.*`
@@ -71,3 +80,10 @@ The active native credential is necessarily still plaintext and readable by proc
 SecretStorage protects the inactive saved copies from project files and ordinary extension storage; it does not
 change the security model of the vendor CLI. Credential files selected with **Import** are not deleted by the
 extension.
+
+### High-usage highlighting
+
+Status-bar items turn yellow when any displayed window reaches 80% usage and red at 95%. In this example Claude's
+92% window resets in 3 hours, so Claude is highlighted while Codex remains neutral at 77%:
+
+![Claude high usage highlighted yellow beside neutral Codex usage](../images/screenshots/status-bar-high-usage.png)

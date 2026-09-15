@@ -14,7 +14,8 @@ import {
   fetchCodexUsageCli,
   fetchCodexUsageFromSessionLog,
   fetchCopilotUsage,
-  formatResetIn
+  formatResetIn,
+  formatResetRemaining
 } from './live';
 
 type BillingPeriod = 'daily' | 'weekly' | 'monthly';
@@ -38,7 +39,7 @@ const CHIP_WINDOWS: Record<ProviderId, string[]> = { claude: ['5h', '7d'], codex
 
 /** What precedes the figures: nothing, the service name, the vendor icon, or both. */
 type LabelStyle = 'none' | 'nameOnly' | 'iconOnly' | 'iconAndName';
-/** `simple`: one figure, the most used window ("37%"); `rich`: every window ("4% (5h) 26% (7d)"). */
+/** `simple`: the most used window; `rich`: every window. Parentheses show time until reset. */
 type UsageStyle = 'simple' | 'rich';
 
 function statusBarStyle(): { labels: LabelStyle; usage: UsageStyle } {
@@ -749,16 +750,23 @@ function worstPercent(usage: LiveUsage): number {
   return Math.max(...usage.windows.map((window) => window.usedPercent));
 }
 
+function usagePart(window: LiveUsage['windows'][number], now: Date): string {
+  const reset = formatResetRemaining(window.resetsAt, now);
+  return `${window.usedPercent}%${reset ? ` (${reset})` : ''}`;
+}
+
 /**
- * Rich: "Claude 17% (5h) 25% (7d)", "Codex 37% (7d)", "Copilot 75%" (Copilot has a single monthly
- * window). Simple: only the most used window, "Claude 25%".
+ * Parentheses are a compact reset countdown, never the fixed window length. Rich shows up to two
+ * windows, e.g. "Claude 17% (3h) 25% (3d)". Simple shows only the most-used window.
  */
 function formatUsageLabel(usage: LiveUsage, withTitle = true, style: UsageStyle = 'rich'): string {
+  const now = new Date();
+  const worst = usage.windows.reduce((selected, window) =>
+    window.usedPercent > selected.usedPercent ? window : selected
+  );
   const parts = style === 'simple'
-    ? [`${worstPercent(usage)}%`]
-    : usage.windows.slice(0, 2).map((window) =>
-        usage.provider === 'copilot' ? `${window.usedPercent}%` : `${window.usedPercent}% (${window.label})`
-      );
+    ? [usagePart(worst, now)]
+    : usage.windows.slice(0, 2).map((window) => usagePart(window, now));
   return withTitle ? `${usage.title} ${parts.join(' ')}` : parts.join(' ');
 }
 

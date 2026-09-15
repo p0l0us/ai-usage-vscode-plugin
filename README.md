@@ -4,9 +4,10 @@ See how much of your AI coding budget is left without leaving the editor. **AI U
 quota usage for **Claude Code**, **Codex** and **GitHub Copilot** in the status bar and, in the Agents window, behind
 a chip beneath the chat input.
 
-- **Status bar**: `17% (5h) 25% (7d)` for Claude, `37% (7d)` for Codex, `42%` for Copilot, each behind its vendor
-  icon. Hover for plan, account or organization and reset times; the item turns yellow at 80% and red at 95%.
-- **Chat chips**: `Claude 17% (5h)` `25% (7d)` beneath the chat input for the agent the current chat is using.
+- **Status bar**: `17% (3h) 25% (3d)` for Claude, where parentheses show the time until reset—not the fixed
+  quota-window length. The item turns yellow at 80% and red at 95%.
+- **Chat chips**: compact percentages such as `Claude 17%` `25%` beneath the chat input for the agent the current
+  chat is using; click for the named windows and reset countdowns.
 - **Details panel**: click any status bar item or chip for plan, account or organization, reset countdowns and
   source, with Refresh, Open log and Settings actions.
 - **Organization aware**: Copilot follows the GitHub account whose Copilot organization owns the workspace
@@ -35,6 +36,17 @@ A convenient setup is: sign in with the CLI, save the current login as a profile
 and save again. An imported profile is saved but not activated until you choose it. New requests use a switched
 login; an already-running request or agent session may need to finish or be reopened first. In remote development,
 profiles belong to the extension host (local, SSH, WSL, or container) where the command is run.
+
+### Authentication profile examples
+
+The profile manager marks the current account as **Active** and keeps save, import, rename, and delete actions in
+the same quick-pick menu:
+
+![Codex authentication profile manager with two saved accounts](images/screenshots/auth-profiles-codex.png)
+
+After activation, the usage details identify the selected profile and its detected plan:
+
+![Codex account 2 shown as the active authentication profile](images/screenshots/auth-profile-active.png)
 
 ## Installation
 
@@ -77,6 +89,12 @@ Status bar with the default icon-only labels (`aiUsage.statusBar.labels: iconOnl
 The same with service names (`iconAndName`):
 
 ![Status bar with service names](images/screenshots/status-bar-labels.png)
+
+At 80% usage an item is highlighted yellow; at 95% it turns red. Here Claude's 92% window resets in 3 hours and
+is highlighted, while Codex remains neutral at 77%. Each countdown uses one largest unit only (`42m`, `3h`, or
+`4d`):
+
+![Claude high usage highlighted yellow beside neutral Codex usage](images/screenshots/status-bar-high-usage.png)
 
 Hover any item for the per-window breakdown, plan and reset times; click it or a chat chip for the details panel:
 

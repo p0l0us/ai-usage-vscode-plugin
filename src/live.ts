@@ -946,20 +946,23 @@ function describeError(error: unknown): string {
   return String(error);
 }
 
-export function formatResetIn(resetsAt: Date | undefined, now = new Date()): string {
+/** Short reset countdown using only the largest whole unit: "42m", "3h", or "4d". */
+export function formatResetRemaining(resetsAt: Date | undefined, now = new Date()): string {
   if (!resetsAt) {
     return '';
   }
-  const diffMinutes = Math.max(0, Math.round((resetsAt.getTime() - now.getTime()) / 60_000));
+  const diffMinutes = Math.max(0, Math.ceil((resetsAt.getTime() - now.getTime()) / 60_000));
   if (diffMinutes < 60) {
-    return `resets in ${diffMinutes}m`;
+    return `${diffMinutes}m`;
   }
   const hours = Math.floor(diffMinutes / 60);
-  if (hours < 48) {
-    const minutes = diffMinutes % 60;
-    return minutes ? `resets in ${hours}h ${minutes}m` : `resets in ${hours}h`;
+  if (hours < 24) {
+    return `${hours}h`;
   }
-  const days = Math.floor(hours / 24);
-  const remHours = hours % 24;
-  return remHours ? `resets in ${days}d ${remHours}h` : `resets in ${days}d`;
+  return `${Math.floor(hours / 24)}d`;
+}
+
+export function formatResetIn(resetsAt: Date | undefined, now = new Date()): string {
+  const remaining = formatResetRemaining(resetsAt, now);
+  return remaining ? `resets in ${remaining}` : '';
 }
