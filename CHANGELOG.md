@@ -1,6 +1,6 @@
 # Changelog
 
-## Development build (VSIX version 9.9.99)
+## 0.0.12 (2026-09-16)
 
 - Show each service's editable keep-alive model beside its interval in User settings, defaulting to Claude Haiku and Codex Luna.
 - Add a per-service **Send keep-alive now** account action that targets a selected saved account and refreshes its statistics.
