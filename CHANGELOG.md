@@ -1,6 +1,6 @@
 # Changelog
 
-## 9.9.99 (feature development)
+## Development build (VSIX version 9.9.99)
 
 - Add isolated Claude and Codex keep-alive checks for every saved account, including inactive-account usage
   collection and refreshed-token preservation.
