@@ -11,10 +11,11 @@ import {
 } from './authFiles';
 
 const STATE_KEY = 'aiUsage.authProfiles.v1';
+const AUTOMATION_STATE_KEY = 'aiUsage.accountAutomation.v1';
 const SECRET_PREFIX = 'aiUsage.authProfile.v1';
 const MAX_PROFILES = 20;
 
-type ProfileMetadata = {
+export type ProfileMetadata = {
   id: string;
   name: string;
   createdAt: string;
@@ -27,10 +28,12 @@ type ProviderState = {
 };
 
 type ProfileState = Record<AuthProvider, ProviderState>;
+export type AccountAutomationFeature = 'keepAlive' | 'autoRotate';
+type AutomationState = Record<AuthProvider, Record<AccountAutomationFeature, boolean>>;
 
 type ProfileItem = vscode.QuickPickItem & {
   profile?: ProfileMetadata;
-  action?: 'save' | 'import' | 'rename' | 'delete';
+  action?: 'save' | 'import' | 'rename' | 'delete' | AccountAutomationFeature;
 };
 
 const TITLES: Record<AuthProvider, string> = { claude: 'Claude', codex: 'Codex' };
@@ -57,8 +60,72 @@ function validName(value: string): string | undefined {
 export class AuthProfileManager {
   constructor(
     private readonly context: vscode.ExtensionContext,
-    private readonly log: (message: string) => void
+    private readonly log: (message: string) => void,
+    private readonly usageDetail?: (provider: AuthProvider, id: string) => string | undefined
   ) {}
+
+  profiles(provider: AuthProvider): ProfileMetadata[] {
+    return this.state()[provider].profiles;
+  }
+
+  async credential(provider: AuthProvider, id: string): Promise<StoredCredential | undefined> {
+    if (!this.profiles(provider).some((profile) => profile.id === id)) { return undefined; }
+    if (this.activeProfileId(provider) === id) { await this.syncActiveProfile(provider); }
+    return this.readSecret(provider, id);
+  }
+
+  /** Only write back if neither another window nor a manual switch replaced these tokens. */
+  async refreshedCredential(provider: AuthProvider, id: string, before: StoredCredential, after: StoredCredential): Promise<void> {
+    if (JSON.stringify(before) === JSON.stringify(after)) { return; }
+    if (!this.profiles(provider).some((profile) => profile.id === id)) { return; }
+    const stored = await this.readSecret(provider, id);
+    if (JSON.stringify(stored) !== JSON.stringify(before)) { return; }
+    if (this.activeProfileId(provider) === id) {
+      try {
+        if (JSON.stringify(readNativeCredential(provider)) !== JSON.stringify(before)) { return; }
+        writeNativeCredential(provider, after);
+      } catch { return; /* Native login may have been removed externally. */ }
+    }
+    await this.storeSecret(provider, id, after);
+  }
+
+  async matchesNative(provider: AuthProvider, id: string): Promise<boolean> {
+    const stored = await this.readSecret(provider, id);
+    try { return Boolean(stored && isSameCredentialOwner(provider, stored, readNativeCredential(provider))); }
+    catch { return false; }
+  }
+
+  async activateProfile(provider: AuthProvider, id: string): Promise<boolean> {
+    const profile = this.profiles(provider).find((candidate) => candidate.id === id);
+    return profile ? this.activate(provider, profile) : false;
+  }
+
+  automationEnabled(provider: AuthProvider, feature: AccountAutomationFeature): boolean {
+    const stored = this.context.globalState.get<Partial<AutomationState>>(AUTOMATION_STATE_KEY);
+    const value = stored?.[provider]?.[feature];
+    if (typeof value === 'boolean') {
+      return value;
+    }
+    // Preserve the effective value for users upgrading from versions that exposed these as settings.
+    return vscode.workspace.getConfiguration().get<boolean>(`aiUsage.${provider}.${feature}.enabled`, false);
+  }
+
+  async setAutomationEnabled(provider: AuthProvider, feature: AccountAutomationFeature, enabled: boolean): Promise<void> {
+    const stored = this.context.globalState.get<Partial<AutomationState>>(AUTOMATION_STATE_KEY);
+    const state: AutomationState = {
+      claude: {
+        keepAlive: stored?.claude?.keepAlive ?? this.automationEnabled('claude', 'keepAlive'),
+        autoRotate: stored?.claude?.autoRotate ?? this.automationEnabled('claude', 'autoRotate')
+      },
+      codex: {
+        keepAlive: stored?.codex?.keepAlive ?? this.automationEnabled('codex', 'keepAlive'),
+        autoRotate: stored?.codex?.autoRotate ?? this.automationEnabled('codex', 'autoRotate')
+      }
+    };
+    state[provider][feature] = enabled;
+    await this.context.globalState.update(AUTOMATION_STATE_KEY, state);
+    this.log(`${provider}: ${feature === 'keepAlive' ? 'account keep-alive' : 'automatic account rotation'} ${enabled ? 'enabled' : 'disabled'}`);
+  }
 
   activeProfileId(provider: AuthProvider): string | undefined {
     return this.state()[provider].activeProfileId;
@@ -87,7 +154,7 @@ export class AuthProfileManager {
     // Management actions return to the list. Choosing a profile activates it and closes the menu.
     while (true) {
       const item = await vscode.window.showQuickPick(this.items(provider), {
-        title: `AI Usage · ${TITLES[provider]} authentication profiles`,
+        title: `AI Usage · ${TITLES[provider]} accounts`,
         placeHolder: 'Choose a profile to activate, or manage saved profiles',
         matchOnDescription: true,
         matchOnDetail: true
@@ -103,7 +170,9 @@ export class AuthProfileManager {
           }
           return;
         }
-        if (item.action === 'save') {
+        if (item.action === 'keepAlive' || item.action === 'autoRotate') {
+          await this.setAutomationEnabled(provider, item.action, !this.automationEnabled(provider, item.action));
+        } else if (item.action === 'save') {
           if (await this.saveCurrent(provider)) {
             await hooks?.afterActivate?.(provider);
           }
@@ -179,7 +248,7 @@ export class AuthProfileManager {
     const items: ProfileItem[] = providerState.profiles.map((profile) => ({
       label: `${profile.id === providerState.activeProfileId ? '$(check)' : '$(key)'} ${profile.name}`,
       description: profile.id === providerState.activeProfileId ? 'Active' : undefined,
-      detail: `Saved ${new Date(profile.updatedAt).toLocaleString()}`,
+      detail: this.usageDetail?.(provider, profile.id) ?? `Saved ${new Date(profile.updatedAt).toLocaleString()} · Usage not checked yet`,
       profile
     }));
     if (!items.length) {
@@ -200,6 +269,22 @@ export class AuthProfileManager {
       items.push({ label: '$(edit) Rename a profile…', action: 'rename' });
       items.push({ label: '$(trash) Delete a saved profile…', action: 'delete' });
     }
+    const keepAlive = this.automationEnabled(provider, 'keepAlive');
+    const autoRotate = this.automationEnabled(provider, 'autoRotate');
+    const threshold = vscode.workspace.getConfiguration().get<number>(`aiUsage.${provider}.autoRotate.thresholdPercent`, 99.5);
+    items.push({ label: 'Account features', kind: vscode.QuickPickItemKind.Separator });
+    items.push({
+      label: `${keepAlive ? '$(check)' : '$(pulse)'} Account keep-alive and usage collection`,
+      description: keepAlive ? 'On' : 'Off',
+      detail: 'Periodically checks every saved account, including inactive accounts. Configure the period, model and dedicated home in Settings.',
+      action: 'keepAlive'
+    });
+    items.push({
+      label: `${autoRotate ? '$(check)' : '$(sync)'} Automatic account rotation`,
+      description: autoRotate ? `On · rotate at ${threshold}%` : `Off · enable rotation at ${threshold}%`,
+      detail: `Switch to the next saved account below ${threshold}% in every usage window. Configure the threshold in Settings. Requires at least two saved accounts.`,
+      action: 'autoRotate'
+    });
     return items;
   }
 
@@ -289,12 +374,12 @@ export class AuthProfileManager {
   }
 
   private async activate(provider: AuthProvider, profile: ProfileMetadata): Promise<boolean> {
+    await this.syncActiveProfile(provider);
     const credential = await this.readSecret(provider, profile.id);
     if (!credential) {
       void vscode.window.showErrorMessage(`AI Usage: the secret for “${profile.name}” is missing or invalid. Delete and add the profile again.`);
       return false;
     }
-    await this.syncActiveProfile(provider);
     try {
       writeNativeCredential(provider, credential);
     } catch (error) {

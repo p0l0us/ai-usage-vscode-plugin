@@ -91,3 +91,55 @@ Status-bar items turn yellow when any displayed window reaches 80% usage and red
 92% window resets in 3 hours, so Claude is highlighted while Codex remains neutral at 77%:
 
 ![Claude high usage highlighted yellow beside neutral Codex usage](../images/screenshots/status-bar-high-usage.png)
+
+
+## Account automation
+
+Save or import each subscription login in **AI Usage: Manage Claude/Codex Authentication Profiles**. Under each
+provider's **Accounts → Account features** menu you can switch accounts manually and enable or disable
+**Account keep-alive and usage collection** and **Automatic account rotation**. Both features default to off
+and are stored for the extension host where the menu is used.
+
+The Settings page contains configuration values only: periods, rotation thresholds, models, CLI paths, dedicated
+homes, usage sources and check intervals. Feature enable switches intentionally live in the Accounts menu.
+
+| Setting suffix (`aiUsage.claude.` / `aiUsage.codex.`) | Claude default | Codex default | Purpose |
+| --- | --- | --- | --- |
+| `keepAlive.periodHours` | `2` | `6` | Per-account keep-alive period, minimum 0.25 hours. |
+| `autoRotate.thresholdPercent` | `99.5` | `99.5` | Rotate when any reported usage window reaches this percentage. |
+| `keepAlive.home` | `~/.claude-tmp` | `~/.codex-tmp` | Dedicated CLI home; must be separate from the native home. |
+| `keepAlive.model` | `haiku` | `gpt-5.6-luna` | Select a subscription model for the small request. |
+| `cliPath` | `claude` | `codex` | CLI command or executable path. |
+
+Codex defaults to Luna for small background calls, following [OpenAI Docs model usage guidance](https://learn.chatgpt.com/docs/pricing).
+Use a model available to your subscription; an empty Codex model setting selects the CLI default.
+
+Every keep-alive asks exactly `what is date today`. Requests use a separate working directory and CLI home,
+with inherited authentication and provider routing overrides removed. Claude tools and custom hooks are disabled;
+Codex runs noninteractively with a read-only sandbox. A keep-alive has a 90-second timeout. The extension attempts
+to collect usage even if the small model call fails. Claude uses the OAuth usage endpoint, and Codex uses
+`account/rateLimits/read` through its app-server with the same staged login. Codex API-key-only profiles do not
+expose subscription quota windows and cannot qualify as automatic rotation targets.
+
+The configurable home is dedicated to this feature. Relative paths resolve from the OS user home, and `~/` is
+expanded. Credentials are staged using an atomic write with mode 0600 on POSIX and removed after the check.
+The CLI may retain its own diagnostic/configuration files there. Refreshed credentials are saved back only if the
+saved profile has not changed in the meantime; an unchanged active native login receives refreshed tokens too.
+
+Per-account readings and attempt timestamps persist in the extension's global storage without credentials.
+A one-minute scheduler checks due accounts; closing all windows pauses it. Reopening runs each overdue account
+once, without replaying missed intervals. Each provider checks its accounts sequentially and uses an exclusive
+lock across windows. Failed keep-alive attempts wait the configured interval; transient usage errors honor the
+provider check interval and any longer `Retry-After`.
+
+Rotation rechecks the active account and visits subsequent saved profiles in order, wrapping once. It requires a
+successful current reading and a candidate with every required window below the configured threshold; both Codex
+primary and secondary limits are considered. Missing, failed, incomplete or expired candidate readings never
+authorize a switch. If
+all candidates are exhausted, no native credential is changed. Another sweep may run after
+`aiUsage.<provider>.checkIntervalMinutes`, allowing accounts to become eligible after their limits reset.
+The selected account must still match the native login immediately before activation. Existing running vendor
+sessions may need to finish or be reopened to pick up a switched login, just as with manual switching.
+
+CLI behavior references: [OpenAI Docs: noninteractive Codex](https://learn.chatgpt.com/docs/non-interactive-mode)
+and [Claude CLI reference](https://code.claude.com/docs/en/cli-reference).

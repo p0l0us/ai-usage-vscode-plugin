@@ -3,6 +3,8 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import { AuthProvider } from './authFiles';
 import { AuthProfileManager } from './authProfiles';
+import { AccountAutomation, AutomationSettings } from './accountAutomation';
+import { probeAccount } from './accountProbe';
 import { SharedCache, deserializeUsage } from './cache';
 import {
   GitHubAccount,
@@ -126,7 +128,8 @@ function log(message: string): void {
 export function activate(context: vscode.ExtensionContext): void {
   output = vscode.window.createOutputChannel('AI Usage');
   context.subscriptions.push(output);
-  const authProfiles = new AuthProfileManager(context, log);
+  let automation: AccountAutomation;
+  const authProfiles = new AuthProfileManager(context, log, (provider, id) => automation?.usageDetail(provider, id));
   const status = vscode.window.createStatusBarItem(STATUS_ALIGNMENT, STATUS_PRIORITY.manual);
   status.command = 'aiUsage.showDetails';
   status.name = 'AI Usage';
@@ -209,9 +212,12 @@ export function activate(context: vscode.ExtensionContext): void {
    * window fetched it), then the network unless the shared backoff or another window's in-flight
    * fetch says to wait. Providers never wait on each other.
    */
-  const refreshProvider = (provider: LiveProvider, force: boolean): Promise<void> => {
+  const refreshProvider = (provider: LiveProvider, force: boolean, afterRotation = false): Promise<void> => {
     if (provider.inFlight) {
       return provider.inFlight;
+    }
+    if (provider.id !== 'copilot' && automation?.isCheckingActive(provider.id) && !afterRotation) {
+      return Promise.resolve();
     }
     provider.inFlight = (async () => {
       const config = vscode.workspace.getConfiguration();
@@ -225,6 +231,7 @@ export function activate(context: vscode.ExtensionContext): void {
       // Show the chat chip right away; until the first reading arrives a click says it is waiting.
       await updateChipContext(provider, config.get<boolean>('aiUsage.chatChips.enabled', true));
 
+      const profileId = provider.id === 'copilot' ? undefined : authProfiles.activeProfileId(provider.id);
       const { source, checkIntervalMs } = settingsFor(provider.id);
       // Each source has its own cache entry so switching sources never shows another source's reading.
       const key = SharedCache.key(provider.id, [source, await provider.cacheDiscriminator?.()].filter(Boolean).join('|'));
@@ -280,6 +287,10 @@ export function activate(context: vscode.ExtensionContext): void {
         provider.last = result;
         if (result.kind === 'ok') {
           provider.lastGood = result.usage;
+          if (profileId && provider.id !== 'copilot' && source !== 'sessionLog' &&
+            authProfiles.activeProfileId(provider.id) === profileId && await authProfiles.matchesNative(provider.id, profileId)) {
+            automation.observe(provider.id, profileId, result.usage);
+          }
         }
       }
       renderLive(provider);
@@ -292,6 +303,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
   const refreshLive = async (force = false): Promise<void> => {
     await Promise.all(liveProviders.map((provider) => refreshProvider(provider, force)));
+    void automation.tick();
   };
 
   /** Manual refresh: bypass cache freshness but still respect a shared backoff. */
@@ -305,24 +317,32 @@ export function activate(context: vscode.ExtensionContext): void {
   ));
 
   context.subscriptions.push(vscode.commands.registerCommand('aiUsage.refresh', refreshAll));
+  const afterProfileActivated = async (provider: AuthProvider) => {
+    const live = liveProviders.find((candidate) => candidate.id === provider)!;
+    await live.inFlight;
+    live.last = undefined;
+    live.lastGood = undefined;
+    renderLive(live);
+    await updateChipContext(live, vscode.workspace.getConfiguration().get<boolean>('aiUsage.chatChips.enabled', true));
+    await refreshProvider(live, true, true);
+  };
+  automation = new AccountAutomation(path.join(context.globalStorageUri.fsPath, 'account-usage'), authProfiles,
+    (provider) => automationSettings(provider, authProfiles), afterProfileActivated, log, async (provider, credential, settings, keepAlive, signal) => {
+      await liveProviders.find((candidate) => candidate.id === provider)?.inFlight;
+      return probeAccount(provider, credential, settings, keepAlive, signal);
+    });
+  context.subscriptions.push(automation);
+  const accountTimer = setInterval(() => void automation.tick(), 60_000);
+  context.subscriptions.push({ dispose: () => clearInterval(accountTimer) });
   context.subscriptions.push(vscode.commands.registerCommand('aiUsage.manageAuthProfiles', async (value?: unknown) => {
     const initial = value === 'claude' || value === 'codex' ? value as AuthProvider : undefined;
-    await authProfiles.show(initial, {
+    await automation.withPaused(() => authProfiles.show(initial, {
       beforeActivate: async (provider) => {
         await liveProviders.find((candidate) => candidate.id === provider)?.inFlight;
       },
-      afterActivate: async (provider) => {
-        const live = liveProviders.find((candidate) => candidate.id === provider);
-        if (!live) {
-          return;
-        }
-        live.last = undefined;
-        live.lastGood = undefined;
-        renderLive(live);
-        await updateChipContext(live, vscode.workspace.getConfiguration().get<boolean>('aiUsage.chatChips.enabled', true));
-        await refreshProvider(live, true);
-      }
-    });
+      afterActivate: afterProfileActivated
+    }));
+    void automation.tick();
   }));
   context.subscriptions.push(vscode.commands.registerCommand('aiUsage.openLog', () => output?.show(true)));
   context.subscriptions.push(vscode.commands.registerCommand('aiUsage.openAgentsWindowSetup', () =>
@@ -713,7 +733,7 @@ async function updateChipContext(provider: LiveProvider, enabled: boolean): Prom
         : [];
       if (rich.length) {
         for (const window of rich) {
-          keys.set(window.label, String(window.usedPercent));
+          keys.set(window.label, String(Math.round(window.usedPercent)));
         }
       } else {
         keys.set('simple', String(worstPercent(usage)));
@@ -813,7 +833,7 @@ function statusBarVisible(): boolean {
 
 /** The most used window's percentage: the figure of simple mode and of the status bar colouring. */
 function worstPercent(usage: LiveUsage): number {
-  return Math.max(...usage.windows.map((window) => window.usedPercent));
+  return Math.round(Math.max(...usage.windows.map((window) => window.usedPercent)));
 }
 
 function usagePart(window: LiveUsage['windows'][number], now: Date): string {
@@ -911,9 +931,9 @@ function providerItems(provider: LiveProvider): DetailItem[] {
   if (provider.id === 'claude' || provider.id === 'codex') {
     const name = provider.activeProfileName?.();
     items.push({
-      label: '$(key) Authentication profile',
+      label: '$(key) Accounts',
       description: name ?? 'None saved',
-      detail: 'Save, name, and switch logins without leaving VS Code.',
+      detail: 'Save, name, and switch logins, or configure automatic account rotation.',
       action: 'profiles',
       providerId: provider.id
     });
@@ -1106,4 +1126,32 @@ function summarize(accounts: AccountUsage[]): { remainingPercent: number; lines:
 
 export function deactivate(): void {
   // noop
+}
+
+/** Machine-scoped account automation settings; intervals are bounded even for hand-edited JSON. */
+function automationSettings(provider: AuthProvider, authProfiles: AuthProfileManager): AutomationSettings {
+  const config = vscode.workspace.getConfiguration();
+  const prefix = `aiUsage.${provider}`;
+  const defaultHours = provider === 'claude' ? 2 : 6;
+  const periodKey = `${prefix}.keepAlive.periodHours`;
+  const period = config.inspect<number>(periodKey);
+  const configuredPeriod = period?.workspaceFolderValue ?? period?.workspaceValue ?? period?.globalValue;
+  // Versions before 0.0.12 called this intervalHours. Honor a hand-configured legacy value until
+  // the user saves the newly named setting; it is intentionally no longer shown in Settings UI.
+  const legacyPeriod = config.get<number>(`${prefix}.keepAlive.intervalHours`);
+  const hours = configuredPeriod ?? legacyPeriod ?? config.get<number>(periodKey, defaultHours);
+  const configuredThreshold = config.get<number>(`${prefix}.autoRotate.thresholdPercent`, 99.5);
+  const thresholdPercent = Number.isFinite(configuredThreshold)
+    ? Math.min(100, Math.max(1, configuredThreshold))
+    : 99.5;
+  return {
+    enabled: authProfiles.automationEnabled(provider, 'keepAlive'),
+    autoRotate: authProfiles.automationEnabled(provider, 'autoRotate'),
+    thresholdPercent,
+    intervalMs: (Number.isFinite(hours) ? Math.max(0.25, hours) : defaultHours) * 3_600_000,
+    checkIntervalMs: settingsFor(provider).checkIntervalMs,
+    home: config.get<string>(`${prefix}.keepAlive.home`, `~/.${provider}-tmp`),
+    cliPath: config.get<string>(`${prefix}.cliPath`, provider),
+    model: config.get<string>(`${prefix}.keepAlive.model`, provider === 'claude' ? 'haiku' : 'gpt-5.6-luna')
+  };
 }

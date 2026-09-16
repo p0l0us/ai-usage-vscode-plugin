@@ -1,5 +1,14 @@
 # Changelog
 
+## 9.9.99 (feature development)
+
+- Add isolated Claude and Codex keep-alive checks for every saved account, including inactive-account usage
+  collection and refreshed-token preservation.
+- Add per-service automatic account rotation with configurable thresholds, checking every reported rate-limit
+  window and keeping the active account when no candidate is eligible.
+- Move account feature switches into the Accounts menu and expose periods, thresholds, models, CLI paths, and
+  dedicated homes as per-service settings. Copilot is excluded from account automation.
+
 ## 0.0.11 (2026-09-16)
 
 - Compact status-bar percentages now show the live time until reset in one largest unit (`42m`, `3h`, or `4d`)
