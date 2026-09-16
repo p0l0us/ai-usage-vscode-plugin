@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.0.11 (2026-09-16)
+
+- Compact status-bar percentages now show the live time until reset in one largest unit (`42m`, `3h`, or `4d`)
+  instead of the fixed quota-window duration.
+- Add an optional per-chat token chip for the latest local Claude or Codex session, with exact input, output, and
+  cached-input counts available on click.
+- Expand and reorganize the documentation with authentication profiles, usage details, status-bar states, and
+  anonymized examples placed alongside their feature descriptions.
+
 ## 0.0.10 (2026-09-15)
 
 - Add named Claude and Codex authentication profiles (up to 20 per service), backed by VS Code SecretStorage and
