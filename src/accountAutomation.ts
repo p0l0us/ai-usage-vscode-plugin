@@ -21,7 +21,7 @@ export interface AutomationProfiles {
   credential(provider: AuthProvider, id: string): Promise<StoredCredential | undefined>;
   refreshedCredential(provider: AuthProvider, id: string, before: StoredCredential, after: StoredCredential): Promise<void>;
   matchesNative(provider: AuthProvider, id: string): Promise<boolean>;
-  activateProfile(provider: AuthProvider, id: string): Promise<boolean>;
+  activateProfile(provider: AuthProvider, id: string, automatic?: boolean): Promise<boolean>;
 }
 
 type AccountState = CacheEntry & { lastKeepAliveAt?: number; checkedAt?: number; keepAliveError?: string };
@@ -193,7 +193,7 @@ export class AccountAutomation {
         candidateUsage.windows.length < current.windows.length ||
         !requiredWindows.every((label) => candidateUsage.windows.some((window) => window.label === label))) { continue; }
       if (this.profiles.activeProfileId(provider) !== active || !await this.profiles.matchesNative(provider, active)) { return; }
-      if (await this.profiles.activateProfile(provider, candidate.id)) {
+      if (await this.profiles.activateProfile(provider, candidate.id, true)) {
         this.log(`${provider}: automatically rotated to "${candidate.name}" (${settings.thresholdPercent}% limit)`);
         await this.afterActivate(provider);
       }

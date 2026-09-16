@@ -95,9 +95,9 @@ export class AuthProfileManager {
     catch { return false; }
   }
 
-  async activateProfile(provider: AuthProvider, id: string): Promise<boolean> {
+  async activateProfile(provider: AuthProvider, id: string, automatic = false): Promise<boolean> {
     const profile = this.profiles(provider).find((candidate) => candidate.id === id);
-    return profile ? this.activate(provider, profile) : false;
+    return profile ? this.activate(provider, profile, automatic) : false;
   }
 
   automationEnabled(provider: AuthProvider, feature: AccountAutomationFeature): boolean {
@@ -373,7 +373,7 @@ export class AuthProfileManager {
     void vscode.window.showInformationMessage(`${TITLES[provider]} credential imported as “${name}”. Choose it from the profile menu to activate it.`);
   }
 
-  private async activate(provider: AuthProvider, profile: ProfileMetadata): Promise<boolean> {
+  private async activate(provider: AuthProvider, profile: ProfileMetadata, automatic = false): Promise<boolean> {
     await this.syncActiveProfile(provider);
     const credential = await this.readSecret(provider, profile.id);
     if (!credential) {
@@ -390,7 +390,10 @@ export class AuthProfileManager {
     state[provider].activeProfileId = profile.id;
     await this.updateState(state);
     this.log(`${provider}: activated authentication profile "${profile.name}"`);
-    void vscode.window.showInformationMessage(`${TITLES[provider]} switched to “${profile.name}”. New requests will use this login.`);
+    const message = automatic
+      ? `AI Usage: ${TITLES[provider]} automatically rotated to account “${profile.name}”.`
+      : `${TITLES[provider]} switched to “${profile.name}”. New requests will use this login.`;
+    void vscode.window.showInformationMessage(message);
     return true;
   }
 

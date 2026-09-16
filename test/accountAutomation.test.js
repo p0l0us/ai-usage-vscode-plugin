@@ -25,7 +25,11 @@ function fixture(t, options = {}) {
     credential: async (provider, id) => ({ id }),
     refreshedCredential: async (...args) => refreshed.push(args),
     matchesNative: async () => options.matchesNative !== false,
-    activateProfile: async (provider, id) => { active[provider] = id; switches.push([provider, id]); return true; }
+    activateProfile: async (provider, id, automatic) => {
+      active[provider] = id;
+      switches.push([provider, id, automatic]);
+      return true;
+    }
   };
   const probe = async (provider, credential, config, keepAlive) => {
     calls.push([provider, credential.id, keepAlive]);
@@ -84,7 +88,7 @@ test('a weekly Codex limit skips exhausted next account and activates the next e
   const f = fixture(t, { values: { a: [10, 99.5], b: [99.5, 5] }, settings: { codex: { autoRotate: true } } });
   f.observe('codex', [10, 99.5]);
   await f.service.tick();
-  assert.deepEqual(f.switches, [['codex', 'c']]);
+  assert.deepEqual(f.switches, [['codex', 'c', true]]);
   assert.deepEqual(f.calls, [['codex', 'a', false], ['codex', 'b', false], ['codex', 'c', false]]);
 });
 
@@ -98,7 +102,7 @@ test('all exhausted accounts leave the active login unchanged and throttle repea
   f.advance(600001);
   f.values.b = [2, 2];
   await f.service.tick();
-  assert.deepEqual(f.switches, [['codex', 'b']]);
+  assert.deepEqual(f.switches, [['codex', 'b', true]]);
 });
 
 test('fresh active reading after a reset prevents rotation from an old exhausted cache', async t => {
@@ -169,7 +173,7 @@ test('rotation wraps once through saved order without selecting current account'
   f.active.codex = 'c';
   f.observe('codex', [99.5, 0]);
   await f.service.tick();
-  assert.deepEqual(f.switches, [['codex', 'a']]);
+  assert.deepEqual(f.switches, [['codex', 'a', true]]);
 });
 
 test('per-service rotation threshold controls triggering and candidate eligibility', async t => {
@@ -179,5 +183,5 @@ test('per-service rotation threshold controls triggering and candidate eligibili
   });
   f.observe('codex', [80, 10]);
   await f.service.tick();
-  assert.deepEqual(f.switches, [['codex', 'b']]);
+  assert.deepEqual(f.switches, [['codex', 'b', true]]);
 });

@@ -4,11 +4,12 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const Module = require('node:module');
+const informationMessages = [];
 // This suite exercises SecretStorage/native-file behavior without a running VS Code host.
 const load = Module._load;
 Module._load = function(id, ...args) {
   if (id === 'vscode') return {
-    window: { showInformationMessage() {}, showErrorMessage() {} },
+    window: { showInformationMessage(message) { informationMessages.push(message); }, showErrorMessage() {} },
     workspace: { getConfiguration: () => ({ get: (_key, fallback) => fallback }) }
   };
   return load.call(this, id, ...args);
@@ -17,6 +18,7 @@ const { AuthProfileManager } = require('../out/authProfiles');
 Module._load = load;
 
 function fixture(t) {
+  informationMessages.length = 0;
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-profile-'));
   const previous = process.env.CLAUDE_CONFIG_DIR;
   process.env.CLAUDE_CONFIG_DIR = home;
@@ -91,4 +93,10 @@ test('reactivating the current profile preserves tokens refreshed in the native 
   fs.writeFileSync(f.file, JSON.stringify(refreshed));
   assert.equal(await f.manager.activateProfile('claude', 'a'), true);
   assert.deepEqual(JSON.parse(fs.readFileSync(f.file)), refreshed);
+});
+
+test('automatic activation identifies the service and destination account', async t => {
+  const f = fixture(t);
+  assert.equal(await f.manager.activateProfile('claude', 'a', true), true);
+  assert.deepEqual(informationMessages, ['AI Usage: Claude automatically rotated to account “A”.']);
 });
