@@ -8,9 +8,10 @@ const path = require('path');
 
 const root = path.join(__dirname, '..');
 const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+const devVersion = process.env.AI_USAGE_DEV_VERSION || '9.9.99';
 const extensionId = `${pkg.publisher}.${pkg.name}`;
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-dev-'));
-const vsix = path.join(tmpDir, `${pkg.name}-${pkg.version}-dev.vsix`);
+const vsix = path.join(tmpDir, `${pkg.name}-${devVersion}-dev.vsix`);
 
 function run(cmd, args, opts = {}) {
   const result = spawnSync(cmd, args, { stdio: 'inherit', cwd: root, shell: process.platform === 'win32', ...opts });
@@ -51,7 +52,11 @@ function findCli() {
 run('npm', ['run', 'compile']);
 // Keep README image links relative so the locally installed extension page renders the bundled
 // screenshots without needing them on GitHub (the publish script rewrites them for the Marketplace).
-run('npx', ['--yes', '@vscode/vsce', 'package', '--no-dependencies', '--no-rewrite-relative-links', '-o', vsix]);
+run('npx', [
+  '--yes', '@vscode/vsce', 'package', devVersion,
+  '--no-update-package-json', '--no-git-tag-version',
+  '--no-dependencies', '--no-rewrite-relative-links', '-o', vsix
+]);
 
 const clis = findCli();
 if (!clis.length) {
@@ -66,5 +71,5 @@ for (const cli of targets) {
   spawnSync(cli, ['--uninstall-extension', extensionId], { stdio: 'ignore' });
   run(cli, ['--install-extension', vsix, '--force']);
 }
-console.log(`\nInstalled ${extensionId}@${pkg.version} (dev build). Reload the VS Code window to activate.`);
+console.log(`\nInstalled ${extensionId}@${devVersion} (dev build; package.json remains ${pkg.version}). Reload the VS Code window to activate.`);
 console.log(`VSIX: ${vsix}`);

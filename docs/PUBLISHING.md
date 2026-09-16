@@ -9,7 +9,10 @@ npm run dev:install      # build the working tree to a temp VSIX and install it 
 
 `dev:install` compiles, packages to a temporary folder (nothing is written into the repo), and installs into the
 VS Code that owns the current shell: the remote server in Remote-SSH/WSL/container sessions, otherwise the desktop
-`code` CLI. Use `npm run dev:install:all` to install into every VS Code found. Reload the window afterwards.
+`code` CLI. Development VSIX files report version `9.9.99` so they are easy to identify, while `package.json`
+retains the normal release version used by the patch/minor/major publishing workflow. Override the development
+version with `AI_USAGE_DEV_VERSION` if needed. Use `npm run dev:install:all` to install into every VS Code found.
+Reload the window afterwards.
 Manual equivalent:
 
 ```bash

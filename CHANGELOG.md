@@ -5,6 +5,23 @@
 - Add a separate Node.js CLI BYOK bridge with a loopback Chat Completions API, subscription-backed Codex and
   experimental Claude CLI adapters, external tool-call continuations, and offline/live integration checks.
 
+## 0.0.13 (2026-09-16)
+
+- Let **Save current login** replace an existing profile, making expired or reauthenticated accounts easy to update without deleting and recreating them.
+- Preserve the last valid Claude OAuth credential when the CLI clears its isolated temporary credential file, so a successful keep-alive can still refresh usage statistics.
+
+## 0.0.12 (2026-09-16)
+
+- Show each service's editable keep-alive model beside its interval in User settings, defaulting to Claude Haiku and Codex Luna.
+- Add a per-service **Send keep-alive now** account action that targets a selected saved account and refreshes its statistics.
+- Show a VS Code notification naming the service and destination account after automatic rotation.
+- Add isolated Claude and Codex keep-alive checks for every saved account, including inactive-account usage
+  collection and refreshed-token preservation.
+- Add per-service automatic account rotation with configurable thresholds, checking every reported rate-limit
+  window and keeping the active account when no candidate is eligible.
+- Move account feature switches into the Accounts menu and expose periods, thresholds, models, CLI paths, and
+  dedicated homes as per-service settings. Copilot is excluded from account automation.
+
 ## 0.0.11 (2026-09-16)
 
 - Compact status-bar percentages now show the live time until reset in one largest unit (`42m`, `3h`, or `4d`)

@@ -88,7 +88,7 @@ function clampPercent(value: unknown): number | undefined {
   if (typeof value !== 'number' || !Number.isFinite(value)) {
     return undefined;
   }
-  return Math.min(100, Math.max(0, Math.round(value)));
+  return Math.min(100, Math.max(0, value));
 }
 
 function windowLabel(seconds: number): string {
@@ -163,8 +163,8 @@ type ClaudeCredentials = {
   rateLimitTier?: string;
 };
 
-function readClaudeCredentials(): ClaudeCredentials | undefined {
-  const data = readJson(path.join(claudeConfigDir(), '.credentials.json')) as { claudeAiOauth?: Record<string, unknown> } | undefined;
+function readClaudeCredentials(home = claudeConfigDir()): ClaudeCredentials | undefined {
+  const data = readJson(path.join(home, '.credentials.json')) as { claudeAiOauth?: Record<string, unknown> } | undefined;
   const oauth = data?.claudeAiOauth;
   if (!oauth || typeof oauth.accessToken !== 'string' || !oauth.accessToken) {
     return undefined;
@@ -193,9 +193,9 @@ type ClaudeUsageResponse = {
   }>;
 };
 
-export async function fetchClaudeUsage(): Promise<LiveResult> {
+export async function fetchClaudeUsage(home = claudeConfigDir()): Promise<LiveResult> {
   const provider: ProviderId = 'claude';
-  const credentials = readClaudeCredentials();
+  const credentials = readClaudeCredentials(home);
   if (!credentials) {
     return { kind: 'unavailable', provider };
   }
@@ -273,8 +273,8 @@ type CodexAuth = {
   plan?: string;
 };
 
-function readCodexAuth(): CodexAuth | undefined {
-  const data = readJson(path.join(codexHomeDir(), 'auth.json')) as { tokens?: Record<string, unknown> } | undefined;
+function readCodexAuth(home = codexHomeDir()): CodexAuth | undefined {
+  const data = readJson(path.join(home, 'auth.json')) as { tokens?: Record<string, unknown> } | undefined;
   const tokens = data?.tokens;
   if (!tokens || typeof tokens.access_token !== 'string' || !tokens.access_token) {
     return undefined;
@@ -307,9 +307,9 @@ type CodexUsageResponse = {
   rate_limit?: { primary_window?: CodexWindow; secondary_window?: CodexWindow } | null;
 };
 
-export async function fetchCodexUsage(): Promise<LiveResult> {
+export async function fetchCodexUsage(home = codexHomeDir()): Promise<LiveResult> {
   const provider: ProviderId = 'codex';
-  const auth = readCodexAuth();
+  const auth = readCodexAuth(home);
   if (!auth) {
     return { kind: 'unavailable', provider };
   }
@@ -428,9 +428,9 @@ export function resolveCli(command: string): string | undefined {
 }
 
 /** Runs `codex app-server` over stdio and asks it for the account rate limits. */
-function codexRpcRateLimits(cli: string): Promise<CodexRateLimitsResponse> {
+function codexRpcRateLimits(cli: string, env: NodeJS.ProcessEnv = process.env, cwd?: string): Promise<CodexRateLimitsResponse> {
   return new Promise((resolve, reject) => {
-    const child = spawn(cli, ['app-server'], { stdio: ['pipe', 'pipe', 'pipe'], env: process.env });
+    const child = spawn(cli, ['app-server', '-c', 'cli_auth_credentials_store="file"'], { stdio: ['pipe', 'pipe', 'pipe'], env, cwd });
     let buffer = '';
     let stderr = '';
     let settled = false;
@@ -503,9 +503,9 @@ function codexWindowsFromRpc(limits: CodexRateLimitsResponse['rateLimits']): Usa
   return windows;
 }
 
-export async function fetchCodexUsageCli(command = 'codex'): Promise<LiveResult> {
+export async function fetchCodexUsageCli(command = 'codex', home = codexHomeDir(), env: NodeJS.ProcessEnv = process.env, cwd?: string): Promise<LiveResult> {
   const provider: ProviderId = 'codex';
-  if (!readCodexAuth()) {
+  if (!readCodexAuth(home)) {
     return { kind: 'unavailable', provider };
   }
   const cli = resolveCli(command);
@@ -514,7 +514,7 @@ export async function fetchCodexUsageCli(command = 'codex'): Promise<LiveResult>
   }
   let response: CodexRateLimitsResponse;
   try {
-    response = await codexRpcRateLimits(cli);
+    response = await codexRpcRateLimits(cli, { ...env, CODEX_HOME: home }, cwd);
   } catch (error) {
     return { kind: 'error', provider, title: CODEX_TITLE, message: `Codex CLI: ${describeError(error)}`, transient: true };
   }
@@ -525,7 +525,7 @@ export async function fetchCodexUsageCli(command = 'codex'): Promise<LiveResult>
   }
   return {
     kind: 'ok',
-    usage: { provider, title: CODEX_TITLE, plan: limits?.planType ?? readCodexAuth()?.plan, windows, details: ['Source: Codex CLI (app-server)'], fetchedAt: new Date() }
+    usage: { provider, title: CODEX_TITLE, plan: limits?.planType ?? readCodexAuth(home)?.plan, windows, details: ['Source: Codex CLI (app-server)'], fetchedAt: new Date() }
   };
 }
 

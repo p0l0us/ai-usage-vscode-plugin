@@ -22,7 +22,8 @@ a chip beneath the chat input.
 - **Honest when things fail**: a failed refresh keeps the previous reading and greys it out after 15 minutes.
 
 Nothing is shown for a tool that is not installed or signed in. Usage checks only read the tools' own login files.
-The optional authentication-profile switcher writes a selected login only when you ask it to switch profiles.
+Account keep-alives and automatic profile rotation are optional and disabled by default. Enabling them allows
+background model calls, token refresh and, for rotation, native login changes.
 
 With the default icon-only labels, the status bar stays compact while showing each live reset countdown:
 
@@ -53,7 +54,7 @@ actions in one picker:
 ## Authentication profiles
 
 Run **AI Usage: Manage Claude/Codex Authentication Profiles** from the Command Palette, or open a Claude/Codex
-usage item and choose **Authentication profile**. You can save and name the current login, import a credential JSON
+usage item and choose **Accounts**. You can save and name the current login, import a credential JSON
 file, and switch among up to 20 profiles per service.
 
 Saved copies live in VS Code `SecretStorage`, not in project files, workspace settings, or the extension's ordinary
@@ -67,6 +68,31 @@ A convenient setup is: sign in with the CLI, save the current login as a profile
 and save again. An imported profile is saved but not activated until you choose it. New requests use a switched
 login; an already-running request or agent session may need to finish or be reopened first. In remote development,
 profiles belong to the extension host (local, SSH, WSL, or container) where the command is run.
+
+### Account keep-alives and automatic rotation
+
+Open the **AI Usage** menu (click a usage item), then choose **Accounts** under Claude or Codex. This menu lets
+you switch accounts manually, save the current login to a new or existing profile, and enable or disable **Account keep-alive and usage collection** and
+**Automatic account rotation** independently for each provider.
+
+- Claude sends `what is date today` using `haiku` every **2 hours** per saved account, in `~/.claude-tmp`.
+- Codex sends the same small request every **6 hours** per saved account, using `gpt-5.6-luna` in `~/.codex-tmp`, then
+  reads account limits through its CLI. Its model is configurable; an empty model setting uses the CLI default.
+- Both collect usage for inactive accounts. The authentication profile list shows each account's last usage,
+  check time and errors. Model calls consume subscription usage and run only while this extension host is running.
+- Automatic rotation starts when **any** window reaches the service's configured threshold (default **99.5%**),
+  including either Codex period. It checks the current account and candidates again, switches to the next account
+  below the threshold in **every** reported window,
+  and keeps the current login if all accounts are exhausted or unavailable. A failed sweep is throttled until
+  the provider's next check interval. Rotation also works without keep-alives enabled.
+
+Models, keep-alive periods, rotation thresholds, CLI paths, dedicated homes and usage sources are configurable
+under `aiUsage.claude.*` and `aiUsage.codex.*`; see
+[account automation settings](docs/CONFIGURATION.md#account-automation).
+Background checks swap credentials only inside the dedicated home, save refreshed tokens back to SecretStorage,
+and remove the staged credential file afterward. For a checked active account, refreshed tokens are also written
+back to its native login when that login has not changed during the check. Schedules persist across restarts and
+checks are coordinated between windows on the same extension host.
 
 ### Authentication profile examples
 
