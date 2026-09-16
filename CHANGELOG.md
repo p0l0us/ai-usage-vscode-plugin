@@ -1,5 +1,9 @@
 # Changelog
 
+## Development build (VSIX version 9.9.99)
+
+- Preserve the last valid Claude OAuth credential when the CLI clears its isolated temporary credential file, so a successful keep-alive can still refresh usage statistics.
+
 ## 0.0.12 (2026-09-16)
 
 - Show each service's editable keep-alive model beside its interval in User settings, defaulting to Claude Haiku and Codex Luna.

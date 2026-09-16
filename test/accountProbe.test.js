@@ -112,6 +112,29 @@ test('Claude swaps only the isolated login, captures refreshed tokens and collec
   assert.equal(fs.existsSync(path.join(home, '.ai-usage.lock')), false);
 });
 
+test('Claude restores the saved OAuth credential when its CLI clears the temporary credential file',
+  { skip: process.platform === 'win32' }, async t => {
+  const root = temporary(t);
+  const home = path.join(root, 'claude-tmp');
+  const cliPath = fakeCli(root, `
+    const fs = require('fs'), path = require('path');
+    fs.writeFileSync(path.join(process.env.CLAUDE_CONFIG_DIR, '.credentials.json'), '{}');
+  `);
+  const originalFetch = global.fetch;
+  t.after(() => { global.fetch = originalFetch; });
+  global.fetch = async (_url, options) => {
+    assert.equal(options.headers.Authorization, 'Bearer saved');
+    return new Response(JSON.stringify({ five_hour: { utilization: 12 }, seven_day: { utilization: 34 } }), { status: 200 });
+  };
+  const result = await probeAccount('claude', { claudeAiOauth: { accessToken: 'saved', refreshToken: 'refresh' } },
+    { home, cliPath, model: 'haiku' }, true, new AbortController().signal);
+  assert.equal(result.result.kind, 'ok');
+  assert.deepEqual(result.result.usage.windows.map(window => window.usedPercent), [12, 34]);
+  assert.equal(result.credential.claudeAiOauth.accessToken, 'saved');
+  assert.equal(result.keepAliveError, undefined);
+  assert.equal(fs.existsSync(path.join(home, '.credentials.json')), false);
+});
+
 test('Codex keep-alive and app-server use the same isolated account and retain both limits',
   { skip: process.platform === 'win32' }, async t => {
   const root = temporary(t);

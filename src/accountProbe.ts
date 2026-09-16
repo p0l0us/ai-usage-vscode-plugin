@@ -116,12 +116,28 @@ export async function probeAccount(provider: AuthProvider, credential: StoredCre
         await runKeepAlive(cli, keepAliveArgs(provider, settings.model), home, env, signal);
       } catch (error) { keepAliveError = error instanceof Error ? error.message : 'Keep-alive failed.'; }
     }
+    // Claude Code may remove or replace the staged credential after a successful command (for example while
+    // interacting with its credential store). Usage collection still needs the last valid OAuth document.
+    // Capture any valid refresh the CLI wrote; otherwise restore the credential that successfully started it.
+    let updatedCredential = credential;
+    try {
+      updatedCredential = parseCredentialJson(provider, fs.readFileSync(file, 'utf8'));
+    } catch {
+      writeJsonAtomically(file, updatedCredential);
+    }
     // Collect usage even if the model call hit a usage limit or the CLI is unavailable.
     const result: LiveResult = signal.aborted
       ? { kind: 'unavailable', provider, reason: 'Account check cancelled.' }
       : provider === 'claude' ? await fetchClaudeUsage(home)
         : await fetchCodexUsageCli(settings.cliPath, home, env, home);
-    return { result, credential: parseCredentialJson(provider, fs.readFileSync(file, 'utf8')), keepAliveError };
+    // Codex app-server can also refresh its token while reading limits. Keep that newer credential when valid,
+    // but never turn a completed usage check into an error because a CLI removed the temporary auth file.
+    try {
+      updatedCredential = parseCredentialJson(provider, fs.readFileSync(file, 'utf8'));
+    } catch {
+      writeJsonAtomically(file, updatedCredential);
+    }
+    return { result, credential: updatedCredential, keepAliveError };
   } finally {
     try { if (staged) { fs.unlinkSync(file); } } finally { unlock(); }
   }
