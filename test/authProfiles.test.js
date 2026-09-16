@@ -5,12 +5,20 @@ const path = require('node:path');
 const os = require('node:os');
 const Module = require('node:module');
 const informationMessages = [];
+const quickPickResponses = [];
 // This suite exercises SecretStorage/native-file behavior without a running VS Code host.
 const load = Module._load;
 Module._load = function(id, ...args) {
   if (id === 'vscode') return {
     QuickPickItemKind: { Separator: -1 },
-    window: { showInformationMessage(message) { informationMessages.push(message); }, showErrorMessage() {} },
+    window: {
+      showInformationMessage(message) { informationMessages.push(message); },
+      showErrorMessage() {},
+      showQuickPick(items) {
+        const response = quickPickResponses.shift();
+        return typeof response === 'function' ? response(items) : response;
+      }
+    },
     workspace: { getConfiguration: () => ({ get: (_key, fallback) => fallback }) }
   };
   return load.call(this, id, ...args);
@@ -20,6 +28,7 @@ Module._load = load;
 
 function fixture(t) {
   informationMessages.length = 0;
+  quickPickResponses.length = 0;
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-profile-'));
   const previous = process.env.CLAUDE_CONFIG_DIR;
   process.env.CLAUDE_CONFIG_DIR = home;
@@ -107,4 +116,14 @@ test('account menu offers an immediate keep-alive action when profiles exist', t
   const action = f.manager.items('claude').find(item => item.action === 'keepAliveNow');
   assert.match(action.label, /Send keep-alive now/);
   assert.match(action.detail, /refresh its usage statistics/);
+});
+
+test('save current login can replace an existing profile', async t => {
+  const f = fixture(t);
+  fs.writeFileSync(f.file, JSON.stringify(f.after));
+  quickPickResponses.push(items => items.find(item => item.profile?.id === 'a'));
+  assert.equal(await f.manager.saveCurrent('claude'), true);
+  assert.deepEqual(JSON.parse(f.secrets.get('aiUsage.authProfile.v1.claude.a')), f.after);
+  assert.equal(f.globalValues.get('aiUsage.authProfiles.v1').claude.activeProfileId, 'a');
+  assert.deepEqual(informationMessages, ['Claude profile “A” updated from the current login.']);
 });

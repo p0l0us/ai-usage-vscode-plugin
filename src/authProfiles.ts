@@ -265,8 +265,8 @@ export class AuthProfileManager {
     }
     items.push({ label: 'Manage', kind: vscode.QuickPickItemKind.Separator });
     items.push({
-      label: '$(add) Save current login as a profile…',
-      detail: `Reads the login currently in ${nativeCredentialPath(provider)} and stores it in VS Code SecretStorage.`,
+      label: '$(save) Save current login…',
+      detail: `Create a profile or replace an existing profile from ${nativeCredentialPath(provider)}.`,
       action: 'save'
     });
     items.push({
@@ -337,15 +337,49 @@ export class AuthProfileManager {
   }
 
   private async saveCurrent(provider: AuthProvider): Promise<boolean> {
-    if (this.state()[provider].profiles.length >= MAX_PROFILES) {
-      void vscode.window.showWarningMessage(`${TITLES[provider]} already has the maximum of ${MAX_PROFILES} saved profiles.`);
-      return false;
-    }
     let credential: StoredCredential;
     try {
       credential = readNativeCredential(provider);
     } catch (error) {
       void vscode.window.showErrorMessage(`AI Usage: ${errorMessage(error)}`);
+      return false;
+    }
+    const providerState = this.state()[provider];
+    if (providerState.profiles.length) {
+      const canCreate = providerState.profiles.length < MAX_PROFILES;
+      const picked = await vscode.window.showQuickPick([
+        ...(canCreate ? [{
+          label: '$(add) Create a new profile…',
+          detail: 'Save the current native login under a new name.',
+          create: true as const
+        }] : []),
+        { label: 'Update an existing profile', kind: vscode.QuickPickItemKind.Separator },
+        ...providerState.profiles.map((profile) => ({
+          label: `$(save) ${profile.name}`,
+          description: profile.id === providerState.activeProfileId ? 'Active' : undefined,
+          detail: 'Replace this profile with the current native login.',
+          profile
+        }))
+      ], {
+        title: `${TITLES[provider]} · Save current login`,
+        placeHolder: canCreate ? 'Create a profile or update an existing one' : `Choose a profile to update (${MAX_PROFILES}/${MAX_PROFILES})`
+      });
+      if (!picked) { return false; }
+      if ('profile' in picked && picked.profile) {
+        await this.storeSecret(provider, picked.profile.id, credential);
+        const state = this.state();
+        const target = state[provider].profiles.find((profile) => profile.id === picked.profile?.id);
+        if (!target) { throw new Error('The selected profile no longer exists.'); }
+        target.updatedAt = new Date().toISOString();
+        state[provider].activeProfileId = target.id;
+        await this.updateState(state);
+        this.log(`${provider}: updated authentication profile "${target.name}" from the current login`);
+        void vscode.window.showInformationMessage(`${TITLES[provider]} profile “${target.name}” updated from the current login.`);
+        return true;
+      }
+    }
+    if (providerState.profiles.length >= MAX_PROFILES) {
+      void vscode.window.showWarningMessage(`${TITLES[provider]} already has the maximum of ${MAX_PROFILES} saved profiles.`);
       return false;
     }
     const name = await this.askName(provider, 'Name the login that is currently active.');

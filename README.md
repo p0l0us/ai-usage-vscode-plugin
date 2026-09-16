@@ -69,7 +69,7 @@ profiles belong to the extension host (local, SSH, WSL, or container) where the 
 ### Account keep-alives and automatic rotation
 
 Open the **AI Usage** menu (click a usage item), then choose **Accounts** under Claude or Codex. This menu lets
-you switch accounts manually and enable or disable **Account keep-alive and usage collection** and
+you switch accounts manually, save the current login to a new or existing profile, and enable or disable **Account keep-alive and usage collection** and
 **Automatic account rotation** independently for each provider.
 
 - Claude sends `what is date today` using `haiku` every **2 hours** per saved account, in `~/.claude-tmp`.

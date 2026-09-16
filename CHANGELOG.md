@@ -2,6 +2,7 @@
 
 ## Development build (VSIX version 9.9.99)
 
+- Let **Save current login** replace an existing profile, making expired or reauthenticated accounts easy to update without deleting and recreating them.
 - Preserve the last valid Claude OAuth credential when the CLI clears its isolated temporary credential file, so a successful keep-alive can still refresh usage statistics.
 
 ## 0.0.12 (2026-09-16)
