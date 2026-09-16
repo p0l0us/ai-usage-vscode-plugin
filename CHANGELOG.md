@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Add a separate Node.js CLI BYOK bridge with a loopback Chat Completions API, subscription-backed Codex and
+  experimental Claude CLI adapters, external tool-call continuations, and offline/live integration checks.
+
 ## 0.0.11 (2026-09-16)
 
 - Compact status-bar percentages now show the live time until reset in one largest unit (`42m`, `3h`, or `4d`)

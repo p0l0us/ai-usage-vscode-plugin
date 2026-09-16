@@ -1,5 +1,8 @@
 # AI Usage for VS Code
 
+This branch also contains an experimental standalone [CLI BYOK bridge](bridge/README.md) for using existing
+Codex/Claude subscription logins through a local model endpoint. It runs separately from the extension.
+
 See how much of your AI coding budget is left without leaving the editor. **AI Usage** shows live rate-limit and
 quota usage for **Claude Code**, **Codex** and **GitHub Copilot** in the status bar and, in the Agents window, behind
 a chip beneath the chat input.

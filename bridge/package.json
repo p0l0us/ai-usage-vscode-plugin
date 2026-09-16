@@ -1,0 +1,11 @@
+{
+  "name": "@p0l0us/cli-byok-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Local subscription-backed CLI model bridge for Copilot",
+  "license": "GPL-3.0-only",
+  "engines": { "node": ">=22" },
+  "bin": { "cli-byok-bridge": "src/cli.mjs" },
+  "scripts": { "start": "node src/cli.mjs", "test": "node --test test/bridge.test.mjs test/adapters.test.mjs", "test:live": "node scripts/live-smoke.mjs" }
+}
