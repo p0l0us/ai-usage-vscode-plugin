@@ -340,7 +340,25 @@ export function activate(context: vscode.ExtensionContext): void {
       beforeActivate: async (provider) => {
         await liveProviders.find((candidate) => candidate.id === provider)?.inFlight;
       },
-      afterActivate: afterProfileActivated
+      afterActivate: afterProfileActivated,
+      sendKeepAlive: async (provider, profile) => {
+        const title = provider === 'claude' ? 'Claude' : 'Codex';
+        await vscode.window.withProgress({
+          location: vscode.ProgressLocation.Notification,
+          title: `AI Usage: sending ${title} keep-alive for “${profile.name}”…`,
+          cancellable: false
+        }, async () => {
+          const result = await automation.sendKeepAliveNow(provider, profile.id);
+          if (result.keepAliveError) {
+            const suffix = result.usage ? ' Usage statistics were still updated.' : '';
+            void vscode.window.showWarningMessage(`AI Usage: ${title} keep-alive failed for “${profile.name}”: ${result.keepAliveError}${suffix}`);
+          } else if (result.usage) {
+            void vscode.window.showInformationMessage(`AI Usage: ${title} keep-alive completed for “${profile.name}”. Usage statistics updated.`);
+          } else {
+            void vscode.window.showWarningMessage(`AI Usage: ${title} keep-alive completed for “${profile.name}”, but usage statistics could not be updated${result.usageError ? `: ${result.usageError}` : '.'}`);
+          }
+        });
+      }
     }));
     void automation.tick();
   }));

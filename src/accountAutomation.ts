@@ -14,6 +14,12 @@ export type AutomationSettings = ProbeSettings & {
   checkIntervalMs: number;
 };
 
+export type KeepAliveNowResult = {
+  usage?: LiveUsage;
+  keepAliveError?: string;
+  usageError?: string;
+};
+
 type Profile = { id: string; name: string };
 export interface AutomationProfiles {
   profiles(provider: AuthProvider): Profile[];
@@ -100,6 +106,22 @@ export class AccountAutomation {
     this.write(provider, id, { ...state, usage: this.serialize(usage), checkedAt: usage.fetchedAt.getTime(), lastError: undefined });
   }
 
+  /** Run an explicitly requested keep-alive regardless of the periodic feature state or current backoff. */
+  async sendKeepAliveNow(provider: AuthProvider, id: string): Promise<KeepAliveNowResult> {
+    if (this.disposed) { throw new Error('Account automation is no longer running.'); }
+    if (!this.profiles.profiles(provider).some((profile) => profile.id === id)) {
+      throw new Error('The selected account no longer exists.');
+    }
+    const unlock = acquireAccountLock(path.join(this.directory, `${provider}.lock`));
+    if (!unlock) { throw new Error(`Another ${provider} account check is already running.`); }
+    try {
+      const state = this.read(provider, id);
+      // A manual call counts as this account's latest keep-alive for the periodic schedule.
+      this.write(provider, id, { ...state, lastKeepAliveAt: this.now() });
+      return await this.checkAccount(provider, id, this.settings(provider), true, true);
+    } finally { unlock(); }
+  }
+
   private file(provider: AuthProvider, id: string): string {
     const key = createHash('sha256').update(id).digest('hex');
     return path.join(this.directory, `${provider}-${key}.json`);
@@ -141,9 +163,12 @@ export class AccountAutomation {
     } finally { unlock(); }
   }
 
-  private async checkAccount(provider: AuthProvider, id: string, settings: AutomationSettings, keepAlive: boolean): Promise<LiveUsage | undefined> {
+  private async checkAccount(provider: AuthProvider, id: string, settings: AutomationSettings,
+    keepAlive: boolean, ignoreBackoff = false): Promise<KeepAliveNowResult> {
     const previous = this.read(provider, id);
-    if (previous.nextAllowedAt && previous.nextAllowedAt > this.now()) { return undefined; }
+    if (!ignoreBackoff && previous.nextAllowedAt && previous.nextAllowedAt > this.now()) {
+      return { usageError: 'Account usage check is temporarily paused after a provider error.' };
+    }
     let outcome: ProbeResult;
     const active = this.profiles.activeProfileId(provider) === id;
     if (active) { this.checkingActive.add(provider); }
@@ -160,14 +185,16 @@ export class AccountAutomation {
     }
     const state = this.read(provider, id);
     const result = outcome.result;
+    const usageError = result.kind === 'ok' ? undefined
+      : result.kind === 'error' ? result.message : result.reason ?? 'Usage unavailable.';
     this.write(provider, id, { ...state, checkedAt: this.now(),
       usage: result.kind === 'ok' ? this.serialize(result.usage) : state.usage,
       nextAllowedAt: result.kind === 'error' && result.transient
         ? this.now() + Math.max(settings.checkIntervalMs, result.retryAfterMs ?? 0) : undefined,
-      lastError: result.kind === 'ok' ? undefined : result.kind === 'error' ? result.message : result.reason ?? 'Usage unavailable.',
+      lastError: usageError,
       keepAliveError: keepAlive ? outcome.keepAliveError : state.keepAliveError });
     this.log(`${provider}: account ${id} ${keepAlive ? 'keep-alive / ' : ''}usage: ${result.kind}${outcome.keepAliveError ? ` (${outcome.keepAliveError})` : ''}`);
-    return result.kind === 'ok' ? result.usage : undefined;
+    return { usage: result.kind === 'ok' ? result.usage : undefined, keepAliveError: outcome.keepAliveError, usageError };
   }
 
   private async rotate(provider: AuthProvider, settings: AutomationSettings): Promise<void> {
@@ -183,12 +210,12 @@ export class AccountAutomation {
     if (sweep.checkedAt !== undefined && this.now() - sweep.checkedAt < settings.checkIntervalMs) { return; }
     this.write(provider, rotationId, { checkedAt: this.now() });
     // Never rotate based on a stale cache, offline log, expired reset or a failed refresh.
-    const current = await this.checkAccount(provider, active, settings, false);
+    const current = (await this.checkAccount(provider, active, settings, false)).usage;
     if (!current || !atLimit(current, settings.thresholdPercent)) { return; }
     const requiredWindows = current.windows.map((window) => window.label);
     for (const candidate of nextAccounts(this.profiles.profiles(provider), active)) {
       if (this.disposed || this.paused || !this.settings(provider).autoRotate) { return; }
-      const candidateUsage = await this.checkAccount(provider, candidate.id, settings, false);
+      const candidateUsage = (await this.checkAccount(provider, candidate.id, settings, false)).usage;
       if (!candidateUsage || !eligibleAccount(candidateUsage, this.now(), settings.thresholdPercent) ||
         candidateUsage.windows.length < current.windows.length ||
         !requiredWindows.every((label) => candidateUsage.windows.some((window) => window.label === label))) { continue; }

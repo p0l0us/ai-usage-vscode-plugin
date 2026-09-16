@@ -33,7 +33,13 @@ type AutomationState = Record<AuthProvider, Record<AccountAutomationFeature, boo
 
 type ProfileItem = vscode.QuickPickItem & {
   profile?: ProfileMetadata;
-  action?: 'save' | 'import' | 'rename' | 'delete' | AccountAutomationFeature;
+  action?: 'save' | 'import' | 'rename' | 'delete' | 'keepAliveNow' | AccountAutomationFeature;
+};
+
+type ProfileHooks = {
+  beforeActivate?: (provider: AuthProvider) => Promise<void>;
+  afterActivate?: (provider: AuthProvider) => Promise<void>;
+  sendKeepAlive?: (provider: AuthProvider, profile: ProfileMetadata) => Promise<void>;
 };
 
 const TITLES: Record<AuthProvider, string> = { claude: 'Claude', codex: 'Codex' };
@@ -144,7 +150,7 @@ export class AuthProfileManager {
 
   async show(
     initialProvider?: AuthProvider,
-    hooks?: { beforeActivate?: (provider: AuthProvider) => Promise<void>; afterActivate?: (provider: AuthProvider) => Promise<void> }
+    hooks?: ProfileHooks
   ): Promise<void> {
     const provider = initialProvider ?? await this.pickProvider();
     if (!provider) {
@@ -170,7 +176,10 @@ export class AuthProfileManager {
           }
           return;
         }
-        if (item.action === 'keepAlive' || item.action === 'autoRotate') {
+        if (item.action === 'keepAliveNow') {
+          const profile = await this.pickSaved(provider, `Send a ${TITLES[provider]} keep-alive now`);
+          if (profile) { await hooks?.sendKeepAlive?.(provider, profile); }
+        } else if (item.action === 'keepAlive' || item.action === 'autoRotate') {
           await this.setAutomationEnabled(provider, item.action, !this.automationEnabled(provider, item.action));
         } else if (item.action === 'save') {
           if (await this.saveCurrent(provider)) {
@@ -273,6 +282,13 @@ export class AuthProfileManager {
     const autoRotate = this.automationEnabled(provider, 'autoRotate');
     const threshold = vscode.workspace.getConfiguration().get<number>(`aiUsage.${provider}.autoRotate.thresholdPercent`, 99.5);
     items.push({ label: 'Account features', kind: vscode.QuickPickItemKind.Separator });
+    if (providerState.profiles.length) {
+      items.push({
+        label: '$(play) Send keep-alive now…',
+        detail: 'Choose a saved account, send its configured keep-alive prompt immediately, and refresh its usage statistics.',
+        action: 'keepAliveNow'
+      });
+    }
     items.push({
       label: `${keepAlive ? '$(check)' : '$(pulse)'} Account keep-alive and usage collection`,
       description: keepAlive ? 'On' : 'Off',

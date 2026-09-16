@@ -168,6 +168,18 @@ test('failed keep-alive attempts still persist schedule instead of retrying ever
   assert.match(f.service.usageDetail('claude', 'a'), /Unavailable/);
 });
 
+test('manual keep-alive runs while disabled, updates account stats, and resets its periodic schedule', async t => {
+  const f = fixture(t);
+  const result = await f.service.sendKeepAliveNow('codex', 'b');
+  assert.deepEqual(f.calls, [['codex', 'b', true]]);
+  assert.deepEqual(result.usage.windows.map(window => window.usedPercent), [10, 10]);
+  assert.match(f.service.usageDetail('codex', 'b'), /5h: 10%.*7d: 10%/);
+
+  f.settings.codex.enabled = true;
+  await f.service.tick();
+  assert.deepEqual(f.calls.filter(call => call[0] === 'codex').map(call => call[1]), ['b', 'a', 'c']);
+});
+
 test('rotation wraps once through saved order without selecting current account', async t => {
   const f = fixture(t, { values: { c: [99.5, 0], a: [1, 1] }, settings: { codex: { autoRotate: true } } });
   f.active.codex = 'c';

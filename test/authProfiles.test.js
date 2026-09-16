@@ -9,6 +9,7 @@ const informationMessages = [];
 const load = Module._load;
 Module._load = function(id, ...args) {
   if (id === 'vscode') return {
+    QuickPickItemKind: { Separator: -1 },
     window: { showInformationMessage(message) { informationMessages.push(message); }, showErrorMessage() {} },
     workspace: { getConfiguration: () => ({ get: (_key, fallback) => fallback }) }
   };
@@ -99,4 +100,11 @@ test('automatic activation identifies the service and destination account', asyn
   const f = fixture(t);
   assert.equal(await f.manager.activateProfile('claude', 'a', true), true);
   assert.deepEqual(informationMessages, ['AI Usage: Claude automatically rotated to account “A”.']);
+});
+
+test('account menu offers an immediate keep-alive action when profiles exist', t => {
+  const f = fixture(t);
+  const action = f.manager.items('claude').find(item => item.action === 'keepAliveNow');
+  assert.match(action.label, /Send keep-alive now/);
+  assert.match(action.detail, /refresh its usage statistics/);
 });

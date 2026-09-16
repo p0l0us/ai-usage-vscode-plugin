@@ -2,6 +2,7 @@
 
 ## Development build (VSIX version 9.9.99)
 
+- Add a per-service **Send keep-alive now** account action that targets a selected saved account and refreshes its statistics.
 - Show a VS Code notification naming the service and destination account after automatic rotation.
 - Add isolated Claude and Codex keep-alive checks for every saved account, including inactive-account usage
   collection and refreshed-token preservation.
