@@ -23,6 +23,18 @@ greyed out once it is older than 15 minutes.
 Claude and Codex cache keys include the selected authentication-profile id. A switch therefore cannot reuse the
 previous account's usage reading or backoff entry.
 
+Per-account caching is not enough for Anthropic's usage endpoint, because every saved account adds its own calls:
+the active login polls it, keep-alive and rotation sweeps read it once per profile, and the details panel refreshes
+it on click. `src/apiBudget.ts` therefore keeps one call ledger for the endpoint in `claude-api-budget.json`,
+beside the usage cache and shared the same way. A call is claimed before it is made and no call may start within
+`aiUsage.claude.api.minIntervalSeconds` (default 30) of the previous one, whichever window, account or command made
+it. Every response's `anthropic-ratelimit-requests-remaining`/`-reset` and `Retry-After` headers are fed back into
+the ledger: an exhausted quota blocks calls until it resets, and a reported remainder is spread over the rest of its
+window, so an advertised limit stricter than the setting wins. A blocked interactive refresh releases the shared
+fetch lock and shows the cached reading with the wait in its detail line; a background probe waits up to two
+minutes for a slot and otherwise reports a transient error, which the automation retries at the next check interval.
+Nothing is derived from the endpoint's undocumented limit itself: absent headers, only the configured spacing applies.
+
 ## Authentication profile storage and switching
 
 `src/authProfiles.ts` keeps only profile names, timestamps, ids, and the active id in extension `globalState`.
@@ -39,8 +51,12 @@ mode-`0600` temporary file in the destination directory and an atomic rename; th
 chmodded to `0600` on POSIX. Windows uses the destination directory's inherited user-profile ACL because its chmod
 implementation does not support POSIX ownership modes.
 
-Codex picks up a switched login on its next request: its auth manager reloads `auth.json` inside the request span
-that starts a turn, and no thread, rollout or sqlite row is bound to an account. After writing the file for a Codex
+Codex does not adopt a switched login in a running process: its auth manager re-reads `auth.json` before a turn but,
+when the file now holds another account, fails the turn with "signed in to another account" instead of using it
+(verified 2026-09-17 against 0.154.0 with `thread/start` + `turn/start`; `getAuthStatus`, `account/read` and
+`account/rateLimits/read` keep answering from memory). Processes started after the write use the new login, and no
+thread, rollout or sqlite row is bound to an account, so chats resume under the new login after an extension host
+restart. After writing the file for a Codex
 profile, `AuthProfileManager.activate()` calls the verifier passed by `extension.ts`
 (`verifyCodexNativeAccount` in `src/live.ts`), which runs a fresh `codex app-server` on the native home and compares
 the `chatgpt_account_id` claim of the token returned by `getAuthStatus { includeToken: true, refreshToken: false }`
@@ -52,7 +68,9 @@ time only: `afterProfileActivated` records `{ switchedAt, profileName }` in `glo
 (`src/codexProcesses.ts`: `ps -eo pid=,ppid=,etime=,args=` on POSIX, `Win32_Process` on Windows), excluding
 AI Usage's own servers by their `cli_auth_credentials_store` argument. A `codex … app-server` older than the switch
 triggers one warning per switch per window (`workspaceState` key `aiUsage.codexSwitchNotified.v1`) whose only
-action is `workbench.action.restartExtensionHost`; processes are never killed and no turn is ever injected.
+action is `workbench.action.restartExtensionHost`; processes are never killed and no turn is ever injected. `aiUsage.codex.switchRestartHint` (default on) disables the warning. Duplicate profiles of one login are
+detected by the stored email: refreshing two copies independently reuses a rotated refresh token and the provider
+revokes the login, so saving or importing a credential whose email is already saved asks for confirmation.
 
 ## How the chat chip works
 
@@ -75,6 +93,10 @@ generator.
 Status-bar percentages use each window's live `resetsAt` value in parentheses. `formatResetRemaining` selects one
 largest whole unit only: minutes below one hour, hours below one day, then days. Chat-toolbar command titles are
 static, so their compact chips show percentages only; clicking one opens the live window names and countdowns.
+
+The details panel gives each service a single row carrying every window (`5h 41% (4h) · 7d 7% (5d)`), the time of
+the reading and, on click, a refresh of that service alone. Full window names and exact reset timestamps are in
+the status bar tooltip, which has room for a line per window; the saved-account list uses the same compact form.
 
 All windows share one cache file in the extension's global storage, so only one window calls a source per check
 interval and all windows respect the same backoff. Usage polling only reads tokens and never refreshes them. The

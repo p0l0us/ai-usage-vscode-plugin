@@ -62,6 +62,18 @@ export function parseRetryAfterHeader(value: string | null, now = Date.now()): n
   return Number.isNaN(date) ? undefined : Math.max(0, date - now);
 }
 
+/** What a response says about the caller's remaining quota for the endpoint itself. */
+export type RateLimitHint = {
+  remaining?: number;
+  /** Epoch ms when the current quota window starts over. */
+  resetAt?: number;
+  /** Service-requested wait from a Retry-After header. */
+  retryAfterMs?: number;
+};
+
+/** Receives the rate-limit headers of every call, whatever the response says. */
+export type RateLimitObserver = { observe(hint: RateLimitHint | undefined, now?: number): void };
+
 const REQUEST_TIMEOUT_MS = 10_000;
 
 function readJson(file: string): unknown | undefined {
@@ -114,7 +126,24 @@ function decodeJwtPayload(token: string): Record<string, unknown> | undefined {
   }
 }
 
-type JsonResponse = { status: number; body: unknown; retryAfterMs?: number };
+type JsonResponse = { status: number; body: unknown; retryAfterMs?: number; rateLimit?: RateLimitHint };
+
+/**
+ * Anthropic reports the caller's remaining request quota in `anthropic-ratelimit-requests-*`.
+ * The reset value is RFC 3339 on the documented endpoints and epoch seconds on some others.
+ */
+export function parseRateLimitHeaders(headers: Headers, now = Date.now()): RateLimitHint | undefined {
+  const value = (name: string): string | undefined => headers.get(name)?.trim() || undefined;
+  const count = Number(value('anthropic-ratelimit-requests-remaining'));
+  const remaining = Number.isInteger(count) && count >= 0 ? count : undefined;
+  const reset = value('anthropic-ratelimit-requests-reset');
+  const seconds = Number(reset);
+  const resetAt = reset === undefined ? undefined
+    : toDate(Number.isFinite(seconds) ? seconds : reset)?.getTime();
+  const retryAfterMs = parseRetryAfterHeader(headers.get('retry-after'), now);
+  return remaining === undefined && resetAt === undefined && retryAfterMs === undefined
+    ? undefined : { remaining, resetAt, retryAfterMs };
+}
 
 async function fetchJson(url: string, headers: Record<string, string>): Promise<JsonResponse> {
   const controller = new AbortController();
@@ -128,7 +157,12 @@ async function fetchJson(url: string, headers: Record<string, string>): Promise<
     } catch {
       body = text;
     }
-    return { status: response.status, body, retryAfterMs: parseRetryAfterHeader(response.headers.get('retry-after')) };
+    return {
+      status: response.status,
+      body,
+      retryAfterMs: parseRetryAfterHeader(response.headers.get('retry-after')),
+      rateLimit: parseRateLimitHeaders(response.headers)
+    };
   } finally {
     clearTimeout(timer);
   }
@@ -193,7 +227,11 @@ type ClaudeUsageResponse = {
   }>;
 };
 
-export async function fetchClaudeUsage(home = claudeConfigDir()): Promise<LiveResult> {
+/**
+ * `budget` is told what every response says about the endpoint's own limits; the caller decides
+ * whether a call may be made at all, so one reservation covers exactly one request.
+ */
+export async function fetchClaudeUsage(home = claudeConfigDir(), budget?: RateLimitObserver): Promise<LiveResult> {
   const provider: ProviderId = 'claude';
   const credentials = readClaudeCredentials(home);
   if (!credentials) {
@@ -213,6 +251,7 @@ export async function fetchClaudeUsage(home = claudeConfigDir()): Promise<LiveRe
   } catch (error) {
     return networkError(provider, CLAUDE_TITLE, error);
   }
+  budget?.observe(response.rateLimit);
 
   if (response.status === 401 || response.status === 403) {
     return httpError(provider, CLAUDE_TITLE, response, 'Not authorized. Run `claude` once to sign in again.');

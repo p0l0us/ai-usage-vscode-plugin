@@ -25,9 +25,18 @@ export type ProfileMetadata = {
   email?: string;
 };
 
-/** Menu description: the account email, then the active marker. */
-function profileDescription(profile: ProfileMetadata, active: boolean): string | undefined {
-  return [profile.email, active ? 'Active' : undefined].filter(Boolean).join(' · ') || undefined;
+/** Menu description: the account email, a duplicate marker, then the active marker. */
+function profileDescription(profile: ProfileMetadata, active: boolean, siblings: ProfileMetadata[] = []): string | undefined {
+  const twin = profile.email ? siblings.find((other) => other.id !== profile.id && other.email === profile.email) : undefined;
+  return [profile.email, twin ? `duplicate of “${twin.name}”` : undefined, active ? 'Active' : undefined].filter(Boolean).join(' · ') || undefined;
+}
+
+/**
+ * Two saved copies of one login are dangerous, not just untidy: both vendors rotate the refresh token on every
+ * refresh, and refreshing the second copy reuses a rotated token, which revokes the whole login server-side.
+ */
+function duplicateWarning(provider: AuthProvider, twin: ProfileMetadata): string {
+  return `This ${TITLES[provider]} login is already saved as “${twin.name}”. Two saved copies of one account refresh independently and get the account's tokens revoked; keep a single profile per login.`;
 }
 
 type ProviderState = {
@@ -39,9 +48,14 @@ type ProfileState = Record<AuthProvider, ProviderState>;
 export type AccountAutomationFeature = 'keepAlive' | 'autoRotate';
 type AutomationState = Record<AuthProvider, Record<AccountAutomationFeature, boolean>>;
 
+/** Both switches are ordinary settings, so a profile, Settings Sync or a policy can carry them. */
+function automationKey(provider: AuthProvider, feature: AccountAutomationFeature): string {
+  return `aiUsage.${provider}.${feature}.enabled`;
+}
+
 type ProfileItem = vscode.QuickPickItem & {
   profile?: ProfileMetadata;
-  action?: 'save' | 'import' | 'rename' | 'delete' | 'keepAliveNow' | AccountAutomationFeature;
+  action?: 'save' | 'import' | 'rename' | 'delete' | 'keepAliveNow' | 'settings';
 };
 
 type ProfileHooks = {
@@ -62,7 +76,7 @@ export type ActivationVerifier = (provider: AuthProvider, credential: StoredCred
 /** Codex reloads auth.json on its request path, so open chats follow a switch without a restart. */
 function activationMessage(provider: AuthProvider, name: string, automatic: boolean): string {
   if (provider === 'codex') {
-    const followUp = 'Open chats use this login from their next turn.';
+    const followUp = 'New Codex CLI sessions use it now; the Codex extension needs an extension restart.';
     return automatic ? `AI Usage: Codex automatically rotated to account “${name}”. ${followUp}` : `Codex switched to “${name}”. ${followUp}`;
   }
   return automatic
@@ -157,30 +171,33 @@ export class AuthProfileManager {
   }
 
   automationEnabled(provider: AuthProvider, feature: AccountAutomationFeature): boolean {
-    const stored = this.context.globalState.get<Partial<AutomationState>>(AUTOMATION_STATE_KEY);
-    const value = stored?.[provider]?.[feature];
-    if (typeof value === 'boolean') {
-      return value;
-    }
-    // Preserve the effective value for users upgrading from versions that exposed these as settings.
-    return vscode.workspace.getConfiguration().get<boolean>(`aiUsage.${provider}.${feature}.enabled`, false);
+    return vscode.workspace.getConfiguration().get<boolean>(automationKey(provider, feature), false);
   }
 
   async setAutomationEnabled(provider: AuthProvider, feature: AccountAutomationFeature, enabled: boolean): Promise<void> {
-    const stored = this.context.globalState.get<Partial<AutomationState>>(AUTOMATION_STATE_KEY);
-    const state: AutomationState = {
-      claude: {
-        keepAlive: stored?.claude?.keepAlive ?? this.automationEnabled('claude', 'keepAlive'),
-        autoRotate: stored?.claude?.autoRotate ?? this.automationEnabled('claude', 'autoRotate')
-      },
-      codex: {
-        keepAlive: stored?.codex?.keepAlive ?? this.automationEnabled('codex', 'keepAlive'),
-        autoRotate: stored?.codex?.autoRotate ?? this.automationEnabled('codex', 'autoRotate')
-      }
-    };
-    state[provider][feature] = enabled;
-    await this.context.globalState.update(AUTOMATION_STATE_KEY, state);
+    await vscode.workspace.getConfiguration().update(automationKey(provider, feature), enabled, vscode.ConfigurationTarget.Global);
     this.log(`${provider}: ${feature === 'keepAlive' ? 'account keep-alive' : 'automatic account rotation'} ${enabled ? 'enabled' : 'disabled'}`);
+  }
+
+  /** Both switches used to be menu toggles kept in extension state; carry those over to the settings once. */
+  async migrateAutomationSettings(): Promise<void> {
+    const stored = this.context.globalState.get<Partial<AutomationState>>(AUTOMATION_STATE_KEY);
+    if (!stored) {
+      return;
+    }
+    for (const provider of ['claude', 'codex'] as const) {
+      for (const feature of ['keepAlive', 'autoRotate'] as const) {
+        const key = automationKey(provider, feature);
+        const configured = vscode.workspace.getConfiguration().inspect<boolean>(key);
+        const set = configured?.globalValue ?? configured?.workspaceValue ?? configured?.workspaceFolderValue;
+        // Only a switch someone turned on is worth carrying: off is the setting's own default.
+        if (stored[provider]?.[feature] === true && set === undefined) {
+          await this.setAutomationEnabled(provider, feature, true);
+          this.log(`${provider}: moved ${feature} from extension state to ${key}`);
+        }
+      }
+    }
+    await this.context.globalState.update(AUTOMATION_STATE_KEY, undefined);
   }
 
   activeProfileId(provider: AuthProvider): string | undefined {
@@ -230,8 +247,9 @@ export class AuthProfileManager {
         if (item.action === 'keepAliveNow') {
           const profile = await this.pickSaved(provider, `Send a ${TITLES[provider]} keep-alive now`);
           if (profile) { await hooks?.sendKeepAlive?.(provider, profile); }
-        } else if (item.action === 'keepAlive' || item.action === 'autoRotate') {
-          await this.setAutomationEnabled(provider, item.action, !this.automationEnabled(provider, item.action));
+        } else if (item.action === 'settings') {
+          await vscode.commands.executeCommand('workbench.action.openSettings', `@ext:p0l0us.ai-usage-vscode-plugin aiUsage.${provider}`);
+          return;
         } else if (item.action === 'save') {
           if (await this.saveCurrent(provider)) {
             await hooks?.afterActivate?.(provider);
@@ -307,7 +325,7 @@ export class AuthProfileManager {
     const providerState = this.state()[provider];
     const items: ProfileItem[] = providerState.profiles.map((profile) => ({
       label: `${profile.id === providerState.activeProfileId ? '$(check)' : '$(key)'} ${profile.name}`,
-      description: profileDescription(profile, profile.id === providerState.activeProfileId),
+      description: profileDescription(profile, profile.id === providerState.activeProfileId, providerState.profiles),
       detail: this.usageDetail?.(provider, profile.id) ?? `Saved ${new Date(profile.updatedAt).toLocaleString()} · Usage not checked yet`,
       profile
     }));
@@ -341,16 +359,10 @@ export class AuthProfileManager {
       });
     }
     items.push({
-      label: `${keepAlive ? '$(check)' : '$(pulse)'} Account keep-alive and usage collection`,
-      description: keepAlive ? 'On' : 'Off',
-      detail: 'Periodically checks every saved account, including inactive accounts. Configure the period, model and dedicated home in Settings.',
-      action: 'keepAlive'
-    });
-    items.push({
-      label: `${autoRotate ? '$(check)' : '$(sync)'} Automatic account rotation`,
-      description: autoRotate ? `On · rotate at ${threshold}%` : `Off · enable rotation at ${threshold}%`,
-      detail: `Switch to the next saved account below ${threshold}% in every usage window. Configure the threshold in Settings. Requires at least two saved accounts.`,
-      action: 'autoRotate'
+      label: '$(gear) Keep-alive and rotation settings…',
+      description: `Keep-alive ${keepAlive ? 'on' : 'off'} · rotation ${autoRotate ? `on at ${threshold}%` : 'off'}`,
+      detail: `Opens Settings: turn periodic checks of every saved ${TITLES[provider]} account and automatic rotation on or off, and set the period, model, threshold and dedicated home.`,
+      action: 'settings'
     });
     return items;
   }
@@ -435,6 +447,9 @@ export class AuthProfileManager {
       void vscode.window.showWarningMessage(`${TITLES[provider]} already has the maximum of ${MAX_PROFILES} saved profiles.`);
       return false;
     }
+    if (!await this.confirmNotDuplicate(provider, credential)) {
+      return false;
+    }
     const name = await this.askName(provider, 'Name the login that is currently active.');
     if (!name) {
       return false;
@@ -442,6 +457,19 @@ export class AuthProfileManager {
     await this.saveProfile(provider, name, credential, true);
     void vscode.window.showInformationMessage(`${TITLES[provider]} login saved as “${name}”.`);
     return true;
+  }
+
+  /** Warns when a credential's login is already saved; returns false when the user declines to add a copy. */
+  private async confirmNotDuplicate(provider: AuthProvider, credential: StoredCredential): Promise<boolean> {
+    let email: string | undefined;
+    try { email = await this.emailOf(provider, credential); } catch { return true; }
+    const twin = email ? this.state()[provider].profiles.find((profile) => profile.email === email) : undefined;
+    if (!twin) {
+      return true;
+    }
+    this.log(`${provider}: login ${email} is already saved as "${twin.name}"`);
+    const choice = await vscode.window.showWarningMessage(duplicateWarning(provider, twin), { modal: true }, 'Save a copy anyway');
+    return choice === 'Save a copy anyway';
   }
 
   private async importFile(provider: AuthProvider): Promise<void> {
@@ -466,6 +494,9 @@ export class AuthProfileManager {
       credential = parseCredentialJson(provider, Buffer.from(bytes).toString('utf8'));
     } catch (error) {
       void vscode.window.showErrorMessage(`AI Usage: could not import the credential: ${errorMessage(error)}`);
+      return;
+    }
+    if (!await this.confirmNotDuplicate(provider, credential)) {
       return;
     }
     const name = await this.askName(provider, 'Name the imported login.');
