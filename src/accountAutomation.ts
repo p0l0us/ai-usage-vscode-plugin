@@ -3,7 +3,7 @@ import * as path from 'path';
 import { createHash } from 'crypto';
 import { AuthProvider, StoredCredential, writeJsonAtomically } from './authFiles';
 import { CacheEntry, deserializeUsage } from './cache';
-import { LiveUsage } from './live';
+import { formatResetRemaining, LiveUsage } from './live';
 import { ProbeSettings, ProbeResult, acquireAccountLock, probeAccount } from './accountProbe';
 
 export type AutomationSettings = ProbeSettings & {
@@ -90,7 +90,10 @@ export class AccountAutomation {
     const usage = deserializeUsage(state);
     const parts: string[] = [];
     if (usage) {
-      parts.push(usage.windows.map((window) => `${window.label}: ${window.usedPercent}%`).join(' · '));
+      parts.push(usage.windows.map((window) => {
+        const reset = formatResetRemaining(window.resetsAt);
+        return `${window.label}: ${window.usedPercent}%${reset ? ` (${reset})` : ''}`;
+      }).join(' · '));
       parts.push(`Checked ${usage.fetchedAt.toLocaleString()}`);
     }
     if (state.lastError) { parts.push(`Usage check: ${state.lastError}`); }

@@ -2,7 +2,7 @@
   "name": "ai-usage-vscode-plugin",
   "displayName": "AI Usage",
   "description": "Live Claude Code, Codex and GitHub Copilot usage in the status bar and chat input: 5h/7d windows, premium requests, org billing, reset times on hover. Open source, contributions welcome.",
-  "version": "0.0.14",
+  "version": "0.0.15",
   "publisher": "p0l0us",
   "license": "GPL-3.0-only",
   "repository": {
@@ -7020,18 +7020,38 @@
             "order": 3,
             "markdownDescription": "How often (minutes) the Claude source is called and the result stored in the shared cache. One call serves all open windows. Anthropic's usage endpoint rate-limits aggressively; keep this at 5 or more."
           },
+          "aiUsage.claude.api.minIntervalSeconds": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 600,
+            "default": 30,
+            "order": 4,
+            "markdownDescription": "**Smallest gap between two calls to Anthropic's usage endpoint**, counted across all open windows, every saved account and manual refreshes. Anthropic rate-limits this endpoint and does not document the limit; the extension also honours a stricter one when a response advertises it (`anthropic-ratelimit-requests-*` or `Retry-After`). A refresh that arrives too early shows the cached reading instead of calling out. `0` leaves only the service's own limits."
+          },
+          "aiUsage.claude.keepAlive.enabled": {
+            "type": "boolean",
+            "default": false,
+            "order": 5,
+            "markdownDescription": "**Account keep-alive and usage collection.** Periodically send the small `#aiUsage.claude.keepAlive.model#` prompt with every saved Claude account, including inactive ones, and record the usage each one reports. Accounts are staged in `#aiUsage.claude.keepAlive.home#`, never in the native CLI home."
+          },
+          "aiUsage.claude.autoRotate.enabled": {
+            "type": "boolean",
+            "default": false,
+            "order": 6,
+            "markdownDescription": "**Automatic Claude account rotation.** When the active account reaches `#aiUsage.claude.autoRotate.thresholdPercent#` in any usage window, switch to the next saved account that is below it in every window. Requires at least two saved profiles."
+          },
           "aiUsage.claude.keepAlive.periodHours": {
             "type": "number",
             "minimum": 0.25,
             "default": 2,
             "markdownDescription": "**Claude keep-alive period in hours.** Each saved Claude account is checked once per period. The schedule persists across window restarts.",
-            "order": 4
+            "order": 7
           },
           "aiUsage.claude.keepAlive.model": {
             "type": "string",
             "default": "haiku",
             "description": "Subscription model used for the small keep-alive request (default: haiku).",
-            "order": 5
+            "order": 8
           },
           "aiUsage.claude.autoRotate.thresholdPercent": {
             "type": "number",
@@ -7039,7 +7059,7 @@
             "maximum": 100,
             "default": 99.5,
             "markdownDescription": "**Claude automatic-rotation threshold.** Rotate when any Claude usage window reaches this percentage. Candidate accounts must be below it in every reported window.",
-            "order": 6
+            "order": 9
           },
           "aiUsage.claude.keepAlive.home": {
             "type": "string",
@@ -7095,18 +7115,30 @@
             "order": 4,
             "markdownDescription": "How often (minutes) the Codex source is called and the result stored in the shared cache."
           },
+          "aiUsage.codex.keepAlive.enabled": {
+            "type": "boolean",
+            "default": false,
+            "order": 5,
+            "markdownDescription": "**Account keep-alive and usage collection.** Periodically send the small `#aiUsage.codex.keepAlive.model#` prompt with every saved Codex account, including inactive ones, and record the usage each one reports. Accounts are staged in `#aiUsage.codex.keepAlive.home#`, never in the native CLI home."
+          },
+          "aiUsage.codex.autoRotate.enabled": {
+            "type": "boolean",
+            "default": false,
+            "order": 6,
+            "markdownDescription": "**Automatic Codex account rotation.** When the active account reaches `#aiUsage.codex.autoRotate.thresholdPercent#` in any usage window, switch to the next saved account that is below it in every window. Requires at least two saved profiles."
+          },
           "aiUsage.codex.keepAlive.periodHours": {
             "type": "number",
             "minimum": 0.25,
             "default": 6,
             "markdownDescription": "**Codex keep-alive period in hours.** Each saved Codex account is checked once per period. The schedule persists across window restarts.",
-            "order": 5
+            "order": 7
           },
           "aiUsage.codex.keepAlive.model": {
             "type": "string",
             "default": "gpt-5.6-luna",
             "description": "Subscription model used for the small keep-alive request (default: gpt-5.6-luna). Empty uses the Codex CLI default.",
-            "order": 6
+            "order": 9
           },
           "aiUsage.codex.autoRotate.thresholdPercent": {
             "type": "number",
@@ -7114,7 +7146,13 @@
             "maximum": 100,
             "default": 99.5,
             "markdownDescription": "**Codex automatic-rotation threshold.** Rotate when either Codex usage window reaches this percentage. Candidate accounts must be below it in every reported window.",
-            "order": 7
+            "order": 10
+          },
+          "aiUsage.codex.switchRestartHint": {
+            "type": "boolean",
+            "default": true,
+            "markdownDescription": "After a Codex account switch, warn once per window when this window's Codex extension process started before the switch and offer **Restart extensions**. A running Codex process keeps its login in memory and fails turns once the credential file changes underneath it; VS Code cannot restart a single extension, so restarting the extension host is the lightest repair. New Codex CLI sessions need nothing.",
+            "order": 8
           },
           "aiUsage.codex.keepAlive.home": {
             "type": "string",

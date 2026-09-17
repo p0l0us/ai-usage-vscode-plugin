@@ -2,11 +2,15 @@ import { spawn } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { ApiCallBudget } from './apiBudget';
 import { AuthProvider, StoredCredential, nativeCredentialPath, parseCredentialJson, writeJsonAtomically } from './authFiles';
 import { LiveResult, fetchClaudeUsage, fetchCodexUsageCli, resolveCli } from './live';
 
 export type ProbeSettings = { home: string; cliPath: string; model: string };
 export type ProbeResult = { result: LiveResult; credential: StoredCredential; keepAliveError?: string };
+
+/** A sweep reads several accounts in a row; waiting out the shared spacing beats being rate-limited. */
+const BUDGET_WAIT_MS = 2 * 60_000;
 
 /** Exclusive across extension hosts; only reclaim locks whose owning process has exited. */
 export function acquireAccountLock(file: string): (() => void) | undefined {
@@ -121,9 +125,19 @@ export function runKeepAlive(cli: string, args: string[], home: string, env: Nod
   });
 }
 
+async function claudeUsage(home: string, signal: AbortSignal, budget?: ApiCallBudget): Promise<LiveResult> {
+  if (budget && !await budget.waitForSlot(BUDGET_WAIT_MS, signal)) {
+    return {
+      kind: 'error', provider: 'claude', title: 'Claude', transient: true,
+      message: 'Skipped: the Claude usage endpoint is already being called as often as it allows.'
+    };
+  }
+  return fetchClaudeUsage(home, budget);
+}
+
 /** Swap saved credentials into a separate home, make a small call, then collect all limit windows. */
 export async function probeAccount(provider: AuthProvider, credential: StoredCredential, settings: ProbeSettings,
-  keepAlive: boolean, signal: AbortSignal): Promise<ProbeResult> {
+  keepAlive: boolean, signal: AbortSignal, budget?: ApiCallBudget): Promise<ProbeResult> {
   const home = isolatedHome(provider, settings.home);
   const unlock = acquireAccountLock(path.join(home, '.ai-usage.lock'));
   if (!unlock) { throw new Error('Another account check is using the keep-alive home.'); }
@@ -154,7 +168,7 @@ export async function probeAccount(provider: AuthProvider, credential: StoredCre
     // Collect usage even if the model call hit a usage limit or the CLI is unavailable.
     const result: LiveResult = signal.aborted
       ? { kind: 'unavailable', provider, reason: 'Account check cancelled.' }
-      : provider === 'claude' ? await fetchClaudeUsage(home)
+      : provider === 'claude' ? await claudeUsage(home, signal, budget)
         : await fetchCodexUsageCli(settings.cliPath, home, env, home);
     // Codex app-server can also refresh its token while reading limits. Keep that newer credential when valid,
     // but never turn a completed usage check into an error because a CLI removed the temporary auth file.

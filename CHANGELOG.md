@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.0.14 (2026-09-17)
+## 0.0.15 (2026-09-17)
 
 - Show the login email beside every saved Claude and Codex profile so the same account saved twice is easy to spot.
   Codex reads it from the saved id token; Claude asks the OAuth profile endpoint and records it when a login is saved,
@@ -13,6 +13,19 @@
   action; the process is never killed and nothing restarts automatically.
 - Keep-alive failures now include the CLI's own error text, such as a usage limit or an unsupported model, instead of
   only the exit code.
+- Show each window's reset countdown (e.g. `5h: 59% (3h)`) beside its usage percentage in the saved-account picker,
+  matching the status bar and tooltip.
+- Replace the per-window rows in the details panel with one row per service that carries every window and its
+  countdown, and refreshes that service when clicked. Full window names and exact reset times moved into the
+  status bar tooltip.
+- Space every call to Anthropic's usage endpoint with one ledger shared by all windows, all saved accounts and
+  manual refreshes (`aiUsage.claude.api.minIntervalSeconds`, default 30 s), tightening automatically when a
+  response advertises a stricter limit. A refresh that arrives too early shows the cached reading and says when
+  the next call is due.
+- Move **Account keep-alive and usage collection** and **Automatic account rotation** out of the Accounts menu into
+  the ordinary settings `aiUsage.<service>.keepAlive.enabled` and `aiUsage.<service>.autoRotate.enabled`, so they
+  sync and can be set per profile or by policy. Existing menu choices are carried over once; the menu now shows
+  their state and links to Settings.
 
 ## 0.0.13 (2026-09-16)
 

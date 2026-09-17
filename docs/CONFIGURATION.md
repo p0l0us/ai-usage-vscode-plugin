@@ -20,8 +20,15 @@ Each service has a `source` setting that selects where its usage is read from:
   called and the result stored in the shared on-disk cache. One call serves every open window.
 - `aiUsage.updateIntervalMinutes` (1): how often every window re-reads the cache and redraws the status bar and
   chat chip details. Applies to all sources.
-- Manual **AI Usage: Refresh** bypasses the check interval but still honours a shared backoff after a
-  rate-limit or server error (`Retry-After` when sent, otherwise 1 to 30 minutes doubling).
+- Manual **AI Usage: Refresh**, and clicking a service's usage row in the details panel, bypass the check interval
+  but still honour a shared backoff after a rate-limit or server error (`Retry-After` when sent, otherwise 1 to
+  30 minutes doubling) and, for Claude, the call budget below.
+- `aiUsage.claude.api.minIntervalSeconds` (30): the smallest gap between two calls to Anthropic's usage endpoint,
+  counted across all open windows, every saved account and manual refreshes. Anthropic rate-limits this endpoint
+  and does not document the limit, so the extension also adopts a stricter spacing when a response advertises one
+  (`anthropic-ratelimit-requests-remaining`/`-reset`, or `Retry-After`): whatever quota a response reports is
+  spread over the rest of its window. A refresh that arrives too early shows the cached reading and says when the
+  next call is due. `0` leaves only the service's own limits.
 
 ## Other settings
 
@@ -84,22 +91,28 @@ safely to its saved profile (Codex account id, Claude organization, or an identi
 is captured before switching away. If a saved profile stops working with "Login token expired", log in with that
 account natively and use **Save current login** to replace the profile.
 
-### What happens to running Codex chats
+### What happens to running Codex sessions
 
-Codex re-reads `auth.json` whenever a turn starts, so after a switch every open Codex chat that shares the same
-Codex home continues on the new account from its next turn; nothing has to be restarted and no prompt is injected.
+A switch replaces `auth.json`, and every Codex process started afterwards, such as `codex` in a new terminal, uses
+the new login. Processes that were already running do not: Codex keeps its login in memory, notices on its next turn
+that the file changed underneath it and fails that turn with *"signed in to another account"* rather than adopting
+the new credentials (verified against Codex 0.154.0). The Codex VS Code extension starts its `app-server` once and
+never respawns it, VS Code cannot restart a single extension, and the extension's own recovery path is a full window
+reload. AI Usage therefore says so in the switch message and, in each window whose Codex process predates the switch,
+shows one warning per switch with a **Restart extensions** action. That restarts only that window's extension host;
+editors and terminals stay open and Codex chats reopen from their local session files. Nothing is killed and nothing
+restarts by itself. Set `aiUsage.codex.switchRestartHint` to `false` to silence the warning.
+
 Right after the write, AI Usage starts a fresh `codex app-server` on the native home and checks that the login it
-reports (`getAuthStatus`, falling back to `account/read`) is the activated profile. A mismatch, such as an imported
-copy whose refresh token has since been rotated, is shown as an error instead of the success message; the previous
-`auth.json` remains recoverable from its saved profile because refreshed tokens are captured before every switch.
+reports (`getAuthStatus`, falling back to `account/read`) is the activated profile. A mismatch is shown as an error
+instead of the success message; the previous `auth.json` remains recoverable from its saved profile because refreshed
+tokens are captured before every switch.
 
-The Codex extension spawns its `app-server` once per window and never respawns it. A server started before the
-switch may keep using the previous tokens in its background paths (model list, connection prewarm) and show
-sign-in errors. Each window checks once a minute whether its own Codex process predates the last switch and then
-shows, once per switch, *"Codex switched to “…”, but this window's Codex process started before the switch and may
-still use the previous login."* with a **Restart extensions** action. Choosing it restarts only that window's
-extension host (`workbench.action.restartExtensionHost`); editors and terminals stay open, Codex chats reopen from
-their local session files. AI Usage never kills a Codex process and never restarts anything on its own.
+**Never save one login twice.** Both vendors rotate the refresh token on every refresh. Two saved profiles of the same
+account are refreshed independently by the keep-alive and by switching, so one of them eventually reuses a rotated
+refresh token, and the provider then revokes the whole login (`token_revoked`); only a fresh `codex login` or
+`claude` sign-in repairs that. AI Usage shows each profile's email, marks duplicates in the menu and warns before
+saving a login whose email is already saved.
 
 If you would rather keep two accounts side by side than switch one home, start a VS Code window with
 `CODEX_HOME=~/.codex-<account>`: the Codex extension resolves its home from that variable and AI Usage follows it
@@ -125,15 +138,13 @@ Status-bar items turn yellow when any displayed window reaches 80% usage and red
 ## Account automation
 
 Save or import each subscription login in **AI Usage: Manage Claude/Codex Authentication Profiles**. Under each
-provider's **Accounts → Account features** menu you can switch accounts manually and enable or disable
-**Account keep-alive and usage collection** and **Automatic account rotation**. Both features default to off
-and are stored for the extension host where the menu is used.
-
-The Settings page contains configuration values only: periods, rotation thresholds, models, CLI paths, dedicated
-homes, usage sources and check intervals. Feature enable switches intentionally live in the Accounts menu.
+provider's **Accounts** menu you can switch accounts manually and send a keep-alive on demand; both features are
+turned on in Settings, per provider, and default to off. The menu shows their current state and links to Settings.
 
 | Setting suffix (`aiUsage.claude.` / `aiUsage.codex.`) | Claude default | Codex default | Purpose |
 | --- | --- | --- | --- |
+| `keepAlive.enabled` | `false` | `false` | Periodically check every saved account, including inactive ones. |
+| `autoRotate.enabled` | `false` | `false` | Switch accounts automatically once the active one reaches the threshold. |
 | `keepAlive.periodHours` | `2` | `6` | Per-account keep-alive period, minimum 0.25 hours. |
 | `autoRotate.thresholdPercent` | `99.5` | `99.5` | Rotate when any reported usage window reaches this percentage. |
 | `keepAlive.home` | `~/.claude-tmp` | `~/.codex-tmp` | Dedicated CLI home; must be separate from the native home. |

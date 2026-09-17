@@ -69,8 +69,10 @@ profiles belong to the extension host (local, SSH, WSL, or container) where the 
 ### Account keep-alives and automatic rotation
 
 Open the **AI Usage** menu (click a usage item), then choose **Accounts** under Claude or Codex. This menu lets
-you switch accounts manually, save the current login to a new or existing profile, and enable or disable **Account keep-alive and usage collection** and
-**Automatic account rotation** independently for each provider.
+you switch accounts manually, save the current login to a new or existing profile, and send a keep-alive on
+demand. **Account keep-alive and usage collection** (`aiUsage.<service>.keepAlive.enabled`) and **automatic
+account rotation** (`aiUsage.<service>.autoRotate.enabled`) are turned on in Settings, independently per service;
+the menu shows what each one is set to.
 
 - Claude sends `what is date today` using `haiku` every **2 hours** per saved account, in `~/.claude-tmp`.
 - Codex sends the same small request every **6 hours** per saved account, using `gpt-5.6-luna` in `~/.codex-tmp`, then

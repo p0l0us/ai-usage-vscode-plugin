@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
+import { ApiCallBudget } from './apiBudget';
 import { AuthProvider } from './authFiles';
 import { AuthProfileManager } from './authProfiles';
 import { AccountAutomation, AutomationSettings } from './accountAutomation';
@@ -87,6 +88,8 @@ type LiveProvider = {
   cacheDiscriminator?: () => Promise<string | undefined>;
   /** Name of the extension-managed authentication profile currently selected for this provider. */
   activeProfileName?: () => string | undefined;
+  /** Shared call spacing for providers read through a rate-limited service endpoint. */
+  budget?: ApiCallBudget;
   last?: LiveResult;
   /** Most recent successful reading, kept so errors do not blank the item. */
   lastGood?: LiveUsage;
@@ -109,6 +112,15 @@ function settingsFor(provider: ProviderId) {
     /** How often the source is called and the result stored in the shared cache. */
     checkIntervalMs: Math.max(1, check ?? legacy ?? DEFAULT_CHECK_MINUTES[provider]) * 60_000
   };
+}
+
+/**
+ * Smallest gap between two calls to Anthropic's usage endpoint, counted across every window, every
+ * saved account and manual refreshes (`aiUsage.claude.api.minIntervalSeconds`).
+ */
+function claudeMinIntervalMs(): number {
+  const seconds = vscode.workspace.getConfiguration().get<number>('aiUsage.claude.api.minIntervalSeconds', 30);
+  return Math.min(600, Math.max(0, Number.isFinite(seconds) ? seconds : 30)) * 1000;
 }
 
 /** How often every window re-reads the shared cache and redraws (`aiUsage.updateIntervalMinutes`). */
@@ -141,10 +153,14 @@ export function activate(context: vscode.ExtensionContext): void {
     async (provider, credential) => provider === 'codex'
       ? verifyCodexNativeAccount(credential, vscode.workspace.getConfiguration().get<string>('aiUsage.codex.cliPath') || 'codex')
       : undefined);
+  void authProfiles.migrateAutomationSettings().catch((error) =>
+    log(`could not move the account feature switches to settings: ${error instanceof Error ? error.message : String(error)}`));
   const status = vscode.window.createStatusBarItem(STATUS_ALIGNMENT, STATUS_PRIORITY.manual);
   status.command = 'aiUsage.showDetails';
   status.name = 'AI Usage';
   context.subscriptions.push(status);
+  const claudeBudget = new ApiCallBudget(
+    path.join(context.globalStorageUri.fsPath, 'claude-api-budget.json'), claudeMinIntervalMs);
 
   const liveProviders: LiveProvider[] = [
     {
@@ -153,7 +169,8 @@ export function activate(context: vscode.ExtensionContext): void {
       icon: 'claude',
       settingKey: 'aiUsage.claude.enabled',
       status: vscode.window.createStatusBarItem(STATUS_ALIGNMENT, STATUS_PRIORITY.claude),
-      fetch: fetchClaudeUsage,
+      fetch: () => fetchClaudeUsage(undefined, claudeBudget),
+      budget: claudeBudget,
       cacheDiscriminator: async () => authProfiles.cacheDiscriminator('claude'),
       activeProfileName: () => authProfiles.activeProfileName('claude')
     },
@@ -273,6 +290,13 @@ export function activate(context: vscode.ExtensionContext): void {
         // Another window is fetching right now; its result will show up in the cache shortly.
         log(`${provider.id}: another window is fetching, waiting for the shared cache`);
         result = provider.last ?? (cached ? { kind: 'ok', usage: cached } : undefined);
+      } else if (provider.budget && !provider.budget.reserve(now)) {
+        // The service endpoint is called for every account and on every manual refresh; a reading
+        // that has to wait for its slot is shown from the cache instead of spending the quota.
+        cache.release(key);
+        const seconds = Math.ceil((provider.budget.nextAllowedAt(now) - now) / 1000);
+        log(`${provider.id}: usage endpoint call skipped, next call allowed in ${seconds}s`);
+        result = provider.last ?? (cached ? { kind: 'ok', usage: cached } : undefined);
       } else {
         // Fetch in the background: keep whatever is currently shown (previous reading or nothing
         // on first load) until the new result arrives.
@@ -324,7 +348,8 @@ export function activate(context: vscode.ExtensionContext): void {
   };
 
   context.subscriptions.push(vscode.commands.registerCommand('aiUsage.showDetails', (providerId?: unknown) =>
-    showDetailsPanel(liveProviders, refreshAll, typeof providerId === 'string' ? (providerId as ProviderId) : undefined)
+    showDetailsPanel(liveProviders, refreshAll, (provider) => refreshProvider(provider, true),
+      typeof providerId === 'string' ? (providerId as ProviderId) : undefined)
   ));
 
   context.subscriptions.push(vscode.commands.registerCommand('aiUsage.refresh', refreshAll));
@@ -334,6 +359,12 @@ export function activate(context: vscode.ExtensionContext): void {
    * extension never respawns it; offer an extension-host restart once per switch in each affected window.
    */
   const warnAboutStaleCodexProcesses = async (): Promise<void> => {
+    // Verified against Codex 0.154.0: a running app-server keeps its login in memory. When auth.json changes
+    // underneath it, its next turn fails with "signed in to another account" instead of adopting the new login,
+    // and the Codex extension never respawns the process. Restarting the extension host is the only repair.
+    if (!vscode.workspace.getConfiguration().get<boolean>('aiUsage.codex.switchRestartHint', true)) {
+      return;
+    }
     const record = context.globalState.get<CodexSwitchRecord>(CODEX_SWITCH_KEY);
     if (!record || context.workspaceState.get<number>(CODEX_SWITCH_NOTIFIED_KEY) === record.switchedAt) {
       return;
@@ -345,7 +376,7 @@ export function activate(context: vscode.ExtensionContext): void {
     await context.workspaceState.update(CODEX_SWITCH_NOTIFIED_KEY, record.switchedAt);
     log(`codex: app-server pid ${stale.map((process) => process.pid).join(', ')} started before the switch to "${record.profileName}"`);
     const choice = await vscode.window.showWarningMessage(
-      `Codex switched to “${record.profileName}”, but this window's Codex process started before the switch and may still use the previous login. Restart extensions to apply it to open chats.`,
+      `Codex switched to “${record.profileName}”, but this window's Codex extension started before the switch and keeps the previous login; its chats will fail until extensions restart. Restart extensions to use the new login in Codex here.`,
       'Restart extensions', 'Later');
     if (choice === 'Restart extensions') {
       await vscode.commands.executeCommand('workbench.action.restartExtensionHost');
@@ -368,7 +399,7 @@ export function activate(context: vscode.ExtensionContext): void {
   automation = new AccountAutomation(path.join(context.globalStorageUri.fsPath, 'account-usage'), authProfiles,
     (provider) => automationSettings(provider, authProfiles), afterProfileActivated, log, async (provider, credential, settings, keepAlive, signal) => {
       await liveProviders.find((candidate) => candidate.id === provider)?.inFlight;
-      return probeAccount(provider, credential, settings, keepAlive, signal);
+      return probeAccount(provider, credential, settings, keepAlive, signal, provider === 'claude' ? claudeBudget : undefined);
     });
   context.subscriptions.push(automation);
   const accountTimer = setInterval(() => {
@@ -932,9 +963,12 @@ function buildTooltip(usage: LiveUsage, refreshError?: string, activeProfile?: s
   }
   const heading = usage.subtitle ? `${usage.title} · ${usage.subtitle}` : usage.title;
   md.appendMarkdown(`**${heading}**${usage.plan ? ` · ${usage.plan}` : ''}\n\n`);
+  // The details panel shows one compact row per service, so the full window names and exact reset
+  // times live here.
   for (const window of usage.windows) {
     const reset = formatResetIn(window.resetsAt);
-    md.appendMarkdown(`- **${window.label}**: ${window.usedPercent}% used${reset ? ` · ${reset}` : ''}\n`);
+    const at = reset && window.resetsAt ? ` (${window.resetsAt.toLocaleString()})` : '';
+    md.appendMarkdown(`- **${windowName(window.label)}**: ${window.usedPercent}% used${reset ? ` · ${reset}${at}` : ''}\n`);
   }
   if (usage.details?.length) {
     md.appendMarkdown('\n');
@@ -951,8 +985,8 @@ function buildTooltip(usage: LiveUsage, refreshError?: string, activeProfile?: s
 }
 
 type DetailItem = vscode.QuickPickItem & {
-  action?: 'refresh' | 'log' | 'settings' | 'connect' | 'all' | 'profiles';
-  providerId?: AuthProvider;
+  action?: 'refresh' | 'refreshProvider' | 'log' | 'settings' | 'connect' | 'all' | 'profiles';
+  providerId?: ProviderId;
 };
 
 const WINDOW_NAMES: Record<string, string> = {
@@ -1033,24 +1067,25 @@ function providerItems(provider: LiveProvider): DetailItem[] {
     }
   }
 
-  for (const window of usage!.windows) {
-    const reset = formatResetIn(window.resetsAt);
-    items.push({
-      label: `${usageIcon(window.usedPercent)} ${windowName(window.label)}`,
-      description: `${window.usedPercent}% used · ${100 - window.usedPercent}% left`,
-      detail: reset ? `${reset[0].toUpperCase()}${reset.slice(1)}${window.resetsAt ? ` (${window.resetsAt.toLocaleString()})` : ''}` : undefined
-    });
-  }
+  // One row per service: every window with its countdown, the age of the reading, and a refresh on
+  // click. Window names and exact reset times stay one hover away in the status bar tooltip.
+  const now = new Date();
+  const { source, checkIntervalMs } = settingsFor(provider.id);
+  const throttledMs = provider.budget ? provider.budget.nextAllowedAt(now.getTime()) - now.getTime() : 0;
+  items.push({
+    label: `${usageIcon(worstPercent(usage!))} ${usage!.windows.map((window) => `${window.label} ${usagePart(window, now)}`).join(' · ')}`,
+    description: `Updated ${usage!.fetchedAt.toLocaleTimeString()}`,
+    detail: `Refresh now · ${SOURCE_LABELS[source] ?? source} · checked every ${Math.round(checkIntervalMs / 60_000)} min · ` +
+      (throttledMs > 0
+        ? `next call to the service allowed in ${Math.ceil(throttledMs / 1000)}s`
+        : `display refreshed every ${Math.round(updateIntervalMs() / 60_000)} min`),
+    action: 'refreshProvider',
+    providerId: provider.id
+  });
   for (const line of usage!.details ?? []) {
     const [key, ...rest] = line.split(': ');
     items.push(rest.length ? { label: `$(info) ${key}`, description: rest.join(': ') } : { label: `$(info) ${line}` });
   }
-  const { source, checkIntervalMs } = settingsFor(provider.id);
-  items.push({
-    label: '$(history) Updated',
-    description: usage!.fetchedAt.toLocaleTimeString(),
-    detail: `Source: ${SOURCE_LABELS[source] ?? source} · checked every ${Math.round(checkIntervalMs / 60_000)} min · display refreshed every ${Math.round(updateIntervalMs() / 60_000)} min`
-  });
   return items;
 }
 
@@ -1058,7 +1093,8 @@ function providerItems(provider: LiveProvider): DetailItem[] {
  * Details panel. With `focus` set (a chat chip was clicked) only that provider is shown, with
  * an action to expand to all providers; without it every provider is listed.
  */
-async function showDetailsPanel(providers: LiveProvider[], refreshAll: () => Promise<void>, focus?: ProviderId): Promise<void> {
+async function showDetailsPanel(providers: LiveProvider[], refreshAll: () => Promise<void>,
+  refreshOne: (provider: LiveProvider) => Promise<void>, focus?: ProviderId): Promise<void> {
   let focused: LiveProvider | undefined = providers.find((provider) => provider.id === focus);
   const build = (): DetailItem[] => {
     const items: DetailItem[] = [];
@@ -1106,9 +1142,10 @@ async function showDetailsPanel(providers: LiveProvider[], refreshAll: () => Pro
     if (!picked?.action) {
       return;
     }
-    if (picked.action === 'refresh') {
+    if (picked.action === 'refresh' || picked.action === 'refreshProvider') {
+      const target = providers.find((candidate) => candidate.id === picked.providerId);
       picker.busy = true;
-      await refreshAll();
+      await (picked.action === 'refreshProvider' && target ? refreshOne(target) : refreshAll());
       picker.items = build();
       picker.busy = false;
       return;

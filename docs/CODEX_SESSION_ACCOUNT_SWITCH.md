@@ -181,3 +181,23 @@ Implemented on `main` as specified in §6, with these deviations found while imp
 - **Where the verification runs.** `AuthProfileManager.activate()` takes an optional verifier (passed from `extension.ts`) and shows the error *instead of* the success message, which the `afterActivate` hook could not do because the success message was already shown by then. `syncActiveProfile()` and `refreshedCredential()` are unchanged.
 - **Once per switch per window** is keyed by `switchedAt` in `workspaceState` (`aiUsage.codexSwitchNotified.v1`); the switch record lives in `globalState` (`aiUsage.codexSwitch.v1`). Stage C option 2 (reading `logs_2.sqlite`) was not implemented.
 - Files: `src/live.ts` (`codexRpc`, `compareCodexAccount`, `verifyCodexNativeAccount`), `src/codexProcesses.ts` (new), `src/authProfiles.ts`, `src/extension.ts`, `docs/CONFIGURATION.md`, `docs/INTERNALS.md`, tests `test/codexVerify.test.js`, `test/codexProcesses.test.js`, `test/authFiles.test.js` and new cases in `test/authProfiles.test.js`.
+
+## 12. Correction after live testing (2026-09-17, later)
+
+The §3 conclusion that a running process follows a rewritten `auth.json` on its next turn is **wrong** for the
+AI Usage switch. Tested with one long-lived `codex -c features.code_mode_host=true app-server` (0.154.0) whose
+`CODEX_HOME/auth.json` was atomically replaced between requests:
+
+- `getAuthStatus`, `account/read` and `account/rateLimits/read` kept answering from memory after the swap, with and
+  without `cli_auth_credentials_store="file"`, also two seconds later and after `getAuthStatus { refreshToken: true }`.
+- `thread/start` + `turn/start` after the swap failed with *"Your access token could not be refreshed because you
+  have since logged out or signed in to another account. Please sign in again."* The guarded reload detects the
+  change and refuses; it does not adopt the new credentials. **verified**
+- The §3 evidence (`Reloaded auth, changed: true` after `codex login`) therefore shows the reload, not adoption.
+  Acceptance criterion 1 is not achievable without restarting the process; criterion 4's restart offer is the only
+  repair and is now on by default (`aiUsage.codex.switchRestartHint`). VS Code offers no per-extension restart; the
+  Codex extension's own "server-restart" path calls `workbench.action.reloadWindow`.
+- New hazard found the same day: two saved profiles holding the same account (`Codex account 1` and
+  `Codex account 4 (Frydl)`) were refreshed independently by keep-alives and by a switch between them; the provider
+  revoked the login (`401 token_revoked`, "invalidated oauth token for user") within the hour. Profiles now record the
+  login email, mark duplicates and warn before a second copy is saved.

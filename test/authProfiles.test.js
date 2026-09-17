@@ -6,7 +6,11 @@ const os = require('node:os');
 const Module = require('node:module');
 const informationMessages = [];
 const errorMessages = [];
+const warningMessages = [];
+const warningResponses = [];
+const inputBoxResponses = [];
 const quickPickResponses = [];
+const settings = new Map();
 // This suite exercises SecretStorage/native-file behavior without a running VS Code host.
 const load = Module._load;
 Module._load = function(id, ...args) {
@@ -15,12 +19,22 @@ Module._load = function(id, ...args) {
     window: {
       showInformationMessage(message) { informationMessages.push(message); },
       showErrorMessage(message) { errorMessages.push(message); },
+      showWarningMessage(message) { warningMessages.push(message); return warningResponses.shift(); },
+      showInputBox: async () => inputBoxResponses.shift(),
       showQuickPick(items) {
         const response = quickPickResponses.shift();
         return typeof response === 'function' ? response(items) : response;
       }
     },
-    workspace: { getConfiguration: () => ({ get: (_key, fallback) => fallback }) }
+    ConfigurationTarget: { Global: 1, Workspace: 2, WorkspaceFolder: 3 },
+    commands: { executeCommand: async () => undefined },
+    workspace: {
+      getConfiguration: () => ({
+        get: (key, fallback) => (settings.has(key) ? settings.get(key) : fallback),
+        inspect: (key) => ({ globalValue: settings.get(key) }),
+        update: async (key, value) => { settings.set(key, value); }
+      })
+    }
   };
   return load.call(this, id, ...args);
 };
@@ -30,7 +44,11 @@ Module._load = load;
 function fixture(t, verify) {
   informationMessages.length = 0;
   errorMessages.length = 0;
+  warningMessages.length = 0;
+  warningResponses.length = 0;
+  inputBoxResponses.length = 0;
   quickPickResponses.length = 0;
+  settings.clear();
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-profile-'));
   const previous = process.env.CLAUDE_CONFIG_DIR;
   const previousCodex = process.env.CODEX_HOME;
@@ -65,23 +83,39 @@ function fixture(t, verify) {
     secrets: { get: async key => secrets.get(key), store: async (key, value) => { secrets.set(key, value); } }
   }, () => {}, undefined, verify, async (provider, credential) =>
     provider === 'codex' ? (credential.tokens?.account_id === 'acc-x' ? 'x@example.com' : undefined) : (credential.claudeAiOauth?.accessToken === 'after' ? 'a@example.com' : undefined));
-  return { manager, before, after, file, secrets, state, globalValues, codex, codexFile: path.join(home, 'auth.json') };
+  return { manager, before, after, file, secrets, state, globalValues, settings, codex, codexFile: path.join(home, 'auth.json') };
 }
 
-test('account feature switches are stored in extension state per provider', async t => {
+test('account feature switches are ordinary settings per provider', async t => {
   const f = fixture(t);
   assert.equal(f.manager.automationEnabled('claude', 'keepAlive'), false);
   assert.equal(f.manager.automationEnabled('codex', 'autoRotate'), false);
   await f.manager.setAutomationEnabled('claude', 'keepAlive', true);
   await f.manager.setAutomationEnabled('codex', 'autoRotate', true);
+  assert.equal(f.settings.get('aiUsage.claude.keepAlive.enabled'), true);
+  assert.equal(f.settings.get('aiUsage.codex.autoRotate.enabled'), true);
   assert.equal(f.manager.automationEnabled('claude', 'keepAlive'), true);
   assert.equal(f.manager.automationEnabled('claude', 'autoRotate'), false);
   assert.equal(f.manager.automationEnabled('codex', 'keepAlive'), false);
   assert.equal(f.manager.automationEnabled('codex', 'autoRotate'), true);
-  assert.deepEqual(f.globalValues.get('aiUsage.accountAutomation.v1'), {
-    claude: { keepAlive: true, autoRotate: false },
-    codex: { keepAlive: false, autoRotate: true }
+});
+
+test('switches saved by the previous menu toggles move into settings once', async t => {
+  const f = fixture(t);
+  settings.set('aiUsage.claude.keepAlive.enabled', false);
+  f.globalValues.set('aiUsage.accountAutomation.v1', {
+    claude: { keepAlive: true, autoRotate: true },
+    codex: { keepAlive: true, autoRotate: false }
   });
+  await f.manager.migrateAutomationSettings();
+  assert.equal(f.manager.automationEnabled('claude', 'autoRotate'), true);
+  assert.equal(f.manager.automationEnabled('codex', 'keepAlive'), true);
+  assert.equal(f.manager.automationEnabled('codex', 'autoRotate'), false);
+  // A setting the user already chose wins over the state left behind by the old menu.
+  assert.equal(f.manager.automationEnabled('claude', 'keepAlive'), false);
+  assert.equal(f.globalValues.get('aiUsage.accountAutomation.v1'), undefined);
+  await f.manager.migrateAutomationSettings();
+  assert.equal(f.manager.automationEnabled('codex', 'keepAlive'), true);
 });
 
 test('active background refresh updates native and secret credentials while preserving MCP data', async t => {
@@ -145,11 +179,11 @@ test('Codex activation tells the user open chats follow on their next turn', asy
   assert.equal(await f.manager.activateProfile('codex', 'x'), true);
   assert.deepEqual(JSON.parse(fs.readFileSync(f.codexFile)), f.codex);
   assert.deepEqual(verified, [['codex', f.codex]]);
-  assert.deepEqual(informationMessages, ['Codex switched to “X”. Open chats use this login from their next turn.']);
+  assert.deepEqual(informationMessages, ['Codex switched to “X”. New Codex CLI sessions use it now; the Codex extension needs an extension restart.']);
   assert.deepEqual(errorMessages, []);
   informationMessages.length = 0;
   assert.equal(await f.manager.activateProfile('codex', 'x', true), true);
-  assert.deepEqual(informationMessages, ['AI Usage: Codex automatically rotated to account “X”. Open chats use this login from their next turn.']);
+  assert.deepEqual(informationMessages, ['AI Usage: Codex automatically rotated to account “X”. New Codex CLI sessions use it now; the Codex extension needs an extension restart.']);
 });
 
 test('a verifier mismatch replaces the success message with an error and keeps the profile active', async t => {
@@ -165,7 +199,7 @@ test('a verifier mismatch replaces the success message with an error and keeps t
 test('an unverifiable or failing verifier still reports success', async t => {
   const f = fixture(t, async () => { throw new Error('codex not installed'); });
   assert.equal(await f.manager.activateProfile('codex', 'x'), true);
-  assert.deepEqual(informationMessages, ['Codex switched to “X”. Open chats use this login from their next turn.']);
+  assert.deepEqual(informationMessages, ['Codex switched to “X”. New Codex CLI sessions use it now; the Codex extension needs an extension restart.']);
   assert.deepEqual(errorMessages, []);
 });
 
@@ -193,4 +227,26 @@ test('profiles saved before emails were recorded are backfilled when the menu op
   await f.manager.show('codex');
   assert.equal(f.globalValues.get('aiUsage.authProfiles.v1').codex.profiles[0].email, 'x@example.com');
   assert.equal(f.manager.items('codex').find(item => item.profile?.id === 'x').description, 'x@example.com');
+});
+
+test('saving a login that is already saved warns about token revocation and marks the duplicate', async t => {
+  const f = fixture(t);
+  // Profile X already records its email; the native Codex file holds that same account.
+  f.globalValues.get('aiUsage.authProfiles.v1').codex.profiles[0].email = 'x@example.com';
+  fs.writeFileSync(f.codexFile, JSON.stringify(f.codex));
+  quickPickResponses.push(items => items.find(item => item.create));
+  warningResponses.push(undefined); // user dismisses the warning
+  assert.equal(await f.manager.saveCurrent('codex'), false);
+  assert.equal(warningMessages.length, 1);
+  assert.match(warningMessages[0], /already saved as “X”.*revoked/);
+  assert.equal(f.globalValues.get('aiUsage.authProfiles.v1').codex.profiles.length, 1);
+  // Accepting the copy still works, and the menu marks both entries as duplicates of each other.
+  quickPickResponses.push(items => items.find(item => item.create));
+  warningResponses.push('Save a copy anyway');
+  inputBoxResponses.push('X copy');
+  assert.equal(await f.manager.saveCurrent('codex'), true);
+  const items = f.manager.items('codex').filter(item => item.profile);
+  assert.equal(items.length, 2);
+  assert.equal(items[0].description, 'x@example.com · duplicate of “X copy”');
+  assert.equal(items[1].description, 'x@example.com · duplicate of “X” · Active');
 });
