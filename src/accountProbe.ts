@@ -77,10 +77,33 @@ export function keepAliveArgs(provider: AuthProvider, model: string): string[] {
     ...(model ? ['--model', model] : []), prompt];
 }
 
+/** Most useful line of a failed CLI's stderr: the message of the last `ERROR: {json}` line, else the last line. */
+export function describeCliFailure(stderr: string): string | undefined {
+  const lines = stderr.split(/\r?\n/).map((line) => line.trim()).filter((line) => line && !line.startsWith('WARNING:'));
+  const errors = lines.filter((line) => /^ERROR\b/i.test(line) || /"error"/.test(line));
+  const line = errors[errors.length - 1] ?? lines[lines.length - 1];
+  if (!line) { return undefined; }
+  const json = line.indexOf('{');
+  if (json >= 0) {
+    try {
+      const parsed = JSON.parse(line.slice(json)) as { error?: { message?: string }; message?: string };
+      const message = parsed.error?.message ?? parsed.message;
+      if (typeof message === 'string' && message) { return message.slice(0, 200); }
+    } catch { /* Not JSON; fall through to the raw line. */ }
+  }
+  return line.replace(/^ERROR:?\s*/i, '').slice(0, 200);
+}
+
 export function runKeepAlive(cli: string, args: string[], home: string, env: NodeJS.ProcessEnv, signal: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
     if (signal.aborted) { reject(new Error('Account check cancelled.')); return; }
-    const child = spawn(cli, args, { cwd: home, env, stdio: 'ignore', windowsHide: true });
+    // Output is kept (bounded) so a failure can say why, e.g. a usage limit or an unsupported model.
+    // Claude Code prints such errors to stdout in --print mode; Codex prints them to stderr.
+    const child = spawn(cli, args, { cwd: home, env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+    let stderr = '';
+    let stdout = '';
+    child.stderr?.on('data', (chunk) => { if (stderr.length < 16_384) { stderr += String(chunk); } });
+    child.stdout?.on('data', (chunk) => { if (stdout.length < 16_384) { stdout += String(chunk); } });
     let failure: string | undefined;
     const stop = () => { failure = 'Account check cancelled.'; child.kill('SIGKILL'); };
     const timer = setTimeout(() => { failure = 'Keep-alive timed out after 90 seconds.'; child.kill('SIGKILL'); }, 90_000);
@@ -89,7 +112,10 @@ export function runKeepAlive(cli: string, args: string[], home: string, env: Nod
     child.once('error', () => { cleanup(); reject(new Error('Could not start the keep-alive CLI. Check its configured path.')); });
     child.once('close', (code) => {
       cleanup();
-      if (failure || code !== 0) { reject(new Error(failure ?? `Keep-alive CLI exited with code ${code}.`)); }
+      if (failure || code !== 0) {
+        const reason = describeCliFailure(stderr) ?? describeCliFailure(stdout);
+        reject(new Error(failure ?? `Keep-alive CLI exited with code ${code}${reason ? `: ${reason}` : '.'}`));
+      }
       else { resolve(); }
     });
   });

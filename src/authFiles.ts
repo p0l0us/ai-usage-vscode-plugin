@@ -145,7 +145,9 @@ function nestedString(value: StoredCredential, objectKey: string, key: string): 
 
 /**
  * True when a native credential can safely refresh the stored copy of the active profile.
- * Codex exposes a stable account id; Claude is matched conservatively by its refresh token.
+ * Codex exposes a stable account id. Claude Code rotates the refresh token on every token refresh,
+ * so a refreshed Claude login is recognised by the root `organizationUuid` it keeps beside the OAuth
+ * object; the refresh token is only compared when either document lacks that id.
  */
 export function isSameCredentialOwner(provider: AuthProvider, stored: StoredCredential, native: StoredCredential): boolean {
   if (JSON.stringify(stored) === JSON.stringify(native)) {
@@ -163,5 +165,10 @@ export function isSameCredentialOwner(provider: AuthProvider, stored: StoredCred
   }
   const storedRefresh = nestedString(stored, 'claudeAiOauth', 'refreshToken');
   const nativeRefresh = nestedString(native, 'claudeAiOauth', 'refreshToken');
-  return Boolean(storedRefresh && nativeRefresh && storedRefresh === nativeRefresh);
+  if (storedRefresh && nativeRefresh && storedRefresh === nativeRefresh) {
+    return true;
+  }
+  const storedOrganization = stored.organizationUuid;
+  const nativeOrganization = native.organizationUuid;
+  return nonEmptyString(storedOrganization) && nonEmptyString(nativeOrganization) && storedOrganization === nativeOrganization;
 }

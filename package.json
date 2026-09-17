@@ -2,7 +2,7 @@
   "name": "ai-usage-vscode-plugin",
   "displayName": "AI Usage",
   "description": "Live Claude Code, Codex and GitHub Copilot usage in the status bar and chat input: 5h/7d windows, premium requests, org billing, reset times on hover. Open source, contributions welcome.",
-  "version": "0.0.13",
+  "version": "0.0.14",
   "publisher": "p0l0us",
   "license": "GPL-3.0-only",
   "repository": {

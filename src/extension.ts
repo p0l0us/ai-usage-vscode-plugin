@@ -6,6 +6,7 @@ import { AuthProfileManager } from './authProfiles';
 import { AccountAutomation, AutomationSettings } from './accountAutomation';
 import { probeAccount } from './accountProbe';
 import { SharedCache, deserializeUsage } from './cache';
+import { findStaleCodexProcesses } from './codexProcesses';
 import {
   GitHubAccount,
   LiveResult,
@@ -17,7 +18,8 @@ import {
   fetchCodexUsageFromSessionLog,
   fetchCopilotUsage,
   formatResetIn,
-  formatResetRemaining
+  formatResetRemaining,
+  verifyCodexNativeAccount
 } from './live';
 import { compactTokenCount, readCurrentSessionTokens, SessionTokenUsage } from './sessionTokens';
 
@@ -117,6 +119,11 @@ function updateIntervalMs(): number {
 /** After this long, a reading shown in place of a failed refresh is greyed out. */
 const STALE_AFTER_MS = 15 * 60_000;
 const GITHUB_ACCESS_REQUESTED_KEY = 'aiUsage.githubAccessRequested';
+/** Last Codex profile switch, shared by every window so each can check its own Codex process (non-secret). */
+const CODEX_SWITCH_KEY = 'aiUsage.codexSwitch.v1';
+/** `switchedAt` of the switch this window has already warned about; at most one warning per switch per window. */
+const CODEX_SWITCH_NOTIFIED_KEY = 'aiUsage.codexSwitchNotified.v1';
+type CodexSwitchRecord = { switchedAt: number; profileName: string };
 /** Scopes used when asking the user to grant access; Copilot itself signs in with these. */
 const GITHUB_CONNECT_SCOPES = ['user:email'];
 
@@ -129,7 +136,11 @@ export function activate(context: vscode.ExtensionContext): void {
   output = vscode.window.createOutputChannel('AI Usage');
   context.subscriptions.push(output);
   let automation: AccountAutomation;
-  const authProfiles = new AuthProfileManager(context, log, (provider, id) => automation?.usageDetail(provider, id));
+  const authProfiles = new AuthProfileManager(context, log, (provider, id) => automation?.usageDetail(provider, id),
+    // A fresh app-server must see the login that was just written; a mismatch is reported instead of a success.
+    async (provider, credential) => provider === 'codex'
+      ? verifyCodexNativeAccount(credential, vscode.workspace.getConfiguration().get<string>('aiUsage.codex.cliPath') || 'codex')
+      : undefined);
   const status = vscode.window.createStatusBarItem(STATUS_ALIGNMENT, STATUS_PRIORITY.manual);
   status.command = 'aiUsage.showDetails';
   status.name = 'AI Usage';
@@ -317,6 +328,29 @@ export function activate(context: vscode.ExtensionContext): void {
   ));
 
   context.subscriptions.push(vscode.commands.registerCommand('aiUsage.refresh', refreshAll));
+  /**
+   * Codex re-reads auth.json when a turn starts, so running chats follow a switch by themselves. A Codex
+   * `app-server` started before the switch may still hold revoked tokens in its background paths, and the Codex
+   * extension never respawns it; offer an extension-host restart once per switch in each affected window.
+   */
+  const warnAboutStaleCodexProcesses = async (): Promise<void> => {
+    const record = context.globalState.get<CodexSwitchRecord>(CODEX_SWITCH_KEY);
+    if (!record || context.workspaceState.get<number>(CODEX_SWITCH_NOTIFIED_KEY) === record.switchedAt) {
+      return;
+    }
+    const stale = await findStaleCodexProcesses(record.switchedAt);
+    if (!stale.length || context.workspaceState.get<number>(CODEX_SWITCH_NOTIFIED_KEY) === record.switchedAt) {
+      return;
+    }
+    await context.workspaceState.update(CODEX_SWITCH_NOTIFIED_KEY, record.switchedAt);
+    log(`codex: app-server pid ${stale.map((process) => process.pid).join(', ')} started before the switch to "${record.profileName}"`);
+    const choice = await vscode.window.showWarningMessage(
+      `Codex switched to “${record.profileName}”, but this window's Codex process started before the switch and may still use the previous login. Restart extensions to apply it to open chats.`,
+      'Restart extensions', 'Later');
+    if (choice === 'Restart extensions') {
+      await vscode.commands.executeCommand('workbench.action.restartExtensionHost');
+    }
+  };
   const afterProfileActivated = async (provider: AuthProvider) => {
     const live = liveProviders.find((candidate) => candidate.id === provider)!;
     await live.inFlight;
@@ -324,6 +358,11 @@ export function activate(context: vscode.ExtensionContext): void {
     live.lastGood = undefined;
     renderLive(live);
     await updateChipContext(live, vscode.workspace.getConfiguration().get<boolean>('aiUsage.chatChips.enabled', true));
+    if (provider === 'codex') {
+      const record: CodexSwitchRecord = { switchedAt: Date.now(), profileName: authProfiles.activeProfileName('codex') ?? 'the selected profile' };
+      await context.globalState.update(CODEX_SWITCH_KEY, record);
+      void warnAboutStaleCodexProcesses();
+    }
     await refreshProvider(live, true, true);
   };
   automation = new AccountAutomation(path.join(context.globalStorageUri.fsPath, 'account-usage'), authProfiles,
@@ -332,7 +371,10 @@ export function activate(context: vscode.ExtensionContext): void {
       return probeAccount(provider, credential, settings, keepAlive, signal);
     });
   context.subscriptions.push(automation);
-  const accountTimer = setInterval(() => void automation.tick(), 60_000);
+  const accountTimer = setInterval(() => {
+    void automation.tick();
+    void warnAboutStaleCodexProcesses();
+  }, 60_000);
   context.subscriptions.push({ dispose: () => clearInterval(accountTimer) });
   context.subscriptions.push(vscode.commands.registerCommand('aiUsage.manageAuthProfiles', async (value?: unknown) => {
     const initial = value === 'claude' || value === 'codex' ? value as AuthProvider : undefined;

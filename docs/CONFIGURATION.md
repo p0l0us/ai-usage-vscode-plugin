@@ -62,6 +62,12 @@ JSON file, rename/delete profiles, or activate one of up to 20 profiles per serv
 profile id are non-secret extension metadata; credential bodies are stored individually in VS Code
 `SecretStorage`.
 
+Each saved profile shows the login email beside its name, so the same account saved twice is easy to spot. Codex
+emails come from the saved id token; Claude credentials carry no identity, so the email is read from the Claude
+OAuth profile endpoint (or the local Claude Code account file when offline) when a login is saved, replaced or
+refreshed, and once for older profiles when the menu opens. The email is stored with the profile name as non-secret
+metadata.
+
 The profile manager shows the active account alongside the available management actions:
 
 ![Codex authentication profile manager with two saved accounts](../images/screenshots/auth-profiles-codex.png)
@@ -74,7 +80,30 @@ Switching updates the same provider-native credential file used by its CLI and V
 an atomic replacement; its temporary and resulting file use mode `0600` on Linux/macOS and the containing
 user-profile directory's ACL on Windows. For Claude only the `claudeAiOauth` object is replaced, so `mcpOAuth.*`
 entries remain untouched. Codex `auth.json` is replaced as a unit. When the native active login can be matched
-safely to its saved profile, refreshed token data is captured before switching away.
+safely to its saved profile (Codex account id, Claude organization, or an identical refresh token), refreshed token data
+is captured before switching away. If a saved profile stops working with "Login token expired", log in with that
+account natively and use **Save current login** to replace the profile.
+
+### What happens to running Codex chats
+
+Codex re-reads `auth.json` whenever a turn starts, so after a switch every open Codex chat that shares the same
+Codex home continues on the new account from its next turn; nothing has to be restarted and no prompt is injected.
+Right after the write, AI Usage starts a fresh `codex app-server` on the native home and checks that the login it
+reports (`getAuthStatus`, falling back to `account/read`) is the activated profile. A mismatch, such as an imported
+copy whose refresh token has since been rotated, is shown as an error instead of the success message; the previous
+`auth.json` remains recoverable from its saved profile because refreshed tokens are captured before every switch.
+
+The Codex extension spawns its `app-server` once per window and never respawns it. A server started before the
+switch may keep using the previous tokens in its background paths (model list, connection prewarm) and show
+sign-in errors. Each window checks once a minute whether its own Codex process predates the last switch and then
+shows, once per switch, *"Codex switched to “…”, but this window's Codex process started before the switch and may
+still use the previous login."* with a **Restart extensions** action. Choosing it restarts only that window's
+extension host (`workbench.action.restartExtensionHost`); editors and terminals stay open, Codex chats reopen from
+their local session files. AI Usage never kills a Codex process and never restarts anything on its own.
+
+If you would rather keep two accounts side by side than switch one home, start a VS Code window with
+`CODEX_HOME=~/.codex-<account>`: the Codex extension resolves its home from that variable and AI Usage follows it
+for reading usage and for its profile commands, so the two windows stay independent.
 
 The extension is workspace-first. In Remote-SSH, WSL, and dev-container windows it runs remotely and manages that
 host's native credential files and SecretStorage. In an ordinary Windows/macOS/Linux window it runs locally. These
@@ -138,8 +167,9 @@ primary and secondary limits are considered. Missing, failed, incomplete or expi
 authorize a switch. If
 all candidates are exhausted, no native credential is changed. Another sweep may run after
 `aiUsage.<provider>.checkIntervalMinutes`, allowing accounts to become eligible after their limits reset.
-The selected account must still match the native login immediately before activation. Existing running vendor
-sessions may need to finish or be reopened to pick up a switched login, just as with manual switching.
+The selected account must still match the native login immediately before activation. As with manual switching,
+Codex chats that are already open continue on the new account from their next turn, and Claude picks the new login
+up on its next request.
 
 CLI behavior references: [OpenAI Docs: noninteractive Codex](https://learn.chatgpt.com/docs/non-interactive-mode)
 and [Claude CLI reference](https://code.claude.com/docs/en/cli-reference).

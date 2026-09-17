@@ -9,6 +9,7 @@ import {
   readNativeCredential,
   writeNativeCredential
 } from './authFiles';
+import { resolveCredentialEmail } from './accountIdentity';
 
 const STATE_KEY = 'aiUsage.authProfiles.v1';
 const AUTOMATION_STATE_KEY = 'aiUsage.accountAutomation.v1';
@@ -20,7 +21,14 @@ export type ProfileMetadata = {
   name: string;
   createdAt: string;
   updatedAt: string;
+  /** Login email behind the credential, shown beside the name so duplicate accounts are visible. */
+  email?: string;
 };
+
+/** Menu description: the account email, then the active marker. */
+function profileDescription(profile: ProfileMetadata, active: boolean): string | undefined {
+  return [profile.email, active ? 'Active' : undefined].filter(Boolean).join(' · ') || undefined;
+}
 
 type ProviderState = {
   profiles: ProfileMetadata[];
@@ -43,6 +51,24 @@ type ProfileHooks = {
 };
 
 const TITLES: Record<AuthProvider, string> = { claude: 'Claude', codex: 'Codex' };
+
+/** Outcome of checking, after the native file was written, which login the vendor tool now reports. */
+export type ActivationVerification = {
+  status: 'match' | 'mismatch' | 'unverified';
+  detail: string;
+};
+export type ActivationVerifier = (provider: AuthProvider, credential: StoredCredential) => Promise<ActivationVerification | undefined>;
+
+/** Codex reloads auth.json on its request path, so open chats follow a switch without a restart. */
+function activationMessage(provider: AuthProvider, name: string, automatic: boolean): string {
+  if (provider === 'codex') {
+    const followUp = 'Open chats use this login from their next turn.';
+    return automatic ? `AI Usage: Codex automatically rotated to account “${name}”. ${followUp}` : `Codex switched to “${name}”. ${followUp}`;
+  }
+  return automatic
+    ? `AI Usage: ${TITLES[provider]} automatically rotated to account “${name}”.`
+    : `${TITLES[provider]} switched to “${name}”. New requests will use this login.`;
+}
 
 function emptyState(): ProfileState {
   return { claude: { profiles: [] }, codex: { profiles: [] } };
@@ -67,7 +93,9 @@ export class AuthProfileManager {
   constructor(
     private readonly context: vscode.ExtensionContext,
     private readonly log: (message: string) => void,
-    private readonly usageDetail?: (provider: AuthProvider, id: string) => string | undefined
+    private readonly usageDetail?: (provider: AuthProvider, id: string) => string | undefined,
+    private readonly verifyActivation?: ActivationVerifier,
+    private readonly emailOf: (provider: AuthProvider, credential: StoredCredential) => Promise<string | undefined> = resolveCredentialEmail
   ) {}
 
   profiles(provider: AuthProvider): ProfileMetadata[] {
@@ -93,6 +121,28 @@ export class AuthProfileManager {
       } catch { return; /* Native login may have been removed externally. */ }
     }
     await this.storeSecret(provider, id, after);
+    await this.recordEmail(provider, id, after);
+  }
+
+  /** Stores the credential's email in the profile metadata when it is still unknown or has changed. */
+  private async recordEmail(provider: AuthProvider, id: string, credential: StoredCredential): Promise<void> {
+    let email: string | undefined;
+    try { email = await this.emailOf(provider, credential); } catch { return; }
+    if (!email) { return; }
+    const state = this.state();
+    const profile = state[provider].profiles.find((candidate) => candidate.id === id);
+    if (!profile || profile.email === email) { return; }
+    profile.email = email;
+    await this.updateState(state);
+  }
+
+  /** Resolves emails for saved profiles that were created before emails were recorded. */
+  private async backfillEmails(provider: AuthProvider): Promise<void> {
+    const missing = this.state()[provider].profiles.filter((profile) => !profile.email);
+    await Promise.all(missing.map(async (profile) => {
+      const credential = await this.readSecret(provider, profile.id);
+      if (credential) { await this.recordEmail(provider, profile.id, credential); }
+    }));
   }
 
   async matchesNative(provider: AuthProvider, id: string): Promise<boolean> {
@@ -157,6 +207,7 @@ export class AuthProfileManager {
       return;
     }
 
+    await this.backfillEmails(provider);
     // Management actions return to the list. Choosing a profile activates it and closes the menu.
     while (true) {
       const item = await vscode.window.showQuickPick(this.items(provider), {
@@ -256,7 +307,7 @@ export class AuthProfileManager {
     const providerState = this.state()[provider];
     const items: ProfileItem[] = providerState.profiles.map((profile) => ({
       label: `${profile.id === providerState.activeProfileId ? '$(check)' : '$(key)'} ${profile.name}`,
-      description: profile.id === providerState.activeProfileId ? 'Active' : undefined,
+      description: profileDescription(profile, profile.id === providerState.activeProfileId),
       detail: this.usageDetail?.(provider, profile.id) ?? `Saved ${new Date(profile.updatedAt).toLocaleString()} · Usage not checked yet`,
       profile
     }));
@@ -333,6 +384,7 @@ export class AuthProfileManager {
       providerState.activeProfileId = profile.id;
     }
     await this.updateState(state);
+    await this.recordEmail(provider, profile.id, credential);
     this.log(`${provider}: saved authentication profile "${name}"${active ? ' (active)' : ''}`);
   }
 
@@ -356,7 +408,7 @@ export class AuthProfileManager {
         { label: 'Update an existing profile', kind: vscode.QuickPickItemKind.Separator },
         ...providerState.profiles.map((profile) => ({
           label: `$(save) ${profile.name}`,
-          description: profile.id === providerState.activeProfileId ? 'Active' : undefined,
+          description: profileDescription(profile, profile.id === providerState.activeProfileId),
           detail: 'Replace this profile with the current native login.',
           profile
         }))
@@ -373,6 +425,7 @@ export class AuthProfileManager {
         target.updatedAt = new Date().toISOString();
         state[provider].activeProfileId = target.id;
         await this.updateState(state);
+        await this.recordEmail(provider, target.id, credential);
         this.log(`${provider}: updated authentication profile "${target.name}" from the current login`);
         void vscode.window.showInformationMessage(`${TITLES[provider]} profile “${target.name}” updated from the current login.`);
         return true;
@@ -440,10 +493,22 @@ export class AuthProfileManager {
     state[provider].activeProfileId = profile.id;
     await this.updateState(state);
     this.log(`${provider}: activated authentication profile "${profile.name}"`);
-    const message = automatic
-      ? `AI Usage: ${TITLES[provider]} automatically rotated to account “${profile.name}”.`
-      : `${TITLES[provider]} switched to “${profile.name}”. New requests will use this login.`;
-    void vscode.window.showInformationMessage(message);
+    // The file is written and the profile is active either way; verification only decides what to tell the user.
+    let verification: ActivationVerification | undefined;
+    try {
+      verification = await this.verifyActivation?.(provider, credential);
+    } catch (error) {
+      verification = { status: 'unverified', detail: errorMessage(error) };
+    }
+    if (verification) {
+      this.log(`${provider}: activation ${verification.status} — ${verification.detail}`);
+    }
+    if (verification?.status === 'mismatch') {
+      void vscode.window.showErrorMessage(
+        `AI Usage: ${TITLES[provider]} was switched to “${profile.name}”, but ${TITLES[provider]} reports a different login. ${verification.detail}`);
+    } else {
+      void vscode.window.showInformationMessage(activationMessage(provider, profile.name, automatic));
+    }
     return true;
   }
 
@@ -467,6 +532,7 @@ export class AuthProfileManager {
       active.updatedAt = new Date().toISOString();
       await this.updateState(state);
       this.log(`${provider}: captured refreshed tokens for profile "${active.name}"`);
+      if (!active.email) { await this.recordEmail(provider, active.id, native); }
     } catch {
       // A missing or temporarily incomplete native file must not prevent activating another profile.
     }
@@ -475,7 +541,7 @@ export class AuthProfileManager {
   private async pickSaved(provider: AuthProvider, title: string): Promise<ProfileMetadata | undefined> {
     const picked = await vscode.window.showQuickPick(this.state()[provider].profiles.map((profile) => ({
       label: profile.name,
-      description: profile.id === this.activeProfileId(provider) ? 'Active' : undefined,
+      description: profileDescription(profile, profile.id === this.activeProfileId(provider)),
       profile
     })), { title });
     return picked?.profile;

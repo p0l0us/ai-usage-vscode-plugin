@@ -427,13 +427,20 @@ export function resolveCli(command: string): string | undefined {
   return undefined;
 }
 
-/** Runs `codex app-server` over stdio and asks it for the account rate limits. */
-function codexRpcRateLimits(cli: string, env: NodeJS.ProcessEnv = process.env, cwd?: string): Promise<CodexRateLimitsResponse> {
+type CodexRpcRequest = { method: string; params?: unknown };
+type CodexRpcMessage = { id?: number; result?: unknown; error?: { message?: string } };
+
+/**
+ * Runs `codex app-server` over stdio, sends `initialize`, then each request in order in the same
+ * process, and resolves with their results. The process is killed once the last answer arrived.
+ */
+function codexRpc(cli: string, requests: CodexRpcRequest[], env: NodeJS.ProcessEnv = process.env, cwd?: string): Promise<unknown[]> {
   return new Promise((resolve, reject) => {
-    const child = spawn(cli, ['app-server', '-c', 'cli_auth_credentials_store="file"'], { stdio: ['pipe', 'pipe', 'pipe'], env, cwd });
+    const child = spawn(cli, ['app-server', '-c', 'cli_auth_credentials_store="file"'], { stdio: ['pipe', 'pipe', 'pipe'], env, cwd, windowsHide: true });
     let buffer = '';
     let stderr = '';
     let settled = false;
+    const results: unknown[] = [];
     const finish = (fn: () => void) => {
       if (!settled) {
         settled = true;
@@ -443,6 +450,9 @@ function codexRpcRateLimits(cli: string, env: NodeJS.ProcessEnv = process.env, c
       }
     };
     const timer = setTimeout(() => finish(() => reject(new Error('codex app-server did not answer in time'))), CODEX_CLI_TIMEOUT_MS);
+    const send = (id: number, request: CodexRpcRequest) => {
+      child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method: request.method, params: request.params ?? {} }) + '\n');
+    };
 
     child.on('error', (error) => finish(() => reject(error)));
     child.on('exit', (code) => finish(() => reject(new Error(`codex app-server exited (${code ?? 'signal'}): ${stderr.trim().slice(0, 200)}`))));
@@ -457,37 +467,161 @@ function codexRpcRateLimits(cli: string, env: NodeJS.ProcessEnv = process.env, c
         if (!line) {
           continue;
         }
-        let message: { id?: number; result?: unknown; error?: { message?: string } };
+        let message: CodexRpcMessage;
         try {
           message = JSON.parse(line);
         } catch {
           continue;
         }
-        if (message.id === 1) {
-          if (message.error) {
-            finish(() => reject(new Error(`initialize failed: ${message.error?.message ?? 'unknown error'}`)));
-            return;
-          }
-          child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'account/rateLimits/read', params: {} }) + '\n');
-        } else if (message.id === 2) {
-          if (message.error) {
-            finish(() => reject(new Error(message.error?.message ?? 'account/rateLimits/read failed')));
-          } else {
-            finish(() => resolve((message.result ?? {}) as CodexRateLimitsResponse));
-          }
+        if (typeof message.id !== 'number' || message.id < 1 || message.id > requests.length + 1) {
+          continue;
+        }
+        // id 1 is `initialize`; request n is sent with id n + 1.
+        const index = message.id - 2;
+        if (message.error) {
+          const name = index < 0 ? 'initialize' : requests[index].method;
+          finish(() => reject(new Error(`${name} failed: ${message.error?.message ?? 'unknown error'}`)));
+          return;
+        }
+        if (index >= 0) {
+          results[index] = message.result ?? {};
+        }
+        if (index + 1 < requests.length) {
+          send(message.id + 1, requests[index + 1]);
+        } else {
+          finish(() => resolve(results));
         }
       }
     });
 
-    child.stdin.write(
-      JSON.stringify({
-        jsonrpc: '2.0',
-        id: 1,
-        method: 'initialize',
-        params: { clientInfo: { name: 'ai-usage-vscode-plugin', title: 'AI Usage', version: '0.0.1' } }
-      }) + '\n'
-    );
+    send(1, { method: 'initialize', params: { clientInfo: { name: 'ai-usage-vscode-plugin', title: 'AI Usage', version: '0.0.1' } } });
   });
+}
+
+/** Asks a fresh `codex app-server` for the account rate limits. */
+async function codexRpcRateLimits(cli: string, env: NodeJS.ProcessEnv = process.env, cwd?: string): Promise<CodexRateLimitsResponse> {
+  const [limits] = await codexRpc(cli, [{ method: 'account/rateLimits/read' }], env, cwd);
+  return limits as CodexRateLimitsResponse;
+}
+
+// --- Codex: verify which login a fresh app-server sees after a profile switch ---------------
+
+/** Subset of the app-server `getAuthStatus` and `account/read` answers that identifies the login. */
+export type CodexAuthStatus = {
+  /** `chatgpt` or `apikey` (`getAuthStatus`); null when nothing is logged in. */
+  authMethod?: string | null;
+  /** Access token when requested with `includeToken`; its claims carry `chatgpt_account_id`. */
+  authToken?: string | null;
+  /** `account/read`: `{ type: 'chatgpt', email, planType }`, `{ type: 'apiKey' }` or null. */
+  account?: { type?: string; email?: string | null; planType?: string | null } | null;
+};
+
+export type CodexAccountVerification = {
+  /** `match`/`mismatch` when the identity could be compared; `unverified` when it could not. */
+  status: 'match' | 'mismatch' | 'unverified';
+  /** Account id Codex reported, when its token was available. */
+  accountId?: string;
+  /** Human-readable explanation suitable for the log and for an error message. */
+  detail: string;
+};
+
+function nestedString(document: Record<string, unknown>, objectKey: string, key: string): string | undefined {
+  const nested = document[objectKey];
+  if (typeof nested !== 'object' || nested === null) {
+    return undefined;
+  }
+  const value = (nested as Record<string, unknown>)[key];
+  return typeof value === 'string' && value ? value : undefined;
+}
+
+function openaiAuthClaims(token: string | undefined): Record<string, unknown> | undefined {
+  const claims = token ? decodeJwtPayload(token) : undefined;
+  const auth = claims?.['https://api.openai.com/auth'];
+  return typeof auth === 'object' && auth !== null ? auth as Record<string, unknown> : undefined;
+}
+
+function claimString(claims: Record<string, unknown> | undefined, key: string): string | undefined {
+  const value = claims?.[key];
+  return typeof value === 'string' && value ? value : undefined;
+}
+
+/**
+ * Compares the login a `codex app-server` reports with the credential document that was just written.
+ * Pure so it can be unit-tested; `verifyCodexNativeAccount` supplies the live status.
+ */
+export function compareCodexAccount(expected: Record<string, unknown>, status: CodexAuthStatus): CodexAccountVerification {
+  const expectedAccessToken = nestedString(expected, 'tokens', 'access_token');
+  const expectedIdToken = nestedString(expected, 'tokens', 'id_token');
+  const expectedApiKeyOnly = typeof expected.OPENAI_API_KEY === 'string' && Boolean(expected.OPENAI_API_KEY) && !expectedAccessToken;
+  const expectedAccountId = nestedString(expected, 'tokens', 'account_id')
+    ?? claimString(openaiAuthClaims(expectedIdToken), 'chatgpt_account_id')
+    ?? claimString(openaiAuthClaims(expectedAccessToken), 'chatgpt_account_id');
+  const expectedEmail = claimString(expectedIdToken ? decodeJwtPayload(expectedIdToken) : undefined, 'email');
+
+  const method = (status.authMethod ?? status.account?.type ?? '').toLowerCase();
+  const actualAccountId = claimString(openaiAuthClaims(status.authToken ?? undefined), 'chatgpt_account_id');
+  const actualEmail = status.account?.email ?? undefined;
+
+  if (!method) {
+    return { status: 'mismatch', detail: 'Codex reports no login in the native auth.json.' };
+  }
+  if (expectedApiKeyOnly) {
+    return method === 'apikey'
+      ? { status: 'match', detail: 'Codex reports an API-key login, as the profile stores.' }
+      : { status: 'mismatch', detail: `Codex reports a ${method} login, but the profile stores an API key only.` };
+  }
+  if (method === 'apikey') {
+    return { status: 'mismatch', detail: 'Codex reports an API-key login, but the profile stores a ChatGPT login.' };
+  }
+  if (expectedAccountId && actualAccountId) {
+    return expectedAccountId === actualAccountId
+      ? { status: 'match', accountId: actualAccountId, detail: `Codex reports account ${actualAccountId}.` }
+      : { status: 'mismatch', accountId: actualAccountId, detail: `Codex reports account ${actualAccountId}, expected ${expectedAccountId}.` };
+  }
+  if (expectedEmail && actualEmail) {
+    return expectedEmail.toLowerCase() === actualEmail.toLowerCase()
+      ? { status: 'match', accountId: actualAccountId, detail: `Codex reports login ${actualEmail}.` }
+      : { status: 'mismatch', accountId: actualAccountId, detail: `Codex reports login ${actualEmail}, expected ${expectedEmail}.` };
+  }
+  return { status: 'unverified', accountId: actualAccountId, detail: 'Codex reported a ChatGPT login, but neither an account id nor an email was available to compare.' };
+}
+
+/**
+ * Starts a fresh `codex app-server` on the native Codex home and checks that the login it reports is the
+ * one in `expected`. `getAuthStatus` is asked first because its token carries the account id; older or
+ * newer servers without it fall back to `account/read`, which exposes the email. Never refreshes tokens.
+ */
+export async function verifyCodexNativeAccount(
+  expected: Record<string, unknown>,
+  command = 'codex',
+  home = codexHomeDir(),
+  env: NodeJS.ProcessEnv = process.env
+): Promise<CodexAccountVerification> {
+  const cli = resolveCli(command);
+  if (!cli) {
+    return { status: 'unverified', detail: `Codex CLI "${command}" not found; the switch could not be verified.` };
+  }
+  const rpcEnv = { ...env, CODEX_HOME: home };
+  let status: CodexAuthStatus | undefined;
+  const failures: string[] = [];
+  try {
+    const [result] = await codexRpc(cli, [{ method: 'getAuthStatus', params: { includeToken: true, refreshToken: false } }], rpcEnv);
+    status = result as CodexAuthStatus;
+  } catch (error) {
+    failures.push(describeError(error));
+  }
+  if (!status || (!status.authMethod && status.authToken === undefined)) {
+    try {
+      const [result] = await codexRpc(cli, [{ method: 'account/read' }], rpcEnv);
+      status = result as CodexAuthStatus;
+    } catch (error) {
+      failures.push(describeError(error));
+    }
+  }
+  if (!status) {
+    return { status: 'unverified', detail: `Codex app-server could not be asked for its login: ${failures.join('; ')}` };
+  }
+  return compareCodexAccount(expected, status);
 }
 
 function codexWindowsFromRpc(limits: CodexRateLimitsResponse['rateLimits']): UsageWindow[] {

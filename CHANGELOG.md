@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.0.14 (2026-09-17)
+
+- Show the login email beside every saved Claude and Codex profile so the same account saved twice is easy to spot.
+  Codex reads it from the saved id token; Claude asks the OAuth profile endpoint and records it when a login is saved,
+  replaced or refreshed, backfilling older profiles when the menu opens.
+- Recognise a refreshed Claude login by its organization instead of its refresh token. Claude Code rotates the refresh
+  token on every refresh, which left saved Claude profiles with dead tokens and made their keep-alives fail.
+- Verify a Codex profile switch by asking a fresh `codex app-server` which account it sees, and show an error instead
+  of the success message when it differs. Open Codex chats pick a switched login up on their next turn.
+- Warn once per switch, in each window whose Codex `app-server` predates the switch, with a **Restart extensions**
+  action; the process is never killed and nothing restarts automatically.
+- Keep-alive failures now include the CLI's own error text, such as a usage limit or an unsupported model, instead of
+  only the exit code.
+
 ## 0.0.13 (2026-09-16)
 
 - Let **Save current login** replace an existing profile, making expired or reauthenticated accounts easy to update without deleting and recreating them.
