@@ -5,7 +5,18 @@
   "type": "module",
   "description": "Local subscription-backed CLI model bridge for Copilot",
   "license": "GPL-3.0-only",
-  "engines": { "node": ">=22" },
-  "bin": { "cli-byok-bridge": "src/cli.mjs" },
-  "scripts": { "start": "node src/cli.mjs", "test": "node --test test/bridge.test.mjs test/adapters.test.mjs", "test:live": "node scripts/live-smoke.mjs" }
+  "engines": {
+    "node": ">=22"
+  },
+  "bin": {
+    "cli-byok-bridge": "src/cli.mjs"
+  },
+  "scripts": {
+    "start": "node src/cli.mjs",
+    "test": "node --test test/*.test.mjs",
+    "test:live": "node scripts/live-smoke.mjs",
+    "test:live:images": "node scripts/live-images.mjs",
+    "test:live:continuation": "node scripts/live-continuation.mjs",
+    "test:live:saved-session": "node scripts/live-saved-session.mjs"
+  }
 }

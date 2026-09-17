@@ -8,7 +8,8 @@ const path = require('path');
 
 const root = path.join(__dirname, '..');
 const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
-const devVersion = process.env.AI_USAGE_DEV_VERSION || '9.9.99';
+// A fresh version prevents VS Code from reusing an earlier development build.
+const devVersion = process.env.AI_USAGE_DEV_VERSION || `9.9.${Math.floor(Date.now() / 1000)}`;
 const extensionId = `${pkg.publisher}.${pkg.name}`;
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-dev-'));
 const vsix = path.join(tmpDir, `${pkg.name}-${devVersion}-dev.vsix`);

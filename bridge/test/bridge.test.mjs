@@ -6,6 +6,7 @@ import { BridgeEngine } from '../src/engine.mjs';
 import { EventQueue, BridgeError } from '../src/common.mjs';
 import { createBridgeServer } from '../src/server.mjs';
 import { normalizeRequest } from '../src/request.mjs';
+import { redImage, blueImage, imagePart } from './fixtures/images.mjs';
 
 const token = 'test-token-with-more-than-24-characters';
 const tools = [{ type: 'function', function: { name: 'read_file', description: 'Read a file through the client.', parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] } } }];
@@ -19,7 +20,7 @@ class FakeAdapter {
     const adapter = this;
     let closed = false;
     const session = {
-      events,
+      events, request,
       reply(key, content) { events.push({ type: 'text', text: `Result: ${content}` }); events.push({ type: 'done', usage: { prompt_tokens: 5, completion_tokens: 3, total_tokens: 8 } }); },
       close() { if (!closed) { closed = true; adapter.closed++; events.end(); } }
     };
@@ -206,6 +207,58 @@ test('oversized bodies return 413 without spawning a worker', async t => {
   const { post, adapter } = await setup(t);
   const response = await post({ ...base, messages: [{ role: 'user', content: 'x'.repeat(20000) }] });
   assert.equal(response.status, 413); assert.equal(adapter.started.length, 0);
+});
+
+test('image-only and mixed input survive HTTP JSON, SSE and tool continuations', async t => {
+  const { post, adapter } = await setup(t);
+  const messages = [{ role: 'user', content: [imagePart(), { type: 'text', text: 'Describe both' }, imagePart(blueImage, 'high')] }];
+  const response = await post({ ...base, messages });
+  assert.equal(response.status, 200);
+  assert.deepEqual(adapter.started[0].request.messages[0].content, [imagePart(redImage, 'auto'), { type: 'text', text: 'Describe both' }, imagePart(blueImage, 'high')]);
+  const first = (await response.json()).choices[0];
+  const followup = { ...base, messages: [...messages, first.message, { role: 'tool', tool_call_id: first.message.tool_calls[0].id, content: 'ok' }] };
+  const changed = structuredClone(followup); changed.messages[0].content[0] = imagePart(blueImage);
+  assert.equal((await post(changed)).status, 409);
+  const changedDetail = structuredClone(followup); changedDetail.messages[0].content[0] = imagePart(redImage, 'low');
+  assert.equal((await post(changedDetail)).status, 409);
+  const resumed = await post({ ...followup, stream: true });
+  assert.equal(resumed.status, 200); assert.match(await resumed.text(), /Result: ok/);
+  assert.equal(adapter.started.length, 1);
+  const imageOnly = await post({ ...base, tools: [], messages: [{ role: 'user', content: [imagePart()] }], stream: true });
+  assert.equal(imageOnly.status, 200); assert.match(await imageOnly.text(), /data: \[DONE\]/);
+});
+
+test('invalid attachments fail before inference without echoing image data', async t => {
+  const { post, adapter } = await setup(t);
+  const invalidParts = [
+    imagePart('https://example.com/private.png'), imagePart('file:///tmp/private.png'),
+    imagePart('data:image/svg+xml;base64,PHN2Zz4='), imagePart('data:image/png;base64,'),
+    imagePart('data:image/png;base64,%%%='), imagePart('data:image/png;base64,AAAA='),
+    imagePart('data:image/png;base64,AB=='), imagePart(redImage, 'invalid'),
+    { type: 'image_url', image_url: { url: 123 } }, { type: 'image_url' },
+    { type: 'file', file: { file_data: 'secret' } }, { type: 'input_audio', input_audio: {} }, null
+  ];
+  for (const part of invalidParts) {
+    const response = await post({ ...base, messages: [{ role: 'user', content: [part] }] });
+    assert.equal(response.status, 400);
+    assert.doesNotMatch(await response.text(), /private\.png|secret|iVBOR/);
+  }
+  for (const role of ['system', 'developer', 'assistant', 'tool']) {
+    assert.equal((await post({ ...base, messages: [{ role, content: [imagePart()] }, ...base.messages] })).status, 400);
+  }
+  assert.equal((await post({ ...base, messages: [{ role: 'user', content: Array.from({ length: 21 }, () => imagePart()) }] })).status, 400);
+  assert.equal(adapter.started.length, 0);
+});
+
+test('image size limits and text normalization remain bounded and predictable', async t => {
+  const { post, adapter } = await setup(t);
+  const largeImage = imagePart('data:image/png;base64,' + Buffer.alloc(5 * 1024 * 1024 + 1).toString('base64'));
+  assert.throws(() => normalizeRequest({ ...base, messages: [{ role: 'user', content: [largeImage] }] }), /at most 5 MiB/);
+  assert.equal((await post({ ...base, messages: [{ role: 'user', content: [largeImage] }] })).status, 413);
+  assert.equal(adapter.started.length, 0);
+  assert.equal(normalizeRequest({ ...base, messages: [{ role: 'user', content: [{ type: 'text', text: 'a' }, { type: 'text', text: 'b' }] }] }).messages[0].content, 'a\nb');
+  const claude = normalizeRequest({ model: 'claude/sonnet', messages: [{ role: 'user', content: [imagePart(redImage, 'high')] }] });
+  assert.deepEqual(claude.ignoredParameters, ['image_url.detail']);
 });
 
 test('multiple native calls are handed to the client serially without losing results', async t => {

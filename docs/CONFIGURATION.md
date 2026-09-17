@@ -1,8 +1,9 @@
 # Configuration reference
 
 All options live under **AI Usage** in the Settings editor (`Ctrl+,` / `Cmd+,`, then search *AI Usage*) and start
-with `aiUsage.` in `settings.json`. In a Remote-SSH, WSL or container window use **Preferences: Open Remote Settings**
-for these keys, because the extension runs on the remote side there.
+with `aiUsage.` in `settings.json`. In a Remote-SSH, WSL or container window, **Preferences: Open Remote Settings**
+lets you override options for that host. Machine-specific paths and connection settings appear only in the
+Remote tab there; feature switches also appear in the User tab.
 
 ## Sources
 
@@ -13,6 +14,37 @@ Each service has a `source` setting that selects where its usage is read from:
 | `aiUsage.claude.source` | `api` | `api` | Claude Code has no read-only CLI or log source; `claude -p` only reports limits after a paid model call. |
 | `aiUsage.codex.source` | `cli`, `api`, `sessionLog` | `cli` | `cli` runs `codex app-server` (set `aiUsage.codex.cliPath` if it is not on PATH). `sessionLog` is offline but only as fresh as your last Codex turn. |
 | `aiUsage.copilot.source` | `api` | `api` | The Copilot CLI has no headless usage command. |
+
+## Copilot CLI sessions
+
+Open **Settings → Extensions → AI Usage → Copilot CLI bridge (experimental)** for the CLI bridge options, including
+separate **Codex** and **Claude** controls for persistent sessions, opening in the CLI, and plugin links.
+You can also search Settings for `@ext:p0l0us.ai-usage-vscode-plugin aiUsage.bridge`.
+
+| Setting (`<provider>` is `codex` or `claude`) | Default | Purpose |
+| --- | --- | --- |
+| `aiUsage.bridge.<provider>.persistSessions` | `false` | Save new sessions in native CLI history so they can be reopened later. |
+| `aiUsage.bridge.<provider>.openInCli` | `false` | Show an Open in CLI link and copyable resume command above the answer once the native session starts. |
+| `aiUsage.bridge.<provider>.openInExtension` | `false` | Show an Open in Codex/Claude Code chat link above the answer, targeting that exact saved session. |
+| `aiUsage.bridge.<provider>.sessionDirectory` | Empty | Workspace directory for saved sessions; empty uses the current single workspace folder, falling back to `~/.cli-byok-bridge/workspaces/<provider>`. |
+
+Enable **Persist Sessions** before starting a new conversation. When using an **AI Usage CLI Bridge**
+model in Copilot, the enabled controls appear above the answer as soon as the native session ID is
+available, without HTML markers. The command includes the session's working directory and can be
+copied into a terminal on the extension host. Links route back to this host, check the exact session,
+and prefer the native sidebar; Claude uses its session-opening command rather than its editor-only URL.
+Opening Claude also selects its sidebar preference. Claude requires the session workspace to be open
+in VS Code. Open after the response completes and the native worker is released; an early click explains
+that the session is still running. Tool continuations do not repeat the header. Existing replies are not
+retroactively updated. **AI Usage: Inspect CLI Sessions** remains available for metadata and opening actions.
+These options apply to the extension
+host. The feature switches appear in **User** settings even in an SSH/WSL/container window, with
+host-specific overrides available in **Remote** settings. Connection settings, CLI executable paths,
+and session directories remain machine-specific: use the **Remote** tab for those in remote windows.
+Bridge settings are excluded from Settings Sync by default. The existing
+`aiUsage.bridge.*` setting keys remain unchanged. Model discovery, bridge startup, connection, and
+CLI executable settings are in the same Copilot CLI bridge section. See the [bridge guide](../bridge/README.md)
+for details.
 
 ## Intervals
 
@@ -184,3 +216,19 @@ up on its next request.
 
 CLI behavior references: [OpenAI Docs: noninteractive Codex](https://learn.chatgpt.com/docs/non-interactive-mode)
 and [Claude CLI reference](https://code.claude.com/docs/en/cli-reference).
+
+Copilot CLI bridge also exposes per-backend `subagentsEnabled` (default true in VS Code), `requestTimeoutMinutes`, and `toolTimeoutMinutes` (both default 60, range 1–1440). Native children delegate through Copilot’s tool relay. The `list_cli_subagents` tool shows native children and saved branches; `fork_cli_session` runs an analysis branch from a completed saved session.
+
+
+The **Agent map** link in the first CLI session message opens `@aiusage /agents` in Copilot.
+Each native subagent is linked once when it starts; select it for status, native ID, and its
+reported result (up to 4,000 characters). The map is a snapshot; select its link again to
+refresh. Parent and saved branch links navigate the task tree. Inspecting a map does not
+leave the `@aiusage` participant selected for subsequent coding requests.
+
+Released saved Codex children can open their exact native thread in Codex or the CLI,
+subject to the existing opening switches. Claude children resume through their parent:
+return to the original Copilot conversation and ask to resume the displayed agent ID.
+Claude's native chat link opens the parent, not an independent child session.
+Bounded child result summaries are retained alongside saved session metadata in the private
+bridge records file. This does not add native IDE features that the bridge protocol does not expose.

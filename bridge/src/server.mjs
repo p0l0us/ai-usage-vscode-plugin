@@ -47,11 +47,41 @@ export function createBridgeServer(engine, { token, maxBodyBytes, log = () => {}
       const host = request.headers.host || '';
       if (!/^(localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/.test(host) || request.headers.origin) throw new BridgeError('Only local non-browser clients are accepted.', 403, 'forbidden');
       if (!authorized(request.headers.authorization, token)) throw new BridgeError('Invalid local bridge token.', 401, 'invalid_api_key');
+      const url = new URL(request.url, 'http://127.0.0.1');
+      if (url.pathname === '/v1/session-settings') {
+        if (request.method === 'GET') { json(response, 200, engine.sessionSettings.value); return; }
+        if (request.method === 'PUT') {
+          if (!request.headers['content-type']?.startsWith('application/json')) throw new BridgeError('Use application/json.', 415, 'unsupported_media_type');
+          json(response, 200, await engine.sessionSettings.update(await readBody(request, 16384))); return;
+        }
+      }
+      if (request.method === 'GET' && url.pathname === '/v1/diagnostics') { json(response, 200, { backends: await engine.diagnose() }); return; }
+      if (request.method === 'GET' && url.pathname === '/v1/sessions') { json(response, 200, { data: engine.inspect() }); return; }
+      if (request.method === 'GET' && url.pathname.startsWith('/v1/sessions/')) {
+        const parts = url.pathname.split('/');
+        const session = engine.inspect(parts[3])[0];
+        if (!session) throw new BridgeError('Unknown bridge session.', 404, 'not_found');
+        if (parts.length === 5 && parts[4] === 'subagents') json(response, 200, { data: [
+          ...(session.subagents || []).map(agent => ({ ...agent, kind: 'native_subagent' })),
+          ...engine.inspect().filter(record => record.parent_id === session.id).map(record => ({ ...record, kind: 'session_branch' }))
+        ], parent_id: session.id });
+        else if (parts.length === 5 && parts[4] === 'graph') json(response, 200, engine.graph(session.id));
+        else if (parts.length === 4) json(response, 200, session);
+        else throw new BridgeError('Unknown endpoint.', 404, 'not_found');
+        return;
+      }
       if (request.method === 'GET' && request.url === '/health') { json(response, 200, { status: 'ok', active_sessions: engine.sessions.size }); return; }
-      if (request.method === 'GET' && request.url === '/v1/models') { json(response, 200, { object: 'list', data: await engine.models() }); return; }
-      if (request.method !== 'POST' || request.url !== '/v1/chat/completions') throw new BridgeError('Unknown endpoint.', 404, 'not_found');
+      if (request.method === 'GET' && url.pathname === '/v1/models') { json(response, 200, { object: 'list', data: await engine.models(url.searchParams.get('backend') || undefined) }); return; }
+      const fork = /^\/v1\/sessions\/([a-f0-9-]{36})\/fork$/.exec(url.pathname);
+      if (request.method !== 'POST' || request.url !== '/v1/chat/completions' && !fork) throw new BridgeError('Unknown endpoint.', 404, 'not_found');
       if (!request.headers['content-type']?.startsWith('application/json')) throw new BridgeError('Use application/json.', 415, 'unsupported_media_type');
-      const body = normalizeRequest(await readBody(request, maxBodyBytes));
+      const input = await readBody(request, maxBodyBytes);
+      if (fork) {
+        const parent = engine.inspect(fork[1])[0];
+        if (!parent) throw new BridgeError('Unknown parent session.', 404, 'not_found');
+        input.bridge_fork_session_id = parent.id; input.model ||= parent.model;
+      }
+      const body = normalizeRequest(input);
       if (body.ignoredParameters.length) response.setHeader('x-cli-bridge-ignored-parameters', body.ignoredParameters.join(', '));
       const id = `chatcmpl-${requestId}`; const created = Math.floor(Date.now() / 1000);
       let started = false;
@@ -70,6 +100,9 @@ export function createBridgeServer(engine, { token, maxBodyBytes, log = () => {}
       };
       const result = await engine.complete(body, {
         signal: controller.signal,
+        onSession: id => response.setHeader('x-cli-bridge-session-id', id),
+        onSessionReady: session => { if (body.stream) { start(); write(chunk({}, null, { bridge_session: session })); } },
+        onSubagent: event => { if (body.stream) { start(); write(chunk({}, null, { bridge_subagent: event })); } },
         onText: text => { if (body.stream) { start(); write(chunk({ content: text })); } }
       });
       if (!body.stream) {

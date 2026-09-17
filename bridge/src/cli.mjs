@@ -13,14 +13,14 @@ const { values } = parseArgs({ options: {
   'token-file': { type: 'string', default: path.join(os.homedir(), '.cli-byok-bridge', 'token') },
   codex: { type: 'string', default: 'codex' }, claude: { type: 'string', default: 'claude' },
   backends: { type: 'string', default: 'codex' },
-  'idle-seconds': { type: 'string', default: '300' },
-  'timeout-seconds': { type: 'string', default: '180' },
+  'idle-seconds': { type: 'string' },
+  'timeout-seconds': { type: 'string' },
   'max-sessions': { type: 'string', default: '8' },
   help: { type: 'boolean', short: 'h' }
 } });
 
 if (values.help) {
-  console.log(`CLI BYOK Bridge — use your existing CLI subscription login\n\nUsage: node src/cli.mjs [options]\n\n  --port 3210                  Loopback HTTP port\n  --backends codex             codex, claude, or codex,claude\n  --codex <executable>         Codex CLI path\n  --claude <executable>        Claude CLI path (experimental adapter)\n  --token-file <path>          Local authentication token file\n  --idle-seconds 300           Pending tool continuation lifetime\n  --timeout-seconds 180        Maximum duration per model request\n  --max-sessions 8             Maximum active/pending CLI sessions\n\nNo provider API keys. Sign in with codex login / claude auth login first.`);
+  console.log(`CLI BYOK Bridge — use your existing CLI subscription login\n\nUsage: node src/cli.mjs [options]\n\n  --port 3210                  Loopback HTTP port\n  --backends codex             codex, claude, or codex,claude\n  --codex <executable>         Codex CLI path\n  --claude <executable>        Claude CLI path (experimental adapter)\n  --token-file <path>          Local authentication token file\n  --idle-seconds <seconds>           Pending tool continuation lifetime\n  --timeout-seconds <seconds>        Maximum duration per model request\n  --max-sessions 8             Maximum active/pending CLI sessions\n\nNo provider API keys. Sign in with codex login / claude auth login first.`);
 } else {
   const integer = (name, min, max) => {
     const n = Number(values[name]);
@@ -43,7 +43,9 @@ if (values.help) {
       const { ClaudeAdapter } = await import('./claude.mjs');
       adapters.claude = new ClaudeAdapter({ command: values.claude });
     }
-    const engine = new BridgeEngine(adapters, { idleMs: integer('idle-seconds', 1, 3600) * 1000, requestMs: integer('timeout-seconds', 1, 3600) * 1000, maxSessions: integer('max-sessions', 1, 64) });
+    const engine = new BridgeEngine(adapters, { idleMs: values['idle-seconds'] ? integer('idle-seconds', 1, 86400) * 1000 : undefined, requestMs: values['timeout-seconds'] ? integer('timeout-seconds', 1, 86400) * 1000 : undefined, maxSessions: integer('max-sessions', 1, 64), sessionSettingsFile: tokenFile + '.session-settings.json', sessionRecordsFile: tokenFile + '.sessions.json' });
+    await engine.sessionSettings.load();
+    await engine.loadSessionRecords();
     const server = createBridgeServer(engine, { token, log: entry => console.error(JSON.stringify(entry)) });
     await new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, '127.0.0.1', resolve); });
     console.error(`Bridge listening at http://127.0.0.1:${port}/v1\nLocal API key: contents of ${tokenFile}\nBackends: ${backends.join(', ')}. Subscription login is checked before use.`);

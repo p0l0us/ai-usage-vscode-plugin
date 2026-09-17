@@ -2,6 +2,8 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { ApiCallBudget } from './apiBudget';
+import { registerBridgeIntegration } from './bridgeIntegration';
+import { registerBridgeModels } from './bridgeModels';
 import { AuthProvider } from './authFiles';
 import { AuthProfileManager } from './authProfiles';
 import { AccountAutomation, AutomationSettings } from './accountAutomation';
@@ -145,6 +147,8 @@ function log(message: string): void {
 }
 
 export function activate(context: vscode.ExtensionContext): void {
+  registerBridgeIntegration(context);
+  registerBridgeModels(context);
   output = vscode.window.createOutputChannel('AI Usage');
   context.subscriptions.push(output);
   let automation: AccountAutomation;

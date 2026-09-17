@@ -2,6 +2,46 @@
 
 ## Unreleased
 
+- Mark every **Copilot CLI bridge** setting as experimental: the section is titled *(experimental)* and each
+  `aiUsage.bridge.*` setting carries VS Code's **Experimental** tag in the Settings editor.
+- Show one linked notice per native subagent in Copilot, with an in-chat agent map, status,
+  reported results, and saved branch navigation. Codex child links target the exact child thread;
+  Claude details explain parent-session resumption. Keep presentation controls out of native history.
+
+- Support native Claude/Codex subagents through the external tool relay, track child status and saved
+  session forks, and add a Copilot analysis-fork tool. Add per-backend request/tool lifetimes (60 minutes
+  by default, up to 24 hours), remove shorter client/MCP deadlines, and retain 1000 saved link targets.
+
+- Keep one saved native CLI session per Copilot chat across follow-up turns, images, conversation
+  compaction, and bridge restarts. Show the session controls once, and release the native worker
+  between completed turns so the CLI and extension links remain usable.
+- Fix Claude exact-session chat links opening an empty chat: saved Copilot sessions now use their own
+  origin instead of `sdk-cli`, which Claude's chat UI excludes. Retain the last 100 saved session link
+  targets across bridge restarts without storing prompts, answers, or credentials.
+- Show CLI resume commands and exact-session chat links above the answer when a native session starts,
+  without HTML markers or duplicate controls during tool continuations. Route clicks to the originating
+  host and prefer the native chat sidebar; Claude uses its session command instead of its editor-only URL.
+- Default saved bridge sessions to the current single workspace folder so Claude extension links can
+  resume them there; explicit session directories still take precedence.
+- Show Copilot bridge feature switches in User settings in remote windows; retain machine-specific
+  paths and connection settings in the Remote tab.
+- Group CLI bridge settings in a separate **Copilot CLI bridge** settings section, including separate Claude and
+  Codex controls for persistent sessions, Open in CLI, and VS Code extension/plugin links.
+- Replace fixed Claude aliases with native CLI catalog discovery, include hidden/paginated Codex entries,
+  preserve model display names and resolved IDs, and accept advertised effort and extended-context selectors.
+- Fix incomplete Copilot model lists by collecting both CLI backend catalogs before updating the picker,
+  while keeping the healthy backend available when the other fails discovery.
+- Register signed-in Claude and Codex CLI models directly in Copilot, bundle and automatically start the
+  local bridge, and support native provider streaming, images, and external tool continuations.
+- Add Copilot integration diagnostics, a live CLI session inspector, read-only session tools, and the
+  optional `@aiusage` status participant.
+- Share and cache model discovery independently per backend, validate reasoning capabilities, and
+  retain isolated native workers across explicitly correlated user turns with bounded lifecycle diagnostics.
+
+- Add separate Codex and Claude bridge settings for native session persistence, workspace directories,
+  CLI opening, and VS Code extension links, with opening actions for saved sessions in the session inspector.
+- Support embedded image attachments in both CLI BYOK backends, including conversation history and tool
+  continuations, with input validation, image capability discovery, and offline/live vision checks.
 - Add a separate Node.js CLI BYOK bridge with a loopback Chat Completions API, subscription-backed Codex and
   experimental Claude CLI adapters, external tool-call continuations, and offline/live integration checks.
 

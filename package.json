@@ -37,7 +37,8 @@
     "onCommand:aiUsage.manageAuthProfiles",
     "onCommand:aiUsage.refresh",
     "onCommand:aiUsage.showDetails",
-    "onStartupFinished"
+    "onStartupFinished",
+    "onUri"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -69,6 +70,18 @@
       {
         "command": "aiUsage.manageAuthProfiles",
         "title": "AI Usage: Manage Claude/Codex Authentication Profiles"
+      },
+      {
+        "command": "aiUsage.checkCopilotIntegration",
+        "title": "AI Usage: Check Copilot Integration"
+      },
+      {
+        "command": "aiUsage.inspectCliSessions",
+        "title": "AI Usage: Inspect CLI Sessions"
+      },
+      {
+        "command": "aiUsage.refreshBridgeModels",
+        "title": "AI Usage: Refresh Bridge Models"
       },
       {
         "command": "aiUsage.chip.claude.simple.pending",
@@ -7201,8 +7214,236 @@
         }
       },
       {
-        "title": "Advanced",
+        "title": "Copilot CLI bridge (experimental)",
         "order": 5,
+        "properties": {
+          "aiUsage.bridge.modelsEnabled": {
+            "type": "boolean",
+            "default": true,
+            "scope": "window",
+            "description": "Experimental. Automatically contribute signed-in Codex and Claude CLI models to the Copilot model picker.",
+            "order": 10,
+            "ignoreSync": true,
+            "tags": [
+              "experimental"
+            ]
+          },
+          "aiUsage.bridge.autoStart": {
+            "type": "boolean",
+            "default": true,
+            "scope": "window",
+            "description": "Start the bundled local bridge when model discovery needs it. Reuses an already-running bridge. Discovery checks login without running inference.",
+            "order": 11,
+            "ignoreSync": true,
+            "tags": [
+              "experimental"
+            ]
+          },
+          "aiUsage.bridge.codex.persistSessions": {
+            "type": "boolean",
+            "default": false,
+            "scope": "window",
+            "order": 12,
+            "markdownDescription": "Save new Codex sessions started through Copilot's CLI bridge in native CLI history (**persistent sessions**), so they can be reopened later. Applies to all clients of this bridge. Disabling affects new sessions and does not delete saved history.",
+            "ignoreSync": true,
+            "tags": [
+              "experimental"
+            ]
+          },
+          "aiUsage.bridge.codex.openInCli": {
+            "type": "boolean",
+            "default": false,
+            "scope": "window",
+            "order": 13,
+            "markdownDescription": "Show **Open in CLI** and a copyable resume command above the answer as soon as a saved Codex CLI session starts in Copilot. Open after the response finishes. Enable `#aiUsage.bridge.codex.persistSessions#` before creating the session.",
+            "ignoreSync": true,
+            "tags": [
+              "experimental"
+            ]
+          },
+          "aiUsage.bridge.codex.openInExtension": {
+            "type": "boolean",
+            "default": false,
+            "scope": "window",
+            "order": 14,
+            "markdownDescription": "Show **Open in Codex chat** above the answer as soon as a saved CLI session starts in Copilot. The link opens that session in the native extension, preferring its sidebar. Open after the response finishes. Enable `#aiUsage.bridge.codex.persistSessions#` before creating the session.",
+            "ignoreSync": true,
+            "tags": [
+              "experimental"
+            ]
+          },
+          "aiUsage.bridge.codex.sessionDirectory": {
+            "type": "string",
+            "default": "",
+            "scope": "machine",
+            "description": "Absolute workspace directory for new saved Codex sessions on the bridge host. Empty uses this window's workspace when exactly one folder is open, otherwise ~/.cli-byok-bridge/workspaces/codex. Temporary bridge configuration is stored separately.",
+            "order": 15,
+            "tags": [
+              "experimental"
+            ]
+          },
+          "aiUsage.bridge.claude.persistSessions": {
+            "type": "boolean",
+            "default": false,
+            "scope": "window",
+            "order": 16,
+            "markdownDescription": "Save new Claude sessions started through Copilot's CLI bridge in native CLI history (**persistent sessions**), so they can be reopened later. Applies to all clients of this bridge. Disabling affects new sessions and does not delete saved history.",
+            "ignoreSync": true,
+            "tags": [
+              "experimental"
+            ]
+          },
+          "aiUsage.bridge.claude.openInCli": {
+            "type": "boolean",
+            "default": false,
+            "scope": "window",
+            "order": 17,
+            "markdownDescription": "Show **Open in CLI** and a copyable resume command above the answer as soon as a saved Claude Code CLI session starts in Copilot. Open after the response finishes. Enable `#aiUsage.bridge.claude.persistSessions#` before creating the session.",
+            "ignoreSync": true,
+            "tags": [
+              "experimental"
+            ]
+          },
+          "aiUsage.bridge.claude.openInExtension": {
+            "type": "boolean",
+            "default": false,
+            "scope": "window",
+            "order": 18,
+            "markdownDescription": "Show **Open in Claude Code chat** above the answer as soon as a saved CLI session starts in Copilot. The link opens that session in the native extension, preferring its sidebar. Open after the response finishes. Enable `#aiUsage.bridge.claude.persistSessions#` before creating the session.",
+            "ignoreSync": true,
+            "tags": [
+              "experimental"
+            ]
+          },
+          "aiUsage.bridge.claude.sessionDirectory": {
+            "type": "string",
+            "default": "",
+            "scope": "machine",
+            "description": "Absolute workspace directory for new saved Claude sessions on the bridge host. Empty uses this window's workspace when exactly one folder is open, otherwise ~/.cli-byok-bridge/workspaces/claude. Claude extension links require this folder to be open in VS Code. Temporary bridge configuration is stored separately.",
+            "order": 19,
+            "tags": [
+              "experimental"
+            ]
+          },
+          "aiUsage.bridge.url": {
+            "type": "string",
+            "default": "http://127.0.0.1:3210",
+            "scope": "machine",
+            "description": "Loopback address of the standalone CLI subscription bridge.",
+            "order": 20,
+            "tags": [
+              "experimental"
+            ]
+          },
+          "aiUsage.bridge.tokenFile": {
+            "type": "string",
+            "default": "",
+            "scope": "machine",
+            "description": "Local bridge token file. Empty uses ~/.cli-byok-bridge/token on this extension host.",
+            "order": 21,
+            "tags": [
+              "experimental"
+            ]
+          },
+          "aiUsage.bridge.codex.executable": {
+            "type": "string",
+            "default": "codex",
+            "scope": "machine",
+            "description": "Codex CLI executable used by the bundled bridge. Restart the bridge after changing this setting.",
+            "order": 22,
+            "tags": [
+              "experimental"
+            ]
+          },
+          "aiUsage.bridge.claude.executable": {
+            "type": "string",
+            "default": "claude",
+            "scope": "machine",
+            "description": "Claude CLI executable used by the bundled bridge. Restart the bridge after changing this setting.",
+            "order": 23,
+            "tags": [
+              "experimental"
+            ]
+          },
+          "aiUsage.bridge.codex.subagentsEnabled": {
+            "type": "boolean",
+            "default": true,
+            "scope": "window",
+            "ignoreSync": true,
+            "order": 50,
+            "description": "Allow native subagents to delegate work through Copilot’s external tools. Native workspace tools stay disabled. Applies to new workers.",
+            "tags": [
+              "experimental"
+            ]
+          },
+          "aiUsage.bridge.codex.requestTimeoutMinutes": {
+            "type": "integer",
+            "default": 60,
+            "scope": "window",
+            "ignoreSync": true,
+            "order": 51,
+            "description": "Maximum minutes for one model request, including native subagent work. Cancellation remains available.",
+            "minimum": 1,
+            "maximum": 1440,
+            "tags": [
+              "experimental"
+            ]
+          },
+          "aiUsage.bridge.codex.toolTimeoutMinutes": {
+            "type": "integer",
+            "default": 60,
+            "scope": "window",
+            "ignoreSync": true,
+            "order": 52,
+            "description": "Minutes to retain a worker while waiting for Copilot to return an external tool result.",
+            "minimum": 1,
+            "maximum": 1440,
+            "tags": [
+              "experimental"
+            ]
+          },
+          "aiUsage.bridge.claude.subagentsEnabled": {
+            "type": "boolean",
+            "default": true,
+            "scope": "window",
+            "ignoreSync": true,
+            "order": 53,
+            "description": "Allow native subagents to delegate work through Copilot’s external tools. Native workspace tools stay disabled. Applies to new workers.",
+            "tags": [
+              "experimental"
+            ]
+          },
+          "aiUsage.bridge.claude.requestTimeoutMinutes": {
+            "type": "integer",
+            "default": 60,
+            "scope": "window",
+            "ignoreSync": true,
+            "order": 54,
+            "description": "Maximum minutes for one model request, including native subagent work. Cancellation remains available.",
+            "minimum": 1,
+            "maximum": 1440,
+            "tags": [
+              "experimental"
+            ]
+          },
+          "aiUsage.bridge.claude.toolTimeoutMinutes": {
+            "type": "integer",
+            "default": 60,
+            "scope": "window",
+            "ignoreSync": true,
+            "order": 55,
+            "description": "Minutes to retain a worker while waiting for Copilot to return an external tool result.",
+            "minimum": 1,
+            "maximum": 1440,
+            "tags": [
+              "experimental"
+            ]
+          }
+        }
+      },
+      {
+        "title": "Advanced",
+        "order": 6,
         "properties": {
           "aiUsage.chatChips.debug": {
             "type": "boolean",
@@ -19571,6 +19812,110 @@
             ]
           }
         ]
+      }
+    ],
+    "languageModelTools": [
+      {
+        "name": "aiUsage_get_cli_session_info",
+        "toolReferenceName": "get_cli_session_info",
+        "displayName": "Get CLI session info",
+        "userDescription": "Read account, model, native IDs, status, timings, and actual reported token usage for an explicit bridge session.",
+        "modelDescription": "Read account, model, native IDs, status, timings, and actual reported token usage for an explicit bridge session. Obtain the session_id from the CLI Session Inspector; do not guess a current conversation from prompt text.",
+        "canBeReferencedInPrompt": true,
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "session_id": {
+              "type": "string",
+              "description": "Explicit bridge session UUID"
+            }
+          },
+          "required": [
+            "session_id"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "aiUsage_list_cli_subagents",
+        "toolReferenceName": "list_cli_subagents",
+        "displayName": "List CLI subagents",
+        "userDescription": "Read tracked native subagents and saved session branches, including IDs and statuses.",
+        "modelDescription": "Read tracked native subagents and saved session branches, including IDs and statuses. Requires an explicit bridge session ID.",
+        "canBeReferencedInPrompt": true,
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "session_id": {
+              "type": "string",
+              "description": "Explicit bridge session UUID"
+            }
+          },
+          "required": [
+            "session_id"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "aiUsage_fork_cli_session",
+        "toolReferenceName": "fork_cli_session",
+        "displayName": "Fork a saved CLI session",
+        "userDescription": "Run an independent analysis branch from a completed saved session.",
+        "modelDescription": "Fork a released saved CLI session and run a focused analysis prompt with inherited native context. Returns branch and parent IDs plus the answer. The parent must be completed and idle; use native subagents for delegation while the current session is running. This analysis tool supplies no workspace tools.",
+        "canBeReferencedInPrompt": true,
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "session_id": {
+              "type": "string",
+              "description": "Explicit UUID of a released saved bridge session"
+            },
+            "prompt": {
+              "type": "string",
+              "description": "The independent branch task"
+            }
+          },
+          "required": [
+            "session_id",
+            "prompt"
+          ],
+          "additionalProperties": false
+        }
+      }
+    ],
+    "chatParticipants": [
+      {
+        "id": "aiUsage.bridge",
+        "name": "aiusage",
+        "fullName": "AI Usage",
+        "description": "Inspect CLI bridge status, sessions, and Copilot integration",
+        "isSticky": false,
+        "commands": [
+          {
+            "name": "status",
+            "description": "Show bridge health"
+          },
+          {
+            "name": "sessions",
+            "description": "Show CLI sessions and usage"
+          },
+          {
+            "name": "diagnose",
+            "description": "Check models, login, CLI versions, and host settings"
+          },
+          {
+            "name": "agents",
+            "description": "Show a linked agent map, subagent results, and saved branches"
+          }
+        ]
+      }
+    ],
+    "languageModelChatProviders": [
+      {
+        "vendor": "ai-usage-cli",
+        "displayName": "AI Usage CLI Bridge",
+        "managementCommand": "aiUsage.refreshBridgeModels"
       }
     ]
   },

@@ -3,6 +3,9 @@ import { access, readFile } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { createHash } from 'node:crypto';
+
+export const accountFingerprint = account => createHash('sha256').update(JSON.stringify(account)).digest('hex');
 
 export class BridgeError extends Error {
   constructor(message, status = 502, code = 'backend_error') {

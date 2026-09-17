@@ -9,4 +9,5 @@ tsconfig.json
 *.vsix
 images/icon.svg
 docs/**
-bridge/**
+bridge/test/**
+bridge/scripts/**
