@@ -33,10 +33,26 @@ in the current `.credentials.json` while preserving MCP OAuth entries. Codex pro
 `auth.json` document.
 
 Before activation, a refreshed native credential is copied back to the selected secret only when it can be matched
-to the same owner (Codex `account_id`, matching refresh token, or an exact match). Writes go through a newly created
+to the same owner: Codex `account_id`, an identical refresh token, or for Claude the root `organizationUuid`, because
+Claude Code rotates the refresh token on every refresh and a token-only match would stop capturing after the first one. Writes go through a newly created
 mode-`0600` temporary file in the destination directory and an atomic rename; the resulting file is explicitly
 chmodded to `0600` on POSIX. Windows uses the destination directory's inherited user-profile ACL because its chmod
 implementation does not support POSIX ownership modes.
+
+Codex picks up a switched login on its next request: its auth manager reloads `auth.json` inside the request span
+that starts a turn, and no thread, rollout or sqlite row is bound to an account. After writing the file for a Codex
+profile, `AuthProfileManager.activate()` calls the verifier passed by `extension.ts`
+(`verifyCodexNativeAccount` in `src/live.ts`), which runs a fresh `codex app-server` on the native home and compares
+the `chatgpt_account_id` claim of the token returned by `getAuthStatus { includeToken: true, refreshToken: false }`
+with the stored `tokens.account_id`; `account/read` (email, plan type, `apiKey`) is the fallback because its
+answer carries no account id. API-key-only profiles are matched by auth method alone. A mismatch replaces the
+success notification with an error and leaves the file in place. Stale Codex processes are detected by start
+time only: `afterProfileActivated` records `{ switchedAt, profileName }` in `globalState`
+(`aiUsage.codexSwitch.v1`), and every window's one-minute tick lists this extension host's children
+(`src/codexProcesses.ts`: `ps -eo pid=,ppid=,etime=,args=` on POSIX, `Win32_Process` on Windows), excluding
+AI Usage's own servers by their `cli_auth_credentials_store` argument. A `codex … app-server` older than the switch
+triggers one warning per switch per window (`workspaceState` key `aiUsage.codexSwitchNotified.v1`) whose only
+action is `workbench.action.restartExtensionHost`; processes are never killed and no turn is ever injected.
 
 ## How the chat chip works
 

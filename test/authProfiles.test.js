@@ -5,6 +5,7 @@ const path = require('node:path');
 const os = require('node:os');
 const Module = require('node:module');
 const informationMessages = [];
+const errorMessages = [];
 const quickPickResponses = [];
 // This suite exercises SecretStorage/native-file behavior without a running VS Code host.
 const load = Module._load;
@@ -13,7 +14,7 @@ Module._load = function(id, ...args) {
     QuickPickItemKind: { Separator: -1 },
     window: {
       showInformationMessage(message) { informationMessages.push(message); },
-      showErrorMessage() {},
+      showErrorMessage(message) { errorMessages.push(message); },
       showQuickPick(items) {
         const response = quickPickResponses.shift();
         return typeof response === 'function' ? response(items) : response;
@@ -26,24 +27,33 @@ Module._load = function(id, ...args) {
 const { AuthProfileManager } = require('../out/authProfiles');
 Module._load = load;
 
-function fixture(t) {
+function fixture(t, verify) {
   informationMessages.length = 0;
+  errorMessages.length = 0;
   quickPickResponses.length = 0;
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-profile-'));
   const previous = process.env.CLAUDE_CONFIG_DIR;
+  const previousCodex = process.env.CODEX_HOME;
   process.env.CLAUDE_CONFIG_DIR = home;
+  process.env.CODEX_HOME = home;
   t.after(() => {
     if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR;
     else process.env.CLAUDE_CONFIG_DIR = previous;
+    if (previousCodex === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = previousCodex;
     fs.rmSync(home, { recursive: true, force: true });
   });
   const before = { claudeAiOauth: { accessToken: 'before', refreshToken: 'refresh-before' } };
   const after = { claudeAiOauth: { accessToken: 'after', refreshToken: 'refresh-after' } };
   const file = path.join(home, '.credentials.json');
   fs.writeFileSync(file, JSON.stringify({ ...before, mcpOAuth: { unrelated: true } }));
-  let state = { claude: { profiles: [{ id: 'a', name: 'A' }], activeProfileId: 'a' }, codex: { profiles: [] } };
+  const codex = { auth_mode: 'chatgpt', tokens: { access_token: 'x', refresh_token: 'y', account_id: 'acc-x' }, last_refresh: '2026-09-17T00:00:00Z' };
+  let state = { claude: { profiles: [{ id: 'a', name: 'A' }], activeProfileId: 'a' }, codex: { profiles: [{ id: 'x', name: 'X' }] } };
   const globalValues = new Map([['aiUsage.authProfiles.v1', state]]);
-  const secrets = new Map([['aiUsage.authProfile.v1.claude.a', JSON.stringify(before)]]);
+  const secrets = new Map([
+    ['aiUsage.authProfile.v1.claude.a', JSON.stringify(before)],
+    ['aiUsage.authProfile.v1.codex.x', JSON.stringify(codex)]
+  ]);
   const manager = new AuthProfileManager({
     globalState: {
       get: key => structuredClone(globalValues.get(key)),
@@ -53,8 +63,9 @@ function fixture(t) {
       }
     },
     secrets: { get: async key => secrets.get(key), store: async (key, value) => { secrets.set(key, value); } }
-  }, () => {});
-  return { manager, before, after, file, secrets, state, globalValues };
+  }, () => {}, undefined, verify, async (provider, credential) =>
+    provider === 'codex' ? (credential.tokens?.account_id === 'acc-x' ? 'x@example.com' : undefined) : (credential.claudeAiOauth?.accessToken === 'after' ? 'a@example.com' : undefined));
+  return { manager, before, after, file, secrets, state, globalValues, codex, codexFile: path.join(home, 'auth.json') };
 }
 
 test('account feature switches are stored in extension state per provider', async t => {
@@ -126,4 +137,60 @@ test('save current login can replace an existing profile', async t => {
   assert.deepEqual(JSON.parse(f.secrets.get('aiUsage.authProfile.v1.claude.a')), f.after);
   assert.equal(f.globalValues.get('aiUsage.authProfiles.v1').claude.activeProfileId, 'a');
   assert.deepEqual(informationMessages, ['Claude profile “A” updated from the current login.']);
+});
+
+test('Codex activation tells the user open chats follow on their next turn', async t => {
+  const verified = [];
+  const f = fixture(t, async (provider, credential) => { verified.push([provider, credential]); return { status: 'match', detail: 'Codex reports account acc-x.' }; });
+  assert.equal(await f.manager.activateProfile('codex', 'x'), true);
+  assert.deepEqual(JSON.parse(fs.readFileSync(f.codexFile)), f.codex);
+  assert.deepEqual(verified, [['codex', f.codex]]);
+  assert.deepEqual(informationMessages, ['Codex switched to “X”. Open chats use this login from their next turn.']);
+  assert.deepEqual(errorMessages, []);
+  informationMessages.length = 0;
+  assert.equal(await f.manager.activateProfile('codex', 'x', true), true);
+  assert.deepEqual(informationMessages, ['AI Usage: Codex automatically rotated to account “X”. Open chats use this login from their next turn.']);
+});
+
+test('a verifier mismatch replaces the success message with an error and keeps the profile active', async t => {
+  const f = fixture(t, async () => ({ status: 'mismatch', detail: 'Codex reports account acc-other, expected acc-x.' }));
+  assert.equal(await f.manager.activateProfile('codex', 'x'), true);
+  assert.deepEqual(informationMessages, []);
+  assert.equal(errorMessages.length, 1);
+  assert.match(errorMessages[0], /switched to “X”, but Codex reports a different login\. Codex reports account acc-other/);
+  assert.equal(f.globalValues.get('aiUsage.authProfiles.v1').codex.activeProfileId, 'x');
+  assert.deepEqual(JSON.parse(fs.readFileSync(f.codexFile)), f.codex);
+});
+
+test('an unverifiable or failing verifier still reports success', async t => {
+  const f = fixture(t, async () => { throw new Error('codex not installed'); });
+  assert.equal(await f.manager.activateProfile('codex', 'x'), true);
+  assert.deepEqual(informationMessages, ['Codex switched to “X”. Open chats use this login from their next turn.']);
+  assert.deepEqual(errorMessages, []);
+});
+
+test('Claude activation keeps its wording and is not verified', async t => {
+  const verified = [];
+  const f = fixture(t, async (provider) => { verified.push(provider); return undefined; });
+  assert.equal(await f.manager.activateProfile('claude', 'a'), true);
+  assert.deepEqual(verified, ['claude']);
+  assert.deepEqual(informationMessages, ['Claude switched to “A”. New requests will use this login.']);
+});
+
+test('saving or replacing a login records its email and the menu shows it beside the name', async t => {
+  const f = fixture(t);
+  fs.writeFileSync(f.file, JSON.stringify(f.after));
+  quickPickResponses.push(items => items.find(item => item.profile?.id === 'a'));
+  assert.equal(await f.manager.saveCurrent('claude'), true);
+  assert.equal(f.globalValues.get('aiUsage.authProfiles.v1').claude.profiles[0].email, 'a@example.com');
+  const item = f.manager.items('claude').find(item => item.profile?.id === 'a');
+  assert.equal(item.description, 'a@example.com · Active');
+});
+
+test('profiles saved before emails were recorded are backfilled when the menu opens', async t => {
+  const f = fixture(t);
+  quickPickResponses.push(undefined); // close the menu right away
+  await f.manager.show('codex');
+  assert.equal(f.globalValues.get('aiUsage.authProfiles.v1').codex.profiles[0].email, 'x@example.com');
+  assert.equal(f.manager.items('codex').find(item => item.profile?.id === 'x').description, 'x@example.com');
 });

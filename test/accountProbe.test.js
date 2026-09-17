@@ -3,7 +3,7 @@ const test = require('node:test');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { probeAccount, isolatedHome, isolatedEnvironment, acquireAccountLock, keepAliveArgs } = require('../out/accountProbe');
+const { probeAccount, isolatedHome, isolatedEnvironment, acquireAccountLock, keepAliveArgs, describeCliFailure } = require('../out/accountProbe');
 
 function temporary(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-probe-'));
@@ -176,4 +176,19 @@ test('cancelled keep-alive stops its child and removes staged credentials',
   const result = await pending;
   assert.equal(result.result.kind, 'unavailable');
   assert.equal(fs.existsSync(path.join(home, '.credentials.json')), false);
+});
+
+test('a failed keep-alive names the CLI error instead of only the exit code', () => {
+  const codex = [
+    'WARNING: proceeding, even though we could not create PATH aliases',
+    'OpenAI Codex v0.154.0',
+    'warning: Model metadata for `luna` not found.',
+    'ERROR: {"type":"error","status":400,"error":{"type":"invalid_request_error","message":"The \'luna\' model is not supported when using Codex with a ChatGPT account."}}',
+    ''
+  ].join('\n');
+  assert.equal(describeCliFailure(codex), "The 'luna' model is not supported when using Codex with a ChatGPT account.");
+  assert.equal(describeCliFailure('ERROR: You\'ve hit your usage limit. Visit https://chatgpt.com/codex/settings/usage\n'), "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage");
+  assert.equal(describeCliFailure('Not logged in\n'), 'Not logged in');
+  assert.equal(describeCliFailure('WARNING: only a warning\n'), undefined);
+  assert.equal(describeCliFailure(''), undefined);
 });
