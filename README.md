@@ -1,7 +1,8 @@
 # AI Usage for VS Code
 
-This branch also contains an experimental standalone [CLI BYOK bridge](bridge/README.md) for using existing
-Codex/Claude subscription logins through a local model endpoint. It runs separately from the extension.
+The extension also bundles an experimental [CLI BYOK bridge](bridge/README.md) that offers your existing
+Codex/Claude subscription logins as models in the Copilot model picker. Its settings are tagged **Experimental**
+in the Settings editor, and the bridge can also run standalone as a local model endpoint.
 
 See how much of your AI coding budget is left without leaving the editor. **AI Usage** shows live rate-limit and
 quota usage for **Claude Code**, **Codex** and **GitHub Copilot** in the status bar and, in the Agents window, behind

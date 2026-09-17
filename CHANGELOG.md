@@ -1,17 +1,15 @@
 # Changelog
 
-## Unreleased
+## 0.0.16 (2026-09-17)
 
 - Mark every **Copilot CLI bridge** setting as experimental: the section is titled *(experimental)* and each
   `aiUsage.bridge.*` setting carries VS Code's **Experimental** tag in the Settings editor.
 - Show one linked notice per native subagent in Copilot, with an in-chat agent map, status,
   reported results, and saved branch navigation. Codex child links target the exact child thread;
   Claude details explain parent-session resumption. Keep presentation controls out of native history.
-
 - Support native Claude/Codex subagents through the external tool relay, track child status and saved
   session forks, and add a Copilot analysis-fork tool. Add per-backend request/tool lifetimes (60 minutes
   by default, up to 24 hours), remove shorter client/MCP deadlines, and retain 1000 saved link targets.
-
 - Keep one saved native CLI session per Copilot chat across follow-up turns, images, conversation
   compaction, and bridge restarts. Show the session controls once, and release the native worker
   between completed turns so the CLI and extension links remain usable.
@@ -37,7 +35,6 @@
   optional `@aiusage` status participant.
 - Share and cache model discovery independently per backend, validate reasoning capabilities, and
   retain isolated native workers across explicitly correlated user turns with bounded lifecycle diagnostics.
-
 - Add separate Codex and Claude bridge settings for native session persistence, workspace directories,
   CLI opening, and VS Code extension links, with opening actions for saved sessions in the session inspector.
 - Support embedded image attachments in both CLI BYOK backends, including conversation history and tool
