@@ -67,8 +67,10 @@ format; only one selected profile is exposed there at a time.
 
 A convenient setup is: sign in with the CLI, save the current login as a profile, sign in with the next account,
 and save again. An imported profile is saved but not activated until you choose it. New requests use a switched
-login; an already-running request or agent session may need to finish or be reopened first. In remote development,
-profiles belong to the extension host (local, SSH, WSL, or container) where the command is run.
+login. Codex keeps its login in memory, so open Codex chats follow a switch only through the optional **Codex account
+proxy** (`aiUsage.codex.proxy.enabled`), which routes their requests through AI Usage and attaches the active login
+per request; without it, AI Usage offers an extension-host restart. In remote development, profiles belong to the
+extension host (local, SSH, WSL, or container) where the command is run.
 
 ### Account keep-alives and automatic rotation
 

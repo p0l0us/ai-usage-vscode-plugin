@@ -7167,6 +7167,27 @@
             "markdownDescription": "After a Codex account switch, warn once per window when this window's Codex extension process started before the switch and offer **Restart extensions**. A running Codex process keeps its login in memory and fails turns once the credential file changes underneath it; VS Code cannot restart a single extension, so restarting the extension host is the lightest repair. New Codex CLI sessions need nothing.",
             "order": 8
           },
+          "aiUsage.codex.proxy.enabled": {
+            "type": "boolean",
+            "default": false,
+            "tags": [
+              "experimental"
+            ],
+            "markdownDescription": "Route the Codex VS Code extension's model calls through a local AI Usage proxy so that switching the Codex authentication profile reaches open Codex chats on their next turn, with no restart. AI Usage adds a `model_providers.ai-usage` entry to Codex's `config.toml` and selects it as `model_provider`; Codex re-reads that file whenever a chat starts. The proxy listens on 127.0.0.1 only, requires a token written into `config.toml`, attaches the login from `auth.json` to each request and forwards it to OpenAI unchanged (ChatGPT logins to the ChatGPT Codex backend, API keys to the OpenAI API). While it is on, Codex's own account panel shows no login, and chats opened before it was enabled keep their previous path until you start a new chat. Turning it off restores `config.toml`.",
+            "order": 9
+          },
+          "aiUsage.codex.proxy.port": {
+            "type": "number",
+            "default": 43117,
+            "minimum": 1024,
+            "maximum": 65535,
+            "scope": "machine",
+            "tags": [
+              "experimental"
+            ],
+            "markdownDescription": "Local TCP port of the Codex account proxy (`aiUsage.codex.proxy.enabled`). One AI Usage window serves it and the others share it; a change applies to Codex chats started afterwards.",
+            "order": 9
+          },
           "aiUsage.codex.keepAlive.home": {
             "type": "string",
             "default": "~/.codex-tmp",

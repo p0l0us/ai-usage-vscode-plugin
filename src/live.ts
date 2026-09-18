@@ -475,7 +475,10 @@ type CodexRpcMessage = { id?: number; result?: unknown; error?: { message?: stri
  */
 function codexRpc(cli: string, requests: CodexRpcRequest[], env: NodeJS.ProcessEnv = process.env, cwd?: string): Promise<unknown[]> {
   return new Promise((resolve, reject) => {
-    const child = spawn(cli, ['app-server', '-c', 'cli_auth_credentials_store="file"'], { stdio: ['pipe', 'pipe', 'pipe'], env, cwd, windowsHide: true });
+    // `model_provider` pins Codex's built-in provider: while the AI Usage account proxy is selected in config.toml
+    // (`requires_openai_auth = false`), Codex would otherwise answer these login and rate-limit questions with "no login".
+    const child = spawn(cli, ['app-server', '-c', 'cli_auth_credentials_store="file"', '-c', 'model_provider="openai"'],
+      { stdio: ['pipe', 'pipe', 'pipe'], env, cwd, windowsHide: true });
     let buffer = '';
     let stderr = '';
     let settled = false;
@@ -661,6 +664,25 @@ export async function verifyCodexNativeAccount(
     return { status: 'unverified', detail: `Codex app-server could not be asked for its login: ${failures.join('; ')}` };
   }
   return compareCodexAccount(expected, status);
+}
+
+/**
+ * Asks a fresh `codex app-server` on `home` to refresh the ChatGPT tokens in its `auth.json`. Codex does the
+ * refresh itself and rewrites the file, rotating the refresh token the way it expects, which is why the account
+ * proxy delegates to it after an upstream 401 instead of calling the OAuth endpoint. Resolves to whether Codex
+ * answered; never throws.
+ */
+export async function refreshCodexNativeLogin(command = 'codex', home = codexHomeDir(), env: NodeJS.ProcessEnv = process.env): Promise<boolean> {
+  const cli = resolveCli(command);
+  if (!cli) {
+    return false;
+  }
+  try {
+    await codexRpc(cli, [{ method: 'getAuthStatus', params: { includeToken: false, refreshToken: true } }], { ...env, CODEX_HOME: home });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function codexWindowsFromRpc(limits: CodexRateLimitsResponse['rateLimits']): UsageWindow[] {

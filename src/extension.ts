@@ -10,11 +10,13 @@ import { AccountAutomation, AutomationSettings } from './accountAutomation';
 import { probeAccount } from './accountProbe';
 import { SharedCache, deserializeUsage } from './cache';
 import { findStaleCodexProcesses } from './codexProcesses';
+import { CodexProxyRuntime } from './codexProxyRuntime';
 import {
   GitHubAccount,
   LiveResult,
   LiveUsage,
   ProviderId,
+  codexHomeDir,
   fetchClaudeUsage,
   fetchCodexUsage,
   fetchCodexUsageCli,
@@ -22,6 +24,7 @@ import {
   fetchCopilotUsage,
   formatResetIn,
   formatResetRemaining,
+  refreshCodexNativeLogin,
   verifyCodexNativeAccount
 } from './live';
 import { compactTokenCount, readCurrentSessionTokens, SessionTokenUsage } from './sessionTokens';
@@ -159,6 +162,14 @@ export function activate(context: vscode.ExtensionContext): void {
       : undefined);
   void authProfiles.migrateAutomationSettings().catch((error) =>
     log(`could not move the account feature switches to settings: ${error instanceof Error ? error.message : String(error)}`));
+  // Routes the Codex extension's model calls through a local proxy that reads auth.json per request, so a profile
+  // switch reaches open Codex chats on their next turn (aiUsage.codex.proxy.enabled). Opt-in; see codexProxy.ts.
+  const codexProxy = new CodexProxyRuntime(context, log, codexHomeDir,
+    () => refreshCodexNativeLogin(vscode.workspace.getConfiguration().get<string>('aiUsage.codex.cliPath') || 'codex'),
+    String((context.extension.packageJSON as { version?: string }).version ?? '0'));
+  context.subscriptions.push(codexProxy);
+  authProfiles.codexChatsFollowSwitch = () => codexProxy.active;
+  void codexProxy.sync();
   const status = vscode.window.createStatusBarItem(STATUS_ALIGNMENT, STATUS_PRIORITY.manual);
   status.command = 'aiUsage.showDetails';
   status.name = 'AI Usage';
@@ -369,6 +380,10 @@ export function activate(context: vscode.ExtensionContext): void {
     if (!vscode.workspace.getConfiguration().get<boolean>('aiUsage.codex.switchRestartHint', true)) {
       return;
     }
+    // With the account proxy, chats follow the switch on their next turn; a restart would repair nothing.
+    if (codexProxy.active) {
+      return;
+    }
     const record = context.globalState.get<CodexSwitchRecord>(CODEX_SWITCH_KEY);
     if (!record || context.workspaceState.get<number>(CODEX_SWITCH_NOTIFIED_KEY) === record.switchedAt) {
       return;
@@ -409,6 +424,8 @@ export function activate(context: vscode.ExtensionContext): void {
   const accountTimer = setInterval(() => {
     void automation.tick();
     void warnAboutStaleCodexProcesses();
+    // Retries a blocked port and takes the proxy over when the window that served it has closed.
+    void codexProxy.sync();
   }, 60_000);
   context.subscriptions.push({ dispose: () => clearInterval(accountTimer) });
   context.subscriptions.push(vscode.commands.registerCommand('aiUsage.manageAuthProfiles', async (value?: unknown) => {
@@ -588,6 +605,9 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(vscode.workspace.onDidChangeConfiguration((event) => {
     if (event.affectsConfiguration('aiUsage.accounts')) {
       refreshManual();
+    }
+    if (event.affectsConfiguration('aiUsage.codex.proxy')) {
+      void codexProxy.sync();
     }
     if (
       event.affectsConfiguration('aiUsage.claude') ||

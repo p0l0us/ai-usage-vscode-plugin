@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.0.17 (unreleased)
+
+- Add an experimental, opt-in **Codex account proxy** (`aiUsage.codex.proxy.enabled`, `aiUsage.codex.proxy.port`):
+  a loopback HTTP server that the Codex VS Code extension and CLI reach through a `model_providers.ai-usage` entry
+  AI Usage manages in Codex's `config.toml`. It attaches the login from `auth.json` to every request, so switching
+  the Codex authentication profile reaches open Codex chats on their next turn with no extension or window restart;
+  the **Restart extensions** hint remains the fallback while the proxy is off. Turning the setting off restores
+  `config.toml`.
+- Pin `model_provider = "openai"` for AI Usage's own Codex usage checks and switch verification, so they keep
+  reporting the login while the proxy provider is selected.
+
 ## 0.0.16 (2026-09-17)
 
 - Mark every **Copilot CLI bridge** setting as experimental: the section is titled *(experimental)* and each

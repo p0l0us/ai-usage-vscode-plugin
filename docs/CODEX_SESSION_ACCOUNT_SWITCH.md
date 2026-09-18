@@ -201,3 +201,36 @@ AI Usage switch. Tested with one long-lived `codex -c features.code_mode_host=tr
   `Codex account 4 (Frydl)`) were refreshed independently by keep-alives and by a switch between them; the provider
   revoked the login (`401 token_revoked`, "invalidated oauth token for user") within the hour. Profiles now record the
   login email, mark duplicates and warn before a second copy is saved.
+
+## 13. Account proxy (2026-09-18)
+
+The restart offer of §12 is now the fallback. `aiUsage.codex.proxy.enabled` routes the Codex extension's model
+requests through a local proxy (`src/codexProxy.ts`, `src/codexConfig.ts`, `src/codexProxyRuntime.ts`) that reads
+`auth.json` per request, so a switch reaches every chat on the proxy on its next turn with no restart. Findings that
+made it possible, all **verified** against the 0.154.0 app-server bundled with the extension:
+
+- `config.toml` is loaded on every `thread/start`: a config error is reported by that request, and a provider edited
+  between two `thread/start` calls is used by the second thread while the first keeps its own. The webview passes
+  `modelProvider: null` unless the Copilot language-model proxy is in use, so the file's `model_provider` wins. A
+  provider with `requires_openai_auth = false` and `http_headers = { Authorization = "Bearer …" }` sends exactly
+  that header and no login; with `requires_openai_auth = true` the login's bearer overrides the configured header.
+- With such a provider selected, `getAuthStatus`, `account/read` and `account/rateLimits/read` report no login and
+  `requiresOpenaiAuth: false`; the webview computes `requiresAuth = requiresOpenaiAuth ?? true` and skips its login
+  wall. AI Usage's own probes pass `-c model_provider="openai"` and see the login again.
+- To a custom provider Codex sends HTTP `POST {base_url}/responses` with `originator`, `user-agent`, `session-id`,
+  `thread-id`, `x-codex-*` and `x-client-request-id` headers and no `Authorization` beyond `http_headers`. To its
+  own backend it opens a WebSocket to `wss://chatgpt.com/backend-api/codex/responses` with `Authorization`,
+  `chatgpt-account-id`, `version` and `openai-beta: responses_websockets=…`. The HTTP form of that backend URL
+  accepts the custom-provider body with only `Authorization`, `chatgpt-account-id` and `version` added: the proxied
+  request was authenticated and answered with 429 `usage_limit_reached` plus `x-codex-*` rate-limit headers (every
+  available workspace was out of credits that day), which the app-server surfaced as `account/rateLimits/updated`.
+  A 200 stream through the proxy is verified against a mock upstream only.
+- A rewritten `auth.json` is still never adopted by a running process; writing into its stdin through
+  `/proc/<pid>/fd/0` is impossible (libuv stdio is a socketpair, `ENXIO`; `ptrace_scope = 1`), and the extension's
+  IPC socket (`$CODEX_HOME/ipc/ipc.sock`) forwards only `ide-context` and `thread-owner-discovery`.
+  `account/login/start { type: "apiKey" | "chatgptAuthTokens" }` does switch a live process, but only the process
+  that owns its stdio can send it, which would mean a launcher shim (`codex2.cliExecutable`, one reload) or a patched
+  bundle.
+
+Not covered by the proxy: chats started before it was enabled (they keep the provider recorded at their start), the
+Codex account panel and its rate-limit widget (no login is reported), and plugin catalog fetches (ChatGPT auth only).

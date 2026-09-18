@@ -73,10 +73,15 @@ export type ActivationVerification = {
 };
 export type ActivationVerifier = (provider: AuthProvider, credential: StoredCredential) => Promise<ActivationVerification | undefined>;
 
-/** Codex reloads auth.json on its request path, so open chats follow a switch without a restart. */
-function activationMessage(provider: AuthProvider, name: string, automatic: boolean): string {
+/**
+ * A running Codex process keeps its login in memory, so without the account proxy the Codex extension needs an
+ * extension-host restart; with the proxy, every chat routed through it uses the new login from its next turn.
+ */
+function activationMessage(provider: AuthProvider, name: string, automatic: boolean, codexChatsFollow: boolean): string {
   if (provider === 'codex') {
-    const followUp = 'New Codex CLI sessions use it now; the Codex extension needs an extension restart.';
+    const followUp = codexChatsFollow
+      ? 'Codex chats and new CLI sessions use it from their next turn.'
+      : 'New Codex CLI sessions use it now; the Codex extension needs an extension restart.';
     return automatic ? `AI Usage: Codex automatically rotated to account “${name}”. ${followUp}` : `Codex switched to “${name}”. ${followUp}`;
   }
   return automatic
@@ -111,6 +116,9 @@ export class AuthProfileManager {
     private readonly verifyActivation?: ActivationVerifier,
     private readonly emailOf: (provider: AuthProvider, credential: StoredCredential) => Promise<string | undefined> = resolveCredentialEmail
   ) {}
+
+  /** Set by extension.ts: true while the Codex account proxy routes Codex chats, so a switch needs no restart. */
+  codexChatsFollowSwitch: () => boolean = () => false;
 
   profiles(provider: AuthProvider): ProfileMetadata[] {
     return this.state()[provider].profiles;
@@ -538,7 +546,7 @@ export class AuthProfileManager {
       void vscode.window.showErrorMessage(
         `AI Usage: ${TITLES[provider]} was switched to “${profile.name}”, but ${TITLES[provider]} reports a different login. ${verification.detail}`);
     } else {
-      void vscode.window.showInformationMessage(activationMessage(provider, profile.name, automatic));
+      void vscode.window.showInformationMessage(activationMessage(provider, profile.name, automatic, this.codexChatsFollowSwitch()));
     }
     return true;
   }

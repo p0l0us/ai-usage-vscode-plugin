@@ -72,6 +72,34 @@ action is `workbench.action.restartExtensionHost`; processes are never killed an
 detected by the stored email: refreshing two copies independently reuses a rotated refresh token and the provider
 revokes the login, so saving or importing a credential whose email is already saved asks for confirmation.
 
+`src/codexProxy.ts`, `src/codexConfig.ts` and `src/codexProxyRuntime.ts` implement the opt-in Codex account proxy
+(`aiUsage.codex.proxy.*`). Codex loads `config.toml` on every `thread/start`, and a custom `model_providers.<id>`
+entry may carry any `base_url`, `requires_openai_auth = false` and static `http_headers`; the Codex extension's
+webview sends `modelProvider: null` unless the Copilot language-model proxy is in use, so the file's
+`model_provider` decides. `codexConfig.ts` edits the file line by line: a root-level
+`model_provider = "ai-usage" # managed by ai-usage` line (the user's own line is recorded as JSON inside the block
+and restored on removal) and a `[model_providers.ai-usage]` table between two marker comments, written through the
+same atomic mode-0600 path as `auth.json`; an emptied file is deleted. `codexProxy.ts` is a Node `http` server on
+`127.0.0.1` that answers `GET /ai-usage/health` (service name, pid, version) and forwards `/v1/*` after checking
+that `Host` is loopback and `Authorization` equals the token from the block. Per request it parses `auth.json` the
+way Codex does (ChatGPT tokens unless `auth_mode = "apikey"`), drops hop-by-hop headers and the placeholder
+`Authorization`, adds `Authorization: Bearer <access token>`, `chatgpt-account-id` and `version` (derived from the
+user agent; Codex sends it to its own backend but not to custom providers) for ChatGPT logins or
+`Authorization: Bearer <API key>` for API keys, and streams the response back with its `x-codex-*` rate-limit
+headers, which the app-server turns into `account/rateLimits/updated`. Codex talks WebSocket to its own backend but
+plain HTTP to custom providers, so upgrades are refused; the HTTP form of `/backend-api/codex/responses` accepts
+the custom-provider request (verified live: 429 with rate-limit headers on an exhausted workspace). An upstream 401 for
+a ChatGPT login runs `refreshCodexNativeLogin` (`getAuthStatus { refreshToken: true }` on a fresh app-server, so
+Codex rotates the refresh token itself) once, shared by concurrent requests, then retries with the token now in the
+file. `codexProxyRuntime.ts` binds the configured port on activation, on `aiUsage.codex.proxy` changes and on the
+one-minute tick: the first window serves and writes the block; a window that gets `EADDRINUSE` probes the health
+endpoint and stays passive when the listener is ours (or reports the port as taken, once); the owner removes the block
+on disable, on a port change and in `dispose()`; the bearer token is kept in SecretStorage
+(`aiUsage.codexProxy.secret.v1`) and read back from the file so a new owner keeps the token running chats already
+send. Every AI Usage `codex app-server` probe passes `-c model_provider="openai"`, because a server on the proxy
+provider reports no login and no rate limits. `AuthProfileManager.codexChatsFollowSwitch` and the stale-process
+warning consult the runtime so the switch message and the restart offer match the mode.
+
 ## How the chat chip works
 
 VS Code renders an item of the `chat/input/status` menu as its static title (or, if the command has an icon, as the

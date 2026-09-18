@@ -93,11 +93,16 @@ function readJsonObjectIfPresent(file: string): Record<string, unknown> {
 
 /** Writes a complete document through a mode-0600 temporary file, then atomically replaces the target. */
 export function writeJsonAtomically(file: string, document: Record<string, unknown>): void {
+  writeTextAtomically(file, `${JSON.stringify(document, null, 2)}\n`);
+}
+
+/** Writes text through a mode-0600 temporary file in the target's directory, then atomically replaces the target. */
+export function writeTextAtomically(file: string, text: string): void {
   const directory = path.dirname(file);
   fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
   const temporary = path.join(directory, `.${path.basename(file)}.ai-usage-${process.pid}-${randomUUID()}.tmp`);
   try {
-    fs.writeFileSync(temporary, `${JSON.stringify(document, null, 2)}\n`, {
+    fs.writeFileSync(temporary, text, {
       encoding: 'utf8',
       flag: 'wx',
       mode: 0o600

@@ -130,10 +130,31 @@ the new login. Processes that were already running do not: Codex keeps its login
 that the file changed underneath it and fails that turn with *"signed in to another account"* rather than adopting
 the new credentials (verified against Codex 0.154.0). The Codex VS Code extension starts its `app-server` once and
 never respawns it, VS Code cannot restart a single extension, and the extension's own recovery path is a full window
-reload. AI Usage therefore says so in the switch message and, in each window whose Codex process predates the switch,
-shows one warning per switch with a **Restart extensions** action. That restarts only that window's extension host;
-editors and terminals stay open and Codex chats reopen from their local session files. Nothing is killed and nothing
-restarts by itself. Set `aiUsage.codex.switchRestartHint` to `false` to silence the warning.
+reload. AI Usage offers two ways out.
+
+**Codex account proxy** (`aiUsage.codex.proxy.enabled`, experimental, off by default). AI Usage starts a small HTTP
+server on `127.0.0.1:43117` (`aiUsage.codex.proxy.port`) and adds a `model_providers.ai-usage` entry to Codex's
+`config.toml`, selected as `model_provider`. Codex re-reads that file whenever a chat starts, so from the next new
+chat on, the Codex extension and the CLI send their model requests to the proxy without credentials; the proxy reads
+`auth.json` *for every request*, attaches the active login and forwards the request unchanged: ChatGPT logins to
+`chatgpt.com/backend-api/codex`, API keys to `api.openai.com`. A switch therefore reaches every chat on the proxy
+on its next turn, and nothing is restarted. What changes for you: Codex's own account panel shows no login while the
+provider is selected (the AI Usage status bar keeps showing the usage), chats opened before the proxy was enabled keep
+their previous path until you start a new chat, and failed Codex model requests are noted in the AI Usage log. One
+AI Usage window serves the port and the others share it; when the serving window closes, the provider entry is
+removed until another window takes the port over (within a minute), and turning the setting off restores
+`config.toml` to what it was. Only the managed block between two marker comments and the `model_provider` line are
+touched. AI Usage's own usage checks pin `model_provider = "openai"` and are unaffected. The proxy answers only
+requests addressed to `127.0.0.1` that carry a token it writes into `config.toml`, so a web page on the same machine
+cannot use the login through it; anything that can read `auth.json` could use the login anyway. When the ChatGPT
+backend answers 401, the proxy asks Codex itself to refresh the tokens once (a fresh `codex app-server` on the
+native home rewrites `auth.json`) and retries.
+
+**Restart hint** (while the proxy is off). AI Usage says so in the switch message and, in each window whose Codex
+process predates the switch, shows one warning per switch with a **Restart extensions** action. That restarts only
+that window's extension host; editors and terminals stay open and Codex chats reopen from their local session files.
+Nothing is killed and nothing restarts by itself. Set `aiUsage.codex.switchRestartHint` to `false` to silence the
+warning.
 
 Right after the write, AI Usage starts a fresh `codex app-server` on the native home and checks that the login it
 reports (`getAuthStatus`, falling back to `account/read`) is the activated profile. A mismatch is shown as an error
@@ -211,8 +232,8 @@ authorize a switch. If
 all candidates are exhausted, no native credential is changed. Another sweep may run after
 `aiUsage.<provider>.checkIntervalMinutes`, allowing accounts to become eligible after their limits reset.
 The selected account must still match the native login immediately before activation. As with manual switching,
-Codex chats that are already open continue on the new account from their next turn, and Claude picks the new login
-up on its next request.
+Claude picks the new login up on its next request; open Codex chats follow it on their next turn when the Codex
+account proxy is on and otherwise need the extension restart described above.
 
 CLI behavior references: [OpenAI Docs: noninteractive Codex](https://learn.chatgpt.com/docs/non-interactive-mode)
 and [Claude CLI reference](https://code.claude.com/docs/en/cli-reference).
