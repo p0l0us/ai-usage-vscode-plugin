@@ -63,11 +63,14 @@ global storage. Activating a profile atomically updates the native file already 
 extension (`~/.claude/.credentials.json` / `$CLAUDE_CONFIG_DIR`, or `~/.codex/auth.json` / `$CODEX_HOME`). The file
 is forced to mode `0600` on Linux/macOS and inherits the user-profile ACL on Windows. Claude MCP credentials in the
 same file are preserved. This native active copy remains plaintext because Claude Code and Codex require that
-format; only one selected profile is exposed there at a time.
+format; only one selected profile is exposed there at a time. For Claude, activation also updates the token's
+account UUID/email in `~/.claude.json` and clears its account-bound caches, so `/status` and `/usage` do not retain
+the previous Team member's identity.
 
 A convenient setup is: sign in with the CLI, save the current login as a profile, sign in with the next account,
-and save again. An imported profile is saved but not activated until you choose it. New requests use a switched
-login. Codex keeps its login in memory, so open Codex chats follow a switch only through the optional **Codex account
+and save again. An imported profile is saved but not activated until you choose it. Claude reads its credential file
+per turn, so open Claude chats and CLI sessions use a switched login from their next turn, with no restart. Codex
+keeps its login in memory, so open Codex chats follow a switch only through the optional **Codex account
 proxy** (`aiUsage.codex.proxy.enabled`), which routes their requests through AI Usage and attaches the active login
 per request; without it, AI Usage offers an extension-host restart. In remote development, profiles belong to the
 extension host (local, SSH, WSL, or container) where the command is run.

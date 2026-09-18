@@ -40,13 +40,12 @@ test('a failed write leaves the previous document untouched', t => {
   assert.deepEqual(fs.readdirSync(root), ['auth.json']);
 });
 
-// Claude Code rotates the refresh token whenever it refreshes the access token, so the stored copy of the
-// active profile must be recognised by the organization it belongs to or it is never updated again.
-test('a refreshed Claude login with a rotated refresh token still belongs to the same organization', () => {
+// An organization UUID identifies a Team, not one user. Rotated tokens need a live account-UUID comparison.
+test('Claude credential ownership never conflates users in the same organization', () => {
   const stored = { claudeAiOauth: { accessToken: 'a1', refreshToken: 'r1', expiresAt: 1 }, organizationUuid: 'org-1' };
   const rotated = { claudeAiOauth: { accessToken: 'a2', refreshToken: 'r2', expiresAt: 2 }, organizationUuid: 'org-1' };
   const otherOrganization = { claudeAiOauth: { accessToken: 'a3', refreshToken: 'r3', expiresAt: 3 }, organizationUuid: 'org-2' };
-  assert.equal(isSameCredentialOwner('claude', stored, rotated), true);
+  assert.equal(isSameCredentialOwner('claude', stored, rotated), false);
   assert.equal(isSameCredentialOwner('claude', stored, otherOrganization), false);
   // Same refresh token is still enough when an imported document carries no organization.
   const imported = { claudeAiOauth: { accessToken: 'a1', refreshToken: 'r1' } };

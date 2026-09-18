@@ -1,7 +1,23 @@
 # Changelog
 
-## 0.0.17 (unreleased)
+## 0.0.17 (2026-09-18)
 
+- Keep Claude's own account identity in step with a profile switch. Claude Code renders `/status` and `/usage` from
+  `~/.claude.json`, not from its credential file, so activating a Claude profile now writes that token's account
+  UUID, email and organization there and drops the account-bound usage/model caches. Switching between members of
+  one Team no longer leaves Claude reporting the account you switched away from.
+- Never leave the previous account on display when Anthropic's profile endpoint cannot be reached (it rate-limits
+  per account): the switch still happens, the stale identity is replaced by what the saved profile holds, the
+  notification says the login could not be confirmed and why, and AI Usage retries in the background until Claude's
+  own status agrees with the switch.
+- Report the reason a login could not be confirmed — an HTTP status, a timeout or an unreachable endpoint — in the
+  notification and the log, instead of reporting a clean switch.
+- Drop the Claude restart hint: Claude Code re-reads its credential file per turn, so open Claude chats and CLI
+  sessions adopt a switched login from their next turn without an extension or window restart (verified against
+  Claude Code 2.1.276). Codex still needs its hint, or the account proxy.
+- Fix the Codex restart hint firing when nothing was switched: saving the current login into a profile, or
+  re-selecting the account that is already active, no longer counts as a switch and no longer flags Codex processes
+  that hold the right login.
 - Add an experimental, opt-in **Codex account proxy** (`aiUsage.codex.proxy.enabled`, `aiUsage.codex.proxy.port`):
   a loopback HTTP server that the Codex VS Code extension and CLI reach through a `model_providers.ai-usage` entry
   AI Usage manages in Codex's `config.toml`. It attaches the login from `auth.json` to every request, so switching

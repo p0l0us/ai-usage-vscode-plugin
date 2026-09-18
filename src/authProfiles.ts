@@ -9,7 +9,7 @@ import {
   readNativeCredential,
   writeNativeCredential
 } from './authFiles';
-import { resolveCredentialEmail } from './accountIdentity';
+import { CredentialIdentity, resolveCredentialIdentity } from './accountIdentity';
 
 const STATE_KEY = 'aiUsage.authProfiles.v1';
 const AUTOMATION_STATE_KEY = 'aiUsage.accountAutomation.v1';
@@ -23,6 +23,8 @@ export type ProfileMetadata = {
   updatedAt: string;
   /** Login email behind the credential, shown beside the name so duplicate accounts are visible. */
   email?: string;
+  /** Stable vendor account id; Claude Team members can share an organization but never this id. */
+  accountId?: string;
 };
 
 /** Menu description: the account email, a duplicate marker, then the active marker. */
@@ -58,9 +60,15 @@ type ProfileItem = vscode.QuickPickItem & {
   action?: 'save' | 'import' | 'rename' | 'delete' | 'keepAliveNow' | 'settings';
 };
 
+/**
+ * What the `afterActivate` hook is reacting to. Only a real account change invalidates already-running vendor
+ * processes, so re-saving or re-selecting the login that is already active must not be reported as a switch.
+ */
+export type ActivationChange = { kind: 'activated' | 'saved'; accountChanged: boolean };
+
 type ProfileHooks = {
   beforeActivate?: (provider: AuthProvider) => Promise<void>;
-  afterActivate?: (provider: AuthProvider) => Promise<void>;
+  afterActivate?: (provider: AuthProvider, change: ActivationChange) => Promise<void>;
   sendKeepAlive?: (provider: AuthProvider, profile: ProfileMetadata) => Promise<void>;
 };
 
@@ -70,8 +78,11 @@ const TITLES: Record<AuthProvider, string> = { claude: 'Claude', codex: 'Codex' 
 export type ActivationVerification = {
   status: 'match' | 'mismatch' | 'unverified';
   detail: string;
+  email?: string;
+  accountId?: string;
 };
-export type ActivationVerifier = (provider: AuthProvider, credential: StoredCredential) => Promise<ActivationVerification | undefined>;
+/** `expected` is what the saved profile claims to hold, so a verifier can fall back to it when the vendor is silent. */
+export type ActivationVerifier = (provider: AuthProvider, credential: StoredCredential, expected: CredentialIdentity) => Promise<ActivationVerification | undefined>;
 
 /**
  * A running Codex process keeps its login in memory, so without the account proxy the Codex extension needs an
@@ -84,9 +95,11 @@ function activationMessage(provider: AuthProvider, name: string, automatic: bool
       : 'New Codex CLI sessions use it now; the Codex extension needs an extension restart.';
     return automatic ? `AI Usage: Codex automatically rotated to account “${name}”. ${followUp}` : `Codex switched to “${name}”. ${followUp}`;
   }
+  // Claude Code reads its credential file per turn, so open chats and CLI sessions adopt a switch without a restart
+  // (verified 2026-09-18 against 2.1.276: a chat started before the switch reported the new account 15s after it).
   return automatic
-    ? `AI Usage: ${TITLES[provider]} automatically rotated to account “${name}”.`
-    : `${TITLES[provider]} switched to “${name}”. New requests will use this login.`;
+    ? `AI Usage: Claude automatically rotated to account “${name}”. Chats and CLI sessions use it from their next turn.`
+    : `Claude switched to “${name}”. Chats and CLI sessions use it from their next turn.`;
 }
 
 function emptyState(): ProfileState {
@@ -114,7 +127,7 @@ export class AuthProfileManager {
     private readonly log: (message: string) => void,
     private readonly usageDetail?: (provider: AuthProvider, id: string) => string | undefined,
     private readonly verifyActivation?: ActivationVerifier,
-    private readonly emailOf: (provider: AuthProvider, credential: StoredCredential) => Promise<string | undefined> = resolveCredentialEmail
+    private readonly identityOf: (provider: AuthProvider, credential: StoredCredential) => Promise<CredentialIdentity> = resolveCredentialIdentity
   ) {}
 
   /** Set by extension.ts: true while the Codex account proxy routes Codex chats, so a switch needs no restart. */
@@ -143,33 +156,36 @@ export class AuthProfileManager {
       } catch { return; /* Native login may have been removed externally. */ }
     }
     await this.storeSecret(provider, id, after);
-    await this.recordEmail(provider, id, after);
+    await this.recordIdentity(provider, id, after);
   }
 
-  /** Stores the credential's email in the profile metadata when it is still unknown or has changed. */
-  private async recordEmail(provider: AuthProvider, id: string, credential: StoredCredential): Promise<void> {
-    let email: string | undefined;
-    try { email = await this.emailOf(provider, credential); } catch { return; }
-    if (!email) { return; }
+  /** Stores stable identity beside the profile so same-organization Claude users remain distinct. */
+  private async recordIdentity(provider: AuthProvider, id: string, credential: StoredCredential): Promise<void> {
+    let identity: CredentialIdentity;
+    try { identity = await this.identityOf(provider, credential); } catch { return; }
+    if (!identity.email && !identity.accountId) { return; }
     const state = this.state();
     const profile = state[provider].profiles.find((candidate) => candidate.id === id);
-    if (!profile || profile.email === email) { return; }
-    profile.email = email;
+    if (!profile || (profile.email === identity.email && profile.accountId === identity.accountId)) { return; }
+    if (identity.email) { profile.email = identity.email; }
+    if (identity.accountId) { profile.accountId = identity.accountId; }
     await this.updateState(state);
   }
 
-  /** Resolves emails for saved profiles that were created before emails were recorded. */
+  /** Resolves identities for saved profiles that predate account UUID tracking. */
   private async backfillEmails(provider: AuthProvider): Promise<void> {
-    const missing = this.state()[provider].profiles.filter((profile) => !profile.email);
-    await Promise.all(missing.map(async (profile) => {
+    const missing = this.state()[provider].profiles.filter((profile) => !profile.email || (provider === 'claude' && !profile.accountId));
+    // Each update reads and replaces globalState, so serialize them to avoid one profile erasing another's result.
+    for (const profile of missing) {
       const credential = await this.readSecret(provider, profile.id);
-      if (credential) { await this.recordEmail(provider, profile.id, credential); }
-    }));
+      if (credential) { await this.recordIdentity(provider, profile.id, credential); }
+    }
   }
 
   async matchesNative(provider: AuthProvider, id: string): Promise<boolean> {
+    const profile = this.profiles(provider).find((candidate) => candidate.id === id);
     const stored = await this.readSecret(provider, id);
-    try { return Boolean(stored && isSameCredentialOwner(provider, stored, readNativeCredential(provider))); }
+    try { return Boolean(profile && stored && await this.sameCredentialOwner(provider, profile, stored, readNativeCredential(provider))); }
     catch { return false; }
   }
 
@@ -217,6 +233,13 @@ export class AuthProfileManager {
     return providerState.profiles.find((profile) => profile.id === providerState.activeProfileId)?.name;
   }
 
+  /** What the active profile claims to hold, used to correct vendor metadata when the vendor cannot be asked. */
+  activeIdentity(provider: AuthProvider): CredentialIdentity {
+    const providerState = this.state()[provider];
+    const active = providerState.profiles.find((profile) => profile.id === providerState.activeProfileId);
+    return { email: active?.email, accountId: active?.accountId };
+  }
+
   /** A non-secret cache suffix prevents usage from one account appearing after switching to another. */
   cacheDiscriminator(provider: AuthProvider): string | undefined {
     const id = this.activeProfileId(provider);
@@ -246,9 +269,11 @@ export class AuthProfileManager {
       }
       try {
         if (item.profile) {
+          // Re-selecting the login that is already active and already written changes nothing for running processes.
+          const unchanged = this.activeProfileId(provider) === item.profile.id && await this.matchesNative(provider, item.profile.id);
           await hooks?.beforeActivate?.(provider);
           if (await this.activate(provider, item.profile)) {
-            await hooks?.afterActivate?.(provider);
+            await hooks?.afterActivate?.(provider, { kind: 'activated', accountChanged: !unchanged });
           }
           return;
         }
@@ -259,8 +284,9 @@ export class AuthProfileManager {
           await vscode.commands.executeCommand('workbench.action.openSettings', `@ext:p0l0us.ai-usage-vscode-plugin aiUsage.${provider}`);
           return;
         } else if (item.action === 'save') {
+          // Saving copies the login that is already active into a profile; no process starts using a new account.
           if (await this.saveCurrent(provider)) {
-            await hooks?.afterActivate?.(provider);
+            await hooks?.afterActivate?.(provider, { kind: 'saved', accountChanged: false });
           }
         } else if (item.action === 'import') {
           await this.importFile(provider);
@@ -404,7 +430,7 @@ export class AuthProfileManager {
       providerState.activeProfileId = profile.id;
     }
     await this.updateState(state);
-    await this.recordEmail(provider, profile.id, credential);
+    await this.recordIdentity(provider, profile.id, credential);
     this.log(`${provider}: saved authentication profile "${name}"${active ? ' (active)' : ''}`);
   }
 
@@ -445,7 +471,7 @@ export class AuthProfileManager {
         target.updatedAt = new Date().toISOString();
         state[provider].activeProfileId = target.id;
         await this.updateState(state);
-        await this.recordEmail(provider, target.id, credential);
+        await this.recordIdentity(provider, target.id, credential);
         this.log(`${provider}: updated authentication profile "${target.name}" from the current login`);
         void vscode.window.showInformationMessage(`${TITLES[provider]} profile “${target.name}” updated from the current login.`);
         return true;
@@ -470,7 +496,7 @@ export class AuthProfileManager {
   /** Warns when a credential's login is already saved; returns false when the user declines to add a copy. */
   private async confirmNotDuplicate(provider: AuthProvider, credential: StoredCredential): Promise<boolean> {
     let email: string | undefined;
-    try { email = await this.emailOf(provider, credential); } catch { return true; }
+    try { email = (await this.identityOf(provider, credential)).email; } catch { return true; }
     const twin = email ? this.state()[provider].profiles.find((profile) => profile.email === email) : undefined;
     if (!twin) {
       return true;
@@ -535,9 +561,29 @@ export class AuthProfileManager {
     // The file is written and the profile is active either way; verification only decides what to tell the user.
     let verification: ActivationVerification | undefined;
     try {
-      verification = await this.verifyActivation?.(provider, credential);
+      verification = await this.verifyActivation?.(provider, credential, { email: profile.email, accountId: profile.accountId });
     } catch (error) {
       verification = { status: 'unverified', detail: errorMessage(error) };
+    }
+    // The verifier reports the exact native token it checked. A stored account UUID is authoritative; legacy
+    // email-only metadata is upgraded because older versions could copy the wrong same-Team email offline.
+    if (provider === 'claude' && verification?.status === 'match') {
+      const accountMismatch = profile.accountId && verification.accountId && profile.accountId !== verification.accountId;
+      if (accountMismatch) {
+        verification = {
+          ...verification,
+          status: 'mismatch',
+          detail: `Claude token belongs to ${verification.email ?? verification.accountId}, but profile “${profile.name}” was saved for ${profile.email ?? profile.accountId}.`
+        };
+      } else if ((!profile.accountId && verification.accountId) || (verification.email && profile.email !== verification.email)) {
+        const verifiedState = this.state();
+        const verifiedProfile = verifiedState[provider].profiles.find((candidate) => candidate.id === profile.id);
+        if (verifiedProfile) {
+          verifiedProfile.accountId = verification.accountId ?? verifiedProfile.accountId;
+          verifiedProfile.email = verification.email ?? verifiedProfile.email;
+          await this.updateState(verifiedState);
+        }
+      }
     }
     if (verification) {
       this.log(`${provider}: activation ${verification.status} — ${verification.detail}`);
@@ -545,6 +591,11 @@ export class AuthProfileManager {
     if (verification?.status === 'mismatch') {
       void vscode.window.showErrorMessage(
         `AI Usage: ${TITLES[provider]} was switched to “${profile.name}”, but ${TITLES[provider]} reports a different login. ${verification.detail}`);
+    } else if (verification?.status === 'unverified') {
+      // The credential file is switched, but the vendor could not confirm which login it holds. Say so rather
+      // than reporting a clean switch the user cannot see in the vendor's own status output.
+      void vscode.window.showWarningMessage(
+        `AI Usage: ${TITLES[provider]} switched to “${profile.name}”, but the login could not be confirmed: ${verification.detail}`);
     } else {
       void vscode.window.showInformationMessage(activationMessage(provider, profile.name, automatic, this.codexChatsFollowSwitch()));
     }
@@ -564,17 +615,33 @@ export class AuthProfileManager {
     }
     try {
       const native = readNativeCredential(provider);
-      if (!isSameCredentialOwner(provider, stored, native)) {
+      if (!await this.sameCredentialOwner(provider, active, stored, native)) {
         return;
       }
       await this.storeSecret(provider, active.id, native);
       active.updatedAt = new Date().toISOString();
       await this.updateState(state);
       this.log(`${provider}: captured refreshed tokens for profile "${active.name}"`);
-      if (!active.email) { await this.recordEmail(provider, active.id, native); }
+      if (!active.email || !active.accountId) { await this.recordIdentity(provider, active.id, native); }
     } catch {
       // A missing or temporarily incomplete native file must not prevent activating another profile.
     }
+  }
+
+  /** Strong Claude fallback for rotated refresh tokens: compare the token's user, never its shared Team org. */
+  private async sameCredentialOwner(provider: AuthProvider, profile: ProfileMetadata,
+    stored: StoredCredential, native: StoredCredential): Promise<boolean> {
+    if (isSameCredentialOwner(provider, stored, native)) {
+      return true;
+    }
+    if (provider !== 'claude' || (!profile.accountId && !profile.email)) {
+      return false;
+    }
+    const identity = await this.identityOf(provider, native);
+    if (profile.accountId && identity.accountId) {
+      return profile.accountId === identity.accountId;
+    }
+    return Boolean(profile.email && identity.email && profile.email.toLowerCase() === identity.email.toLowerCase());
   }
 
   private async pickSaved(provider: AuthProvider, title: string): Promise<ProfileMetadata | undefined> {

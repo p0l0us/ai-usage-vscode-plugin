@@ -37,7 +37,7 @@ Nothing is derived from the endpoint's undocumented limit itself: absent headers
 
 ## Authentication profile storage and switching
 
-`src/authProfiles.ts` keeps only profile names, timestamps, ids, and the active id in extension `globalState`.
+`src/authProfiles.ts` keeps profile names, timestamps, stable account ids, emails, and the active id in extension `globalState`.
 Each credential body has its own namespaced `SecretStorage` entry, with a hard limit of 20 per provider.
 `src/authFiles.ts` validates native/imported JSON and performs the filesystem update. Claude profiles contain the
 `claudeAiOauth` object plus its root-level `organizationUuid` when present; activation replaces those account fields
@@ -45,11 +45,32 @@ in the current `.credentials.json` while preserving MCP OAuth entries. Codex pro
 `auth.json` document.
 
 Before activation, a refreshed native credential is copied back to the selected secret only when it can be matched
-to the same owner: Codex `account_id`, an identical refresh token, or for Claude the root `organizationUuid`, because
-Claude Code rotates the refresh token on every refresh and a token-only match would stop capturing after the first one. Writes go through a newly created
+to the same owner: Codex `account_id`, an identical refresh token, or for a rotated Claude token the account UUID
+returned by `/api/oauth/profile`. Claude's root `organizationUuid` is deliberately insufficient because every Team
+member shares it. Writes go through a newly created
 mode-`0600` temporary file in the destination directory and an atomic rename; the resulting file is explicitly
 chmodded to `0600` on POSIX. Windows uses the destination directory's inherited user-profile ACL because its chmod
 implementation does not support POSIX ownership modes.
+
+Claude Code keeps display identity and account caches in `~/.claude.json`, separately from its OAuth credential.
+After activating a Claude token, `src/accountIdentity.ts` resolves that token through `/api/oauth/profile`, replaces
+only `oauthAccount`, and removes known account-bound usage/model caches while preserving all unrelated settings.
+
+That lookup can fail — most often because the endpoint is rate-limiting the account — and the previous account's
+identity must not survive it, or Claude keeps reporting the login the user just switched away from. When the profile
+cannot be fetched, the identity the saved profile is known to hold replaces `oauthAccount` (without
+`profileFetchedAt`, so Claude Code refreshes the rest itself), the account-bound caches are still dropped, and the
+switch is reported to the user as unconfirmed with the reason. `src/extension.ts` then retries on the minute tick,
+re-reading the native credential each time so a token refreshed in the meantime is used, backing off to at least any
+`Retry-After` and giving up after ten attempts.
+
+Claude Code re-reads `.credentials.json` on its request path, so a switch reaches chats and CLI sessions that were
+already running, from their next turn: verified 2026-09-18 against 2.1.276, where a chat process started 13s before
+a switch recorded the newly activated account 15s after it. Claude therefore has no stale-process warning; only
+Codex, whose app-server fails the turn instead, offers an extension-host restart. Only an actual account change
+stamps the switch record that warning measures processes against: re-selecting the active login or saving the
+current login into a profile reports `accountChanged: false`, because neither starts anything on a new account and
+re-stamping would flag every running process, including ones started after the switch.
 
 Codex does not adopt a switched login in a running process: its auth manager re-reads `auth.json` before a turn but,
 when the file now holds another account, fails the turn with "signed in to another account" instead of using it

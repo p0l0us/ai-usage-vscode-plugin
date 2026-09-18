@@ -82,7 +82,11 @@ function fixture(t, verify) {
     },
     secrets: { get: async key => secrets.get(key), store: async (key, value) => { secrets.set(key, value); } }
   }, () => {}, undefined, verify, async (provider, credential) =>
-    provider === 'codex' ? (credential.tokens?.account_id === 'acc-x' ? 'x@example.com' : undefined) : (credential.claudeAiOauth?.accessToken === 'after' ? 'a@example.com' : undefined));
+    provider === 'codex'
+      ? { email: credential.tokens?.account_id === 'acc-x' ? 'x@example.com' : undefined, accountId: credential.tokens?.account_id }
+      : credential.claudeAiOauth?.accessToken === 'external'
+        ? { email: 'other@example.com', accountId: 'account-other' }
+        : { email: 'a@example.com', accountId: 'account-a' });
   return { manager, before, after, file, secrets, state, globalValues, settings, codex, codexFile: path.join(home, 'auth.json') };
 }
 
@@ -150,10 +154,25 @@ test('reactivating the current profile preserves tokens refreshed in the native 
   assert.deepEqual(JSON.parse(fs.readFileSync(f.file)), refreshed);
 });
 
+test('same-organization Claude users cannot overwrite each other during token capture', async t => {
+  const f = fixture(t);
+  const state = f.globalValues.get('aiUsage.authProfiles.v1');
+  state.claude.profiles[0].email = 'a@example.com';
+  state.claude.profiles[0].accountId = 'account-a';
+  f.globalValues.set('aiUsage.authProfiles.v1', state);
+  const otherUser = { claudeAiOauth: { accessToken: 'external', refreshToken: 'external' }, organizationUuid: 'shared-team' };
+  const savedUser = { ...f.before, organizationUuid: 'shared-team' };
+  f.secrets.set('aiUsage.authProfile.v1.claude.a', JSON.stringify(savedUser));
+  fs.writeFileSync(f.file, JSON.stringify(otherUser));
+  assert.equal(await f.manager.activateProfile('claude', 'a'), true);
+  assert.deepEqual(JSON.parse(f.secrets.get('aiUsage.authProfile.v1.claude.a')), savedUser);
+  assert.deepEqual(JSON.parse(fs.readFileSync(f.file)).claudeAiOauth, savedUser.claudeAiOauth);
+});
+
 test('automatic activation identifies the service and destination account', async t => {
   const f = fixture(t);
   assert.equal(await f.manager.activateProfile('claude', 'a', true), true);
-  assert.deepEqual(informationMessages, ['AI Usage: Claude automatically rotated to account “A”.']);
+  assert.deepEqual(informationMessages, ['AI Usage: Claude automatically rotated to account “A”. Chats and CLI sessions use it from their next turn.']);
 });
 
 test('account menu offers an immediate keep-alive action when profiles exist', t => {
@@ -196,11 +215,40 @@ test('a verifier mismatch replaces the success message with an error and keeps t
   assert.deepEqual(JSON.parse(fs.readFileSync(f.codexFile)), f.codex);
 });
 
-test('an unverifiable or failing verifier still reports success', async t => {
+test('Claude verification upgrades legacy identity but rejects a different stable account UUID', async t => {
+  const verified = { status: 'match', detail: 'Claude reports login new@example.com.', email: 'new@example.com', accountId: 'account-new' };
+  const migrated = fixture(t, async () => verified);
+  const legacy = migrated.globalValues.get('aiUsage.authProfiles.v1');
+  legacy.claude.profiles[0].email = 'stale@example.com';
+  migrated.globalValues.set('aiUsage.authProfiles.v1', legacy);
+  assert.equal(await migrated.manager.activateProfile('claude', 'a'), true);
+  assert.equal(migrated.globalValues.get('aiUsage.authProfiles.v1').claude.profiles[0].email, 'new@example.com');
+  assert.equal(migrated.globalValues.get('aiUsage.authProfiles.v1').claude.profiles[0].accountId, 'account-new');
+  assert.equal(errorMessages.length, 0);
+
+  const mismatch = fixture(t, async () => verified);
+  const identified = mismatch.globalValues.get('aiUsage.authProfiles.v1');
+  identified.claude.profiles[0].email = 'saved@example.com';
+  identified.claude.profiles[0].accountId = 'account-saved';
+  mismatch.globalValues.set('aiUsage.authProfiles.v1', identified);
+  assert.equal(await mismatch.manager.activateProfile('claude', 'a'), true);
+  assert.match(errorMessages[0], /token belongs to new@example\.com.*saved for saved@example\.com/);
+  assert.equal(mismatch.globalValues.get('aiUsage.authProfiles.v1').claude.profiles[0].accountId, 'account-saved');
+});
+
+test('a failing verifier switches the login but says the account could not be confirmed', async t => {
   const f = fixture(t, async () => { throw new Error('codex not installed'); });
   assert.equal(await f.manager.activateProfile('codex', 'x'), true);
-  assert.deepEqual(informationMessages, ['Codex switched to “X”. New Codex CLI sessions use it now; the Codex extension needs an extension restart.']);
+  assert.deepEqual(informationMessages, []);
+  assert.deepEqual(warningMessages, ['AI Usage: Codex switched to “X”, but the login could not be confirmed: codex not installed']);
   assert.deepEqual(errorMessages, []);
+});
+
+test('an unverified verdict is reported as a warning with the reason', async t => {
+  const f = fixture(t, async () => ({ status: 'unverified', detail: 'the profile endpoint answered HTTP 429; the previous account identity was removed.' }));
+  assert.equal(await f.manager.activateProfile('claude', 'a'), true);
+  assert.deepEqual(informationMessages, []);
+  assert.match(warningMessages[0], /Claude switched to “A”, but the login could not be confirmed: the profile endpoint answered HTTP 429/);
 });
 
 test('Claude activation keeps its wording and is not verified', async t => {
@@ -208,7 +256,7 @@ test('Claude activation keeps its wording and is not verified', async t => {
   const f = fixture(t, async (provider) => { verified.push(provider); return undefined; });
   assert.equal(await f.manager.activateProfile('claude', 'a'), true);
   assert.deepEqual(verified, ['claude']);
-  assert.deepEqual(informationMessages, ['Claude switched to “A”. New requests will use this login.']);
+  assert.deepEqual(informationMessages, ['Claude switched to “A”. Chats and CLI sessions use it from their next turn.']);
 });
 
 test('saving or replacing a login records its email and the menu shows it beside the name', async t => {
@@ -249,4 +297,36 @@ test('saving a login that is already saved warns about token revocation and mark
   assert.equal(items.length, 2);
   assert.equal(items[0].description, 'x@example.com · duplicate of “X copy”');
   assert.equal(items[1].description, 'x@example.com · duplicate of “X” · Active');
+});
+
+test('only a real account change is reported to the activation hook', async t => {
+  const f = fixture(t);
+  const changes = [];
+  const hooks = { afterActivate: async (provider, change) => { changes.push([provider, change.kind, change.accountChanged]); } };
+  // Re-selecting the login that is already active and already written starts nothing on a new account.
+  quickPickResponses.push(items => items.find(item => item.profile?.id === 'a'));
+  await f.manager.show('claude', hooks);
+  assert.deepEqual(changes, [['claude', 'activated', false]]);
+
+  // Saving the current login into a profile is not a switch either.
+  changes.length = 0;
+  fs.writeFileSync(f.file, JSON.stringify(f.after));
+  quickPickResponses.push(items => items.find(item => item.action === 'save'));
+  quickPickResponses.push(items => items.find(item => item.profile?.id === 'a'));
+  quickPickResponses.push(() => undefined);
+  await f.manager.show('claude', hooks);
+  assert.deepEqual(changes, [['claude', 'saved', false]]);
+});
+
+test('switching to another profile is reported as an account change', async t => {
+  const f = fixture(t);
+  const state = f.globalValues.get('aiUsage.authProfiles.v1');
+  state.claude.profiles.push({ id: 'b', name: 'B' });
+  f.globalValues.set('aiUsage.authProfiles.v1', state);
+  f.secrets.set('aiUsage.authProfile.v1.claude.b', JSON.stringify({ claudeAiOauth: { accessToken: 'b', refreshToken: 'refresh-b' } }));
+  const changes = [];
+  quickPickResponses.push(items => items.find(item => item.profile?.id === 'b'));
+  await f.manager.show('claude', { afterActivate: async (provider, change) => { changes.push(change.accountChanged); } });
+  assert.deepEqual(changes, [true]);
+  assert.equal(JSON.parse(fs.readFileSync(f.file)).claudeAiOauth.accessToken, 'b');
 });

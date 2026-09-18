@@ -5,6 +5,7 @@ import { AuthProvider, StoredCredential, writeJsonAtomically } from './authFiles
 import { CacheEntry, deserializeUsage } from './cache';
 import { formatResetRemaining, LiveUsage } from './live';
 import { ProbeSettings, ProbeResult, acquireAccountLock, probeAccount } from './accountProbe';
+import type { ActivationChange } from './authProfiles';
 
 export type AutomationSettings = ProbeSettings & {
   enabled: boolean;
@@ -59,7 +60,7 @@ export class AccountAutomation {
     private readonly directory: string,
     private readonly profiles: AutomationProfiles,
     private readonly settings: (provider: AuthProvider) => AutomationSettings,
-    private readonly afterActivate: (provider: AuthProvider) => Promise<void>,
+    private readonly afterActivate: (provider: AuthProvider, change: ActivationChange) => Promise<void>,
     private readonly log: (message: string) => void,
     private readonly probe: typeof probeAccount = probeAccount,
     private readonly now: () => number = Date.now
@@ -225,7 +226,7 @@ export class AccountAutomation {
       if (this.profiles.activeProfileId(provider) !== active || !await this.profiles.matchesNative(provider, active)) { return; }
       if (await this.profiles.activateProfile(provider, candidate.id, true)) {
         this.log(`${provider}: automatically rotated to "${candidate.name}" (${settings.thresholdPercent}% limit)`);
-        await this.afterActivate(provider);
+        await this.afterActivate(provider, { kind: 'activated', accountChanged: true });
       }
       return; // At most one switch per sweep, including when every account is exhausted.
     }

@@ -167,6 +167,14 @@ refresh token, and the provider then revokes the whole login (`token_revoked`); 
 `claude` sign-in repairs that. AI Usage shows each profile's email, marks duplicates in the menu and warns before
 saving a login whose email is already saved.
 
+Claude profile activation also synchronizes `~/.claude.json` from the activated OAuth token so Claude's `/status`,
+`/usage`, account UUID and cached usage do not stay attached to another member of the same Team. If Anthropic's
+profile endpoint cannot be reached (it rate-limits per account), the switch still happens, the previous account's
+identity is cleared rather than left on display, the notification says the login could not be confirmed, and AI Usage
+keeps retrying in the background until `/status` agrees with the switch. Claude Code reads its credential file per
+turn, so open Claude chats and CLI sessions follow a switch from their next turn; no restart or window reload is
+needed. (Codex is different and does need one — see `aiUsage.codex.switchRestartHint` above.)
+
 If you would rather keep two accounts side by side than switch one home, start a VS Code window with
 `CODEX_HOME=~/.codex-<account>`: the Codex extension resolves its home from that variable and AI Usage follows it
 for reading usage and for its profile commands, so the two windows stay independent.

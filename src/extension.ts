@@ -4,8 +4,9 @@ import * as vscode from 'vscode';
 import { ApiCallBudget } from './apiBudget';
 import { registerBridgeIntegration } from './bridgeIntegration';
 import { registerBridgeModels } from './bridgeModels';
-import { AuthProvider } from './authFiles';
-import { AuthProfileManager } from './authProfiles';
+import { AuthProvider, readNativeCredential } from './authFiles';
+import { ActivationChange, AuthProfileManager } from './authProfiles';
+import { activateClaudeAccountMetadata, claudeAccountFileConfirms } from './accountIdentity';
 import { AccountAutomation, AutomationSettings } from './accountAutomation';
 import { probeAccount } from './accountProbe';
 import { SharedCache, deserializeUsage } from './cache';
@@ -141,6 +142,10 @@ const CODEX_SWITCH_KEY = 'aiUsage.codexSwitch.v1';
 /** `switchedAt` of the switch this window has already warned about; at most one warning per switch per window. */
 const CODEX_SWITCH_NOTIFIED_KEY = 'aiUsage.codexSwitchNotified.v1';
 type CodexSwitchRecord = { switchedAt: number; profileName: string };
+/** Shortest gap between background attempts to confirm the activated Claude login. */
+const CLAUDE_METADATA_RETRY_MS = 60_000;
+/** Attempts before the background identity sync gives up until the next switch. */
+const CLAUDE_METADATA_RETRY_LIMIT = 10;
 /** Scopes used when asking the user to grant access; Copilot itself signs in with these. */
 const GITHUB_CONNECT_SCOPES = ['user:email'];
 
@@ -155,11 +160,26 @@ export function activate(context: vscode.ExtensionContext): void {
   output = vscode.window.createOutputChannel('AI Usage');
   context.subscriptions.push(output);
   let automation: AccountAutomation;
+  /** Set while a switched Claude login still has to be confirmed against the OAuth profile endpoint. */
+  let claudeMetadataRetry: { nextAttemptAt: number; attempts: number } | undefined;
   const authProfiles = new AuthProfileManager(context, log, (provider, id) => automation?.usageDetail(provider, id),
-    // A fresh app-server must see the login that was just written; a mismatch is reported instead of a success.
-    async (provider, credential) => provider === 'codex'
-      ? verifyCodexNativeAccount(credential, vscode.workspace.getConfiguration().get<string>('aiUsage.codex.cliPath') || 'codex')
-      : undefined);
+    async (provider, credential, expected) => {
+      if (provider === 'codex') {
+        // A fresh app-server must see the login that was just written; report a mismatch instead of success.
+        return verifyCodexNativeAccount(credential, vscode.workspace.getConfiguration().get<string>('aiUsage.codex.cliPath') || 'codex');
+      }
+      // Claude Code renders /status and /usage identity from its separate account file. Keep that metadata and its
+      // account-bound caches aligned with the exact OAuth token that activation just wrote.
+      const outcome = await activateClaudeAccountMetadata(credential, expected);
+      if (outcome.status === 'synced') {
+        claudeMetadataRetry = undefined;
+        return { status: 'match' as const, detail: outcome.detail, ...outcome.identity };
+      }
+      // The identity is unconfirmed, usually because the endpoint is rate-limiting this account. Keep asking in the
+      // background so /status and /usage stop lagging behind the switch without the user doing anything.
+      claudeMetadataRetry = { nextAttemptAt: Date.now() + Math.max(outcome.retryAfterMs ?? 0, CLAUDE_METADATA_RETRY_MS), attempts: 0 };
+      return { status: 'unverified' as const, detail: outcome.detail };
+    });
   void authProfiles.migrateAutomationSettings().catch((error) =>
     log(`could not move the account feature switches to settings: ${error instanceof Error ? error.message : String(error)}`));
   // Routes the Codex extension's model calls through a local proxy that reads auth.json per request, so a profile
@@ -401,14 +421,57 @@ export function activate(context: vscode.ExtensionContext): void {
       await vscode.commands.executeCommand('workbench.action.restartExtensionHost');
     }
   };
-  const afterProfileActivated = async (provider: AuthProvider) => {
+  /**
+   * Retries the Claude identity sync for a switch whose profile lookup failed. The native credential is re-read every
+   * attempt, so a token the CLI refreshed in the meantime is used, and a later switch simply retargets the retry.
+   */
+  const retryClaudeAccountMetadata = async (): Promise<void> => {
+    const pending = claudeMetadataRetry;
+    if (!pending || Date.now() < pending.nextAttemptAt) {
+      return;
+    }
+    const expected = authProfiles.activeIdentity('claude');
+    // Claude Code refreshes its own profile after a switch; once it has, there is nothing left to correct.
+    if (claudeAccountFileConfirms(expected)) {
+      claudeMetadataRetry = undefined;
+      log(`claude: account metadata already names the activated login (${expected.email ?? expected.accountId})`);
+      return;
+    }
+    let credential;
+    try {
+      credential = readNativeCredential('claude');
+    } catch (error) {
+      claudeMetadataRetry = undefined;
+      log(`claude: stopped confirming the activated login, no readable native credential: ${error instanceof Error ? error.message : String(error)}`);
+      return;
+    }
+    const outcome = await activateClaudeAccountMetadata(credential, expected);
+    if (outcome.status === 'synced') {
+      claudeMetadataRetry = undefined;
+      log(`claude: account metadata confirmed on retry — ${outcome.detail}`);
+      return;
+    }
+    pending.attempts += 1;
+    if (pending.attempts >= CLAUDE_METADATA_RETRY_LIMIT) {
+      claudeMetadataRetry = undefined;
+      log(`claude: gave up confirming the activated login after ${pending.attempts} attempts — ${outcome.detail}`);
+      return;
+    }
+    // Back off linearly, and never sooner than the endpoint asked for.
+    pending.nextAttemptAt = Date.now() + Math.max(outcome.retryAfterMs ?? 0, CLAUDE_METADATA_RETRY_MS * Math.min(pending.attempts, 5));
+    log(`claude: could not confirm the activated login (attempt ${pending.attempts}) — ${outcome.detail}`);
+  };
+  const afterProfileActivated = async (provider: AuthProvider, change: ActivationChange = { kind: 'activated', accountChanged: true }) => {
     const live = liveProviders.find((candidate) => candidate.id === provider)!;
     await live.inFlight;
     live.last = undefined;
     live.lastGood = undefined;
     renderLive(live);
     await updateChipContext(live, vscode.workspace.getConfiguration().get<boolean>('aiUsage.chatChips.enabled', true));
-    if (provider === 'codex') {
+    // Claude Code re-reads its credential file, so a switch reaches open chats by itself. Codex's app-server does
+    // not, and only a real account change may reset the baseline its stale-process check measures against: saving
+    // or re-selecting the active login starts nothing on a new account and would flag processes that are fine.
+    if (provider === 'codex' && change.accountChanged) {
       const record: CodexSwitchRecord = { switchedAt: Date.now(), profileName: authProfiles.activeProfileName('codex') ?? 'the selected profile' };
       await context.globalState.update(CODEX_SWITCH_KEY, record);
       void warnAboutStaleCodexProcesses();
@@ -424,6 +487,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const accountTimer = setInterval(() => {
     void automation.tick();
     void warnAboutStaleCodexProcesses();
+    void retryClaudeAccountMetadata();
     // Retries a blocked port and takes the proxy over when the window that served it has closed.
     void codexProxy.sync();
   }, 60_000);

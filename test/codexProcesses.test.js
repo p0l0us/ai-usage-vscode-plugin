@@ -1,6 +1,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { parseElapsedSeconds, parsePsListing, parseWindowsListing, isCodexAppServer, staleCodexProcesses } = require('../out/codexProcesses');
+const { parseElapsedSeconds, parsePsListing, parseWindowsListing, isCodexAppServer,
+  staleCodexProcesses } = require('../out/codexProcesses');
 
 const NOW = Date.UTC(2026, 8, 17, 12, 0, 0);
 const HOST = '/home/u/.vscode-server/extensions/openai.chatgpt-26.908.40401-linux-x64/bin/linux-x86_64/codex -c features.code_mode_host=true app-server';
