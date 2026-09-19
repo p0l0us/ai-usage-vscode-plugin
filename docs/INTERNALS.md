@@ -89,9 +89,11 @@ time only: `afterProfileActivated` records `{ switchedAt, profileName }` in `glo
 (`src/codexProcesses.ts`: `ps -eo pid=,ppid=,etime=,args=` on POSIX, `Win32_Process` on Windows), excluding
 AI Usage's own servers by their `cli_auth_credentials_store` argument. A `codex … app-server` older than the switch
 triggers one warning per switch per window (`workspaceState` key `aiUsage.codexSwitchNotified.v1`) whose only
-action is `workbench.action.restartExtensionHost`; processes are never killed and no turn is ever injected. `aiUsage.codex.switchRestartHint` (default on) disables the warning. Duplicate profiles of one login are
-detected by the stored email: refreshing two copies independently reuses a rotated refresh token and the provider
-revokes the login, so saving or importing a credential whose email is already saved asks for confirmation.
+action is `workbench.action.restartExtensionHost`; processes are never killed and no turn is ever injected. The
+warning is opt-in: `aiUsage.codex.switchRestartHint` (default off) enables it, and the process listing is skipped
+entirely while it is off. Duplicate profiles of one login are detected by the stored email: refreshing two copies
+independently reuses a rotated refresh token and the provider revokes the login, so saving or importing a credential
+whose email is already saved asks for confirmation.
 
 `src/codexProxy.ts`, `src/codexConfig.ts` and `src/codexProxyRuntime.ts` implement the opt-in Codex account proxy
 (`aiUsage.codex.proxy.*`). Codex loads `config.toml` on every `thread/start`, and a custom `model_providers.<id>`

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.0.18 (2026-09-19)
+
+- Stop interrupting after a Codex account switch: the **Restart extensions** warning is now opt-in
+  (`aiUsage.codex.switchRestartHint`, default off) instead of appearing in every window whose Codex process
+  predates the switch. The switch notification still says that the Codex extension needs a restart, and the
+  account proxy (`aiUsage.codex.proxy.enabled`) remains the way to make open chats follow a switch without one.
+
 ## 0.0.17 (2026-09-18)
 
 - Keep Claude's own account identity in step with a profile switch. Claude Code renders `/status` and `/usage` from

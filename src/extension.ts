@@ -391,13 +391,14 @@ export function activate(context: vscode.ExtensionContext): void {
   /**
    * Codex re-reads auth.json when a turn starts, so running chats follow a switch by themselves. A Codex
    * `app-server` started before the switch may still hold revoked tokens in its background paths, and the Codex
-   * extension never respawns it; offer an extension-host restart once per switch in each affected window.
+   * extension never respawns it; offer an extension-host restart once per switch in each affected window. The offer
+   * is opt-in (`aiUsage.codex.switchRestartHint`) because the warning interrupts every window holding such a process.
    */
   const warnAboutStaleCodexProcesses = async (): Promise<void> => {
     // Verified against Codex 0.154.0: a running app-server keeps its login in memory. When auth.json changes
     // underneath it, its next turn fails with "signed in to another account" instead of adopting the new login,
     // and the Codex extension never respawns the process. Restarting the extension host is the only repair.
-    if (!vscode.workspace.getConfiguration().get<boolean>('aiUsage.codex.switchRestartHint', true)) {
+    if (!vscode.workspace.getConfiguration().get<boolean>('aiUsage.codex.switchRestartHint', false)) {
       return;
     }
     // With the account proxy, chats follow the switch on their next turn; a restart would repair nothing.

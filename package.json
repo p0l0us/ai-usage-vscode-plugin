@@ -2,7 +2,7 @@
   "name": "ai-usage-vscode-plugin",
   "displayName": "AI Usage",
   "description": "Live Claude Code, Codex and GitHub Copilot usage in the status bar and chat input: 5h/7d windows, premium requests, org billing, reset times on hover. Open source, contributions welcome.",
-  "version": "0.0.17",
+  "version": "0.0.18",
   "publisher": "p0l0us",
   "license": "GPL-3.0-only",
   "repository": {
@@ -7163,8 +7163,8 @@
           },
           "aiUsage.codex.switchRestartHint": {
             "type": "boolean",
-            "default": true,
-            "markdownDescription": "After a Codex account switch, warn once per window when this window's Codex extension process started before the switch and offer **Restart extensions**. A running Codex process keeps its login in memory and fails turns once the credential file changes underneath it; VS Code cannot restart a single extension, so restarting the extension host is the lightest repair. New Codex CLI sessions need nothing.",
+            "default": false,
+            "markdownDescription": "After a Codex account switch, warn once per window when this window's Codex extension process started before the switch and offer **Restart extensions**. Off by default: the warning interrupts every window that holds an older Codex process. A running Codex process keeps its login in memory and fails turns once the credential file changes underneath it; VS Code cannot restart a single extension, so restarting the extension host is the lightest repair. Turn this on to be reminded, or enable `#aiUsage.codex.proxy.enabled#` so open chats follow a switch by themselves. New Codex CLI sessions need nothing.",
             "order": 8
           },
           "aiUsage.codex.proxy.enabled": {

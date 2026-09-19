@@ -195,7 +195,7 @@ AI Usage switch. Tested with one long-lived `codex -c features.code_mode_host=tr
   change and refuses; it does not adopt the new credentials. **verified**
 - The §3 evidence (`Reloaded auth, changed: true` after `codex login`) therefore shows the reload, not adoption.
   Acceptance criterion 1 is not achievable without restarting the process; criterion 4's restart offer is the only
-  repair and is now on by default (`aiUsage.codex.switchRestartHint`). VS Code offers no per-extension restart; the
+  repair (`aiUsage.codex.switchRestartHint`, opt-in since 0.0.18). VS Code offers no per-extension restart; the
   Codex extension's own "server-restart" path calls `workbench.action.reloadWindow`.
 - New hazard found the same day: two saved profiles holding the same account (`Codex account 1` and
   `Codex account 4 (Frydl)`) were refreshed independently by keep-alives and by a switch between them; the provider
@@ -231,6 +231,13 @@ made it possible, all **verified** against the 0.154.0 app-server bundled with t
   `account/login/start { type: "apiKey" | "chatgptAuthTokens" }` does switch a live process, but only the process
   that owns its stdio can send it, which would mean a launcher shim (`codex2.cliExecutable`, one reload) or a patched
   bundle.
+
+Checked again on 2026-09-19 with the CLI at 0.155.0, which picks the provider up from the same `config.toml`
+(`codex exec` printed `provider: ai-usage`): the proxied request reached the ChatGPT backend and was answered with
+the account's own state (`workspace_owner_credits_depleted`, that workspace having no credits), and the app-server
+recorded a `token_count` event carrying `rate_limits` — so rate-limit data does travel back through the proxy and
+reaches Codex's own status. `account/rateLimits/read` stays empty (no login is reported), which is why `/status`
+shows `Rate limit: Unavailable` until a chat's first turn. A 200 stream on a funded account is still unverified.
 
 Not covered by the proxy: chats started before it was enabled (they keep the provider recorded at their start), the
 Codex account panel and its rate-limit widget (no login is reported), and plugin catalog fetches (ChatGPT auth only).

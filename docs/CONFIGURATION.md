@@ -139,8 +139,11 @@ chat on, the Codex extension and the CLI send their model requests to the proxy 
 `auth.json` *for every request*, attaches the active login and forwards the request unchanged: ChatGPT logins to
 `chatgpt.com/backend-api/codex`, API keys to `api.openai.com`. A switch therefore reaches every chat on the proxy
 on its next turn, and nothing is restarted. What changes for you: Codex's own account panel shows no login while the
-provider is selected (the AI Usage status bar keeps showing the usage), chats opened before the proxy was enabled keep
-their previous path until you start a new chat, and failed Codex model requests are noted in the AI Usage log. One
+provider is selected (the AI Usage status bar keeps showing the usage), Codex's `/status` reports
+`Rate limit: Unavailable` until the chat's first turn — it reads limits from a login the app-server no longer knows,
+and only learns them again from the rate-limit data the proxy passes back with each model response (verified with a
+proxied turn on 0.155.0) — chats opened before the proxy was enabled keep their previous path until you start a new
+chat, and failed Codex model requests are noted in the AI Usage log. One
 AI Usage window serves the port and the others share it; when the serving window closes, the provider entry is
 removed until another window takes the port over (within a minute), and turning the setting off restores
 `config.toml` to what it was. Only the managed block between two marker comments and the `model_provider` line are
@@ -150,11 +153,12 @@ cannot use the login through it; anything that can read `auth.json` could use th
 backend answers 401, the proxy asks Codex itself to refresh the tokens once (a fresh `codex app-server` on the
 native home rewrites `auth.json`) and retries.
 
-**Restart hint** (while the proxy is off). AI Usage says so in the switch message and, in each window whose Codex
-process predates the switch, shows one warning per switch with a **Restart extensions** action. That restarts only
-that window's extension host; editors and terminals stay open and Codex chats reopen from their local session files.
-Nothing is killed and nothing restarts by itself. Set `aiUsage.codex.switchRestartHint` to `false` to silence the
-warning.
+**Restart hint** (while the proxy is off). AI Usage always says so in the switch message. Set
+`aiUsage.codex.switchRestartHint` to `true` and, in each window whose Codex process predates the switch, it also
+shows one warning per switch with a **Restart extensions** action. That restarts only that window's extension host;
+editors and terminals stay open and Codex chats reopen from their local session files. Nothing is killed and nothing
+restarts by itself. The warning is off by default because it interrupts every window holding an older Codex
+process.
 
 Right after the write, AI Usage starts a fresh `codex app-server` on the native home and checks that the login it
 reports (`getAuthStatus`, falling back to `account/read`) is the activated profile. A mismatch is shown as an error
