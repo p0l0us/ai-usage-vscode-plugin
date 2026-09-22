@@ -407,6 +407,100 @@ export async function fetchClaudeUsageFromAccountFile(file = claudeAccountFile()
   };
 }
 
+/** `/usage` is a local command, but Claude Code still has to reach the endpoint to answer it. */
+const CLAUDE_CLI_TIMEOUT_MS = 60_000;
+
+/**
+ * Claude Code's own `/usage`, run headlessly. It is one of the commands Claude Code answers itself
+ * (`supportsNonInteractive`), so no model is called and nothing is billed, but answering it makes
+ * Claude Code fetch `/api/oauth/usage` and write the result to its account file as
+ * `cachedUsageUtilization` — the one thing `accountFile` cannot do for itself. The reading is then
+ * taken from that file rather than from the printed text, which is prose meant for a terminal while
+ * the file holds the same response `api` parses.
+ *
+ * This is what closes the gap the `accountFile` source leaves after an account switch: Claude Code
+ * drops the cached reading as soon as it stops matching the login, and nothing rewrites it until
+ * something asks for usage, so a freshly activated profile has nothing local to read.
+ *
+ * The endpoint behind it is the rate-limited one, so this must be spaced exactly like `api`. Claude
+ * Code rewrites the file at most once a minute and serves its own copy in between, so calls closer
+ * together than that return the reading already on disk instead of a newer one.
+ */
+export async function fetchClaudeUsageCli(
+  command = 'claude',
+  home = claudeConfigDir(),
+  file = claudeAccountFile(),
+  env: NodeJS.ProcessEnv = process.env,
+  cwd?: string
+): Promise<LiveResult> {
+  const provider: ProviderId = 'claude';
+  if (!readClaudeCredentials(home)) {
+    return { kind: 'unavailable', provider };
+  }
+  const cli = resolveCli(command);
+  if (!cli) {
+    return { kind: 'error', provider, title: CLAUDE_TITLE, message: `Claude CLI "${command}" not found. Set aiUsage.claude.cliPath or switch aiUsage.claude.source.` };
+  }
+
+  let output: string;
+  try {
+    output = await runClaudeUsageCommand(cli, env, cwd);
+  } catch (error) {
+    return { kind: 'error', provider, title: CLAUDE_TITLE, message: `Claude CLI: ${describeError(error)}`, transient: true };
+  }
+
+  const result = await fetchClaudeUsageFromAccountFile(file, home);
+  if (result.kind === 'ok') {
+    return { kind: 'ok', usage: { ...result.usage, details: ['Source: Claude Code CLI (/usage)'] } };
+  }
+  // The command ran but left no reading behind: its own output says why far better than the account
+  // file reader can, since that only ever sees an absent or foreign cache entry.
+  const said = firstMeaningfulLine(output);
+  return {
+    kind: 'error', provider, title: CLAUDE_TITLE, transient: true,
+    message: said ? `Claude CLI /usage: ${said}` : 'Claude CLI ran /usage but cached no usage reading.'
+  };
+}
+
+/**
+ * Nothing of the user's own is loaded: no settings files, hooks, MCP servers or session record, so a
+ * background reading cannot trip a hook or start a server. `--print` is what selects the
+ * non-interactive `/usage`; the interactive one renders a terminal view instead.
+ */
+function runClaudeUsageCommand(cli: string, env: NodeJS.ProcessEnv, cwd?: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(cli, ['--print', '--tools', '', '--strict-mcp-config', '--setting-sources', '',
+      '--settings', '{"disableAllHooks":true}', '--no-session-persistence', '/usage'],
+    { stdio: ['ignore', 'pipe', 'pipe'], env, cwd, windowsHide: true });
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+    const finish = (fn: () => void) => {
+      if (!settled) {
+        settled = true;
+        clearTimeout(timer);
+        fn();
+      }
+    };
+    const timer = setTimeout(() => finish(() => { child.kill('SIGKILL'); reject(new Error('timed out')); }), CLAUDE_CLI_TIMEOUT_MS);
+    // Bounded: the reading is read from the account file, the output only explains a failure.
+    child.stdout?.on('data', (chunk) => { if (stdout.length < 8_192) { stdout += String(chunk); } });
+    child.stderr?.on('data', (chunk) => { if (stderr.length < 8_192) { stderr += String(chunk); } });
+    child.on('error', (error) => finish(() => reject(error)));
+    child.on('close', (code) => finish(() => {
+      // A non-zero exit still gets read: Claude Code prints its errors to stdout in --print mode.
+      if (code === 0) { resolve(stdout); return; }
+      const said = firstMeaningfulLine(stdout) ?? firstMeaningfulLine(stderr);
+      reject(new Error(said ? `${said} (exit ${code})` : `exited with code ${code}`));
+    }));
+  });
+}
+
+function firstMeaningfulLine(output: string): string | undefined {
+  const line = output.split(/\r?\n/).map((value) => value.trim()).find(Boolean);
+  return line ? line.slice(0, 200) : undefined;
+}
+
 // ---------------------------------------------------------------------------
 // Codex
 // ---------------------------------------------------------------------------

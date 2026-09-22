@@ -5,7 +5,11 @@
 - **Claude Code**: reads the OAuth token from `~/.claude/.credentials.json` (or `$CLAUDE_CONFIG_DIR`) and calls
   Anthropic's `/api/oauth/usage` endpoint, the same data shown by `/usage` inside Claude Code. The `accountFile`
   source instead reads `cachedUsageUtilization` from `~/.claude.json`, the reading Claude Code itself last fetched
-  from that endpoint.
+  from that endpoint. The `cli` source runs `claude --print /usage` and then reads that same key: `/usage` is one of
+  the commands Claude Code answers itself, so no model is called and nothing is billed, but answering it makes
+  Claude Code fetch the endpoint and write the result — which is what `accountFile` cannot do for itself. Claude
+  Code rewrites that key at most once a minute and clears it whenever the cached account stops matching the login,
+  so after an account switch `accountFile` has nothing to read until something asks for usage and `cli` does.
 - **Codex**: the `cli` source runs `codex app-server` over stdio and calls `account/rateLimits/read`, the same data
   shown by `/status` inside Codex. The `api` source calls the ChatGPT usage endpoint with the token in
   `~/.codex/auth.json`; the `sessionLog` source reads the newest `rate_limits` record from `~/.codex/sessions`.

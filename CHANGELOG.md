@@ -1,8 +1,20 @@
 # Changelog
 
-## 0.0.20 (unreleased)
+## 0.0.21 (unreleased)
 
 - 
+
+## 0.0.20 (2026-09-22)
+
+- Add a `cli` source for Claude (`aiUsage.claude.source`), which runs Claude Code's own `/usage` and reads the
+  reading it caches. `/usage` is one of the commands Claude Code answers itself, so no model is called and nothing
+  is billed, but answering it makes Claude Code fetch the usage endpoint and write the result to its account file.
+  That is the one thing `accountFile` cannot do for itself: Claude Code drops that cached reading as soon as it
+  stops matching the login, so a freshly activated profile had nothing local to read and the figure sat on the
+  previous account's numbers until the endpoint was called again. The call reaches the same rate-limited endpoint
+  as `api`, so it is spaced by `aiUsage.claude.checkIntervalMinutes` and the shared budget in exactly the same way,
+  and it runs with no settings file, hook, MCP server or session record of your own. Set the command with
+  `aiUsage.claude.cliPath`, which the account keep-alive already used.
 
 ## 0.0.19 (2026-09-22)
 

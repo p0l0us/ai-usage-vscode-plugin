@@ -19,6 +19,7 @@ import {
   ProviderId,
   codexHomeDir,
   fetchClaudeUsage,
+  fetchClaudeUsageCli,
   fetchClaudeUsageFromAccountFile,
   fetchCodexUsage,
   fetchCodexUsageCli,
@@ -144,6 +145,20 @@ function settingsFor(provider: ProviderId) {
 }
 
 /**
+ * Whether a source spends Anthropic's usage quota on every check. `cli` does: `/usage` costs no
+ * model tokens, but Claude Code answers it by calling the same endpoint `api` calls, so it claims
+ * the same slot. `accountFile` reads a file, and `both` claims a slot only when it falls back.
+ */
+function claudeSpendsEndpointQuota(source: SourceId): boolean {
+  return source === 'api' || source === 'cli';
+}
+
+/** Command or path of the Claude CLI, shared by the `cli` source and account keep-alives. */
+function claudeCliPath(): string {
+  return vscode.workspace.getConfiguration().get<string>('aiUsage.claude.cliPath') || 'claude';
+}
+
+/**
  * Smallest gap between two calls to Anthropic's usage endpoint, counted across every window, every
  * saved account and manual refreshes (`aiUsage.claude.api.minIntervalSeconds`).
  */
@@ -242,6 +257,9 @@ export function activate(context: vscode.ExtensionContext): void {
         if (source === 'accountFile') {
           return fetchClaudeUsageFromAccountFile();
         }
+        if (source === 'cli') {
+          return fetchClaudeUsageCli(claudeCliPath());
+        }
         if (source === 'both') {
           return fetchLocalThenApi({
             known, apiCheckIntervalMs, fallback: claudeFallbackBudget, budget: claudeBudget,
@@ -251,9 +269,9 @@ export function activate(context: vscode.ExtensionContext): void {
         }
         return fetchClaudeUsage(undefined, claudeBudget);
       },
-      // Only the "api" source calls the rate-limited endpoint on every check; "accountFile" is a
+      // "api" and "cli" both reach the rate-limited endpoint on every check; "accountFile" is a
       // local read with nothing to space out, and "both" claims its slot only when it falls back.
-      budget: () => (settingsFor('claude').source === 'api' ? claudeBudget : undefined),
+      budget: () => (claudeSpendsEndpointQuota(settingsFor('claude').source) ? claudeBudget : undefined),
       cacheDiscriminator: async () => authProfiles.cacheDiscriminator('claude'),
       activeProfileName: () => authProfiles.activeProfileName('claude')
     },

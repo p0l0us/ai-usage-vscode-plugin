@@ -2,7 +2,7 @@
   "name": "ai-usage-vscode-plugin",
   "displayName": "AI Usage",
   "description": "Live Claude Code, Codex and GitHub Copilot usage in the status bar and chat input: 5h/7d windows, premium requests, org billing, reset times on hover. Open source, contributions welcome.",
-  "version": "0.0.20",
+  "version": "0.0.21",
   "publisher": "p0l0us",
   "license": "GPL-3.0-only",
   "repository": {
@@ -7019,16 +7019,18 @@
             "default": "both",
             "enum": [
               "both",
+              "cli",
               "api",
               "accountFile"
             ],
             "order": 2,
             "markdownEnumDescriptions": [
               "Both of the below: the account file is read every `#aiUsage.claude.accountFile.checkIntervalSeconds#`, and whenever its reading falls behind `#aiUsage.claude.checkIntervalMinutes#` — Claude Code has been idle, or has never written one — the usage endpoint fills the gap. The endpoint is then called no more often than with `api`, so this follows an active session within seconds without spending more of Anthropic's rate limit.",
+              "Local Claude CLI: runs Claude Code’s own `/usage` and reads the reading it caches. `/usage` is answered by Claude Code itself, so no model is called and nothing is billed, but it does make Claude Code fetch the usage endpoint — so this is spaced like `api`, not like `accountFile`. Unlike `accountFile` it never has to wait for Claude Code to ask for usage on its own, which is what leaves that source empty right after an account switch. Set the command with `#aiUsage.claude.cliPath#`.",
               "Anthropic OAuth usage endpoint using the Claude Code login in `~/.claude/.credentials.json` (the same data as `/usage` in Claude Code).",
               "**Experimental.** Claude Code's own last fetch from that same endpoint, cached in its account file (`~/.claude.json` or `$CLAUDE_CONFIG_DIR/.claude.json`, key `cachedUsageUtilization`). A plain local read — no network call, so it is not subject to Anthropic's throttling and can be polled every few seconds via `#aiUsage.claude.accountFile.checkIntervalSeconds#`. Only reflects the account Claude Code itself is currently signed into, and only as fresh as Claude Code's own last request on it; undocumented, reverse-engineered state that may change without notice."
             ],
-            "markdownDescription": "Where Claude usage is read from. Claude Code has no read-only CLI for rate limits (`claude -p` only reports limits after a paid model call), so the choice is between its usage endpoint and the reading Claude Code itself caches on disk; `both` prefers the local file and calls the endpoint only when that reading goes stale."
+            "markdownDescription": "Where Claude usage is read from. `both` prefers the file Claude Code caches on disk and calls the usage endpoint only when that reading goes stale; `cli` asks Claude Code for a fresh reading instead, which costs no model tokens but does reach the endpoint."
           },
           "aiUsage.claude.checkIntervalMinutes": {
             "type": "number",
@@ -7096,7 +7098,7 @@
             "type": "string",
             "default": "claude",
             "scope": "machine",
-            "description": "Command or full path of the Claude CLI used for account keep-alives."
+            "description": "Command or full path of the Claude CLI, used when `aiUsage.claude.source` is `cli` and for account keep-alives. Bare names are searched on PATH and in common install directories."
           }
         }
       },
