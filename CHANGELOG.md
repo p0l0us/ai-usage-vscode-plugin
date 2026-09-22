@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.0.20 (unreleased)
+
+- 
+
+## 0.0.19 (2026-09-22)
+
+- Read Claude and Codex usage from a local file first and the service endpoint only when that reading goes stale:
+  the new `both` source, now the default for both services. Claude's account file and Codex's session logs are
+  re-read on every check and serve the reading while it is no older than that service's `checkIntervalMinutes`;
+  once the CLI has been idle that long, or has never written a reading, the endpoint fills the gap, called no more
+  often than the `api` source would call it. Usage follows an active CLI session within seconds — for Claude every
+  `aiUsage.claude.accountFile.checkIntervalSeconds` (default 15) — without spending more of the service's rate
+  limit, and a reading is never replaced by an older one.
+
+- Stop stalling the local file sources behind the network backoff. A reading that Claude Code had not cached yet
+  paused the whole source for a minute, doubling to thirty, although re-reading a local file costs nothing and the
+  file usually gains its reading seconds later. `accountFile` and `both` now keep to their own check interval, and
+  `both` spaces its service calls with a ledger of its own.
+
+- Stop losing the Claude backend in the Copilot model picker when the bridge outlives its own directory. The CLI
+  bridge was started in the extension folder, so an extension update or a moved checkout left the running server
+  with a deleted working directory; Claude refuses to run from one and exited before reporting its version, which
+  discovery reported as an incompatible CLI and which removed every Claude model from the picker. The bridge now
+  starts outside the extension folder and never lets a CLI probe inherit its working directory.
+
 ## 0.0.18 (2026-09-19)
 
 - Stop interrupting after a Codex account switch: the **Restart extensions** warning is now opt-in

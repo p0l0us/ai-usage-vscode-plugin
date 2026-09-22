@@ -153,7 +153,7 @@ it is installed and runs on the remote machine, so:
 | `aiUsage.statusBar.usage` | `rich` | `simple` shows one figure, the most used window, instead of every window. |
 | `aiUsage.chatChips.labels` / `.usage` | `name` / `rich` | The same two choices for the chat chips (no icon there). |
 | `aiUsage.chatTokens.enabled` | on | Show the local Claude/Codex chat's consumed-token chip. |
-| `aiUsage.codex.source` | `cli` | `api` calls the ChatGPT endpoint; `sessionLog` is fully offline. |
+| `aiUsage.<service>.source` | `both` | Local file first (Claude's account file, Codex's session logs), service endpoint when that reading goes stale. |
 | `aiUsage.<service>.checkIntervalMinutes` | 10 / 5 / 5 | How often Claude / Codex / Copilot are queried. |
 | `aiUsage.copilot.account` | (auto) | GitHub login to use when several are signed in. |
 | `aiUsage.<service>.enabled` | on | Hide a service you do not use. |

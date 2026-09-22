@@ -2,6 +2,7 @@ import { spawn } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { claudeAccountFile } from './accountIdentity';
 
 /**
  * Live usage readers for locally installed AI CLIs and GitHub Copilot. This module must stay free of
@@ -48,6 +49,54 @@ export type LiveResult =
 
 export function isTransientStatus(status: number): boolean {
   return status === 429 || status >= 500;
+}
+
+/** A shared ledger that spaces calls to one endpoint; `ApiCallBudget` is the implementation. */
+export type CallSpacing = {
+  nextAllowedAt(now?: number): number;
+  reserve(now?: number): boolean;
+};
+
+export function newerUsage(a: LiveUsage | undefined, b: LiveUsage | undefined): LiveUsage | undefined {
+  if (!a || !b) {
+    return a ?? b;
+  }
+  return a.fetchedAt >= b.fetchedAt ? a : b;
+}
+
+/**
+ * The `both` source. The local file is read on every check and serves the reading while it is no
+ * older than the service's own check interval; once it falls behind — the CLI has been idle, or has
+ * never written a reading — the service endpoint fills the gap, spaced exactly as the `api` source
+ * would be (`fallback`, plus the service's own call budget where it has one). When that call is not
+ * due yet, the newest reading already in hand is kept, so what is shown never moves backwards.
+ */
+export async function fetchLocalThenApi(options: {
+  /** Newest reading the caller already has, from this window or another one. */
+  known?: LiveUsage;
+  apiCheckIntervalMs: number;
+  local: () => Promise<LiveResult>;
+  api: () => Promise<LiveResult>;
+  /** Spacing ledger for the fallback call, shared by every window on this machine. */
+  fallback: CallSpacing;
+  /** The service's own call spacing, when it has one. */
+  budget?: CallSpacing;
+  now?: () => number;
+}): Promise<LiveResult> {
+  const local = await options.local();
+  const newest = newerUsage(local.kind === 'ok' ? local.usage : undefined, options.known);
+  const now = (options.now ?? Date.now)();
+  if (newest && now - newest.fetchedAt.getTime() < options.apiCheckIntervalMs) {
+    return { kind: 'ok', usage: newest };
+  }
+  const keep: LiveResult = newest ? { kind: 'ok', usage: newest } : local;
+  // The service's slot is claimed first: the fallback's own slot must not be spent on a call that
+  // the service budget then refuses.
+  if (options.fallback.nextAllowedAt(now) > now || (options.budget && !options.budget.reserve(now))) {
+    return keep;
+  }
+  options.fallback.reserve(now);
+  return options.api();
 }
 
 export function parseRetryAfterHeader(value: string | null, now = Date.now()): number | undefined {
@@ -261,6 +310,24 @@ export async function fetchClaudeUsage(home = claudeConfigDir(), budget?: RateLi
   }
 
   const body = response.body as ClaudeUsageResponse;
+  const windows = claudeUsageWindows(body);
+  if (!windows.length) {
+    return { kind: 'error', provider, title: CLAUDE_TITLE, message: 'Usage response contained no rate-limit windows.' };
+  }
+
+  return {
+    kind: 'ok',
+    usage: {
+      provider,
+      title: CLAUDE_TITLE,
+      plan: credentials.rateLimitTier ?? credentials.subscriptionType,
+      windows,
+      fetchedAt: new Date()
+    }
+  };
+}
+
+function claudeUsageWindows(body: ClaudeUsageResponse): UsageWindow[] {
   const windows: UsageWindow[] = [];
   const fiveHour = clampPercent(body.five_hour?.utilization);
   if (fiveHour !== undefined) {
@@ -277,9 +344,55 @@ export async function fetchClaudeUsage(home = claudeConfigDir(), budget?: RateLi
       windows.push({ label: `7d ${name}`, usedPercent: percent, resetsAt: toDate(limit.resets_at) });
     }
   }
+  return windows;
+}
 
+type ClaudeAccountFile = {
+  oauthAccount?: { accountUuid?: string | null } | null;
+  cachedUsageUtilization?: {
+    fetchedAtMs?: number;
+    accountUuid?: string | null;
+    utilization?: ClaudeUsageResponse | null;
+  } | null;
+};
+
+/**
+ * Claude Code's own last fetch from the usage endpoint, cached in its account file
+ * (`claudeAccountFile()`, e.g. `~/.claude.json`) as `cachedUsageUtilization`. A plain local read: no
+ * network call, so it is not subject to Anthropic's throttling of `/api/oauth/usage` and can be
+ * polled far more often. Freshness rides on Claude Code's own traffic on this account rather than a
+ * timer of ours — normally far ahead of our own poll interval while a session is active, but it can
+ * sit unchanged for a while when the account is idle, so the reading's `fetchedAt` is the cache's own
+ * `fetchedAtMs`, not `Date.now()`, letting the existing staleness handling grey it out correctly.
+ * Undocumented, reverse-engineered state; may change or disappear without notice.
+ */
+export async function fetchClaudeUsageFromAccountFile(file = claudeAccountFile(), home = claudeConfigDir()): Promise<LiveResult> {
+  const provider: ProviderId = 'claude';
+  const credentials = readClaudeCredentials(home);
+  if (!credentials) {
+    return { kind: 'unavailable', provider };
+  }
+
+  const data = readJson(file) as ClaudeAccountFile | undefined;
+  const cache = data?.cachedUsageUtilization;
+  if (!cache || !cache.utilization || typeof cache.fetchedAtMs !== 'number') {
+    return {
+      kind: 'error', provider, title: CLAUDE_TITLE, transient: true,
+      message: 'Claude Code has not cached a usage reading yet. Send it a message once, or switch aiUsage.claude.source to "both" or "api".'
+    };
+  }
+
+  const activeAccountUuid = data?.oauthAccount?.accountUuid;
+  if (!activeAccountUuid || cache.accountUuid !== activeAccountUuid) {
+    return {
+      kind: 'error', provider, title: CLAUDE_TITLE, transient: true,
+      message: 'Cached usage still belongs to the previous account; waiting for Claude Code to refresh it after the switch.'
+    };
+  }
+
+  const windows = claudeUsageWindows(cache.utilization);
   if (!windows.length) {
-    return { kind: 'error', provider, title: CLAUDE_TITLE, message: 'Usage response contained no rate-limit windows.' };
+    return { kind: 'error', provider, title: CLAUDE_TITLE, message: 'Cached usage contained no rate-limit windows.' };
   }
 
   return {
@@ -289,7 +402,7 @@ export async function fetchClaudeUsage(home = claudeConfigDir(), budget?: RateLi
       title: CLAUDE_TITLE,
       plan: credentials.rateLimitTier ?? credentials.subscriptionType,
       windows,
-      fetchedAt: new Date()
+      fetchedAt: new Date(cache.fetchedAtMs)
     }
   };
 }

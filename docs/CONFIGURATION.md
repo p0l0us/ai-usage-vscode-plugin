@@ -11,9 +11,15 @@ Each service has a `source` setting that selects where its usage is read from:
 
 | Setting | Options | Default | Notes |
 |---|---|---|---|
-| `aiUsage.claude.source` | `api` | `api` | Claude Code has no read-only CLI or log source; `claude -p` only reports limits after a paid model call. |
-| `aiUsage.codex.source` | `cli`, `api`, `sessionLog` | `cli` | `cli` runs `codex app-server` (set `aiUsage.codex.cliPath` if it is not on PATH). `sessionLog` is offline but only as fresh as your last Codex turn. |
+| `aiUsage.claude.source` | `both`, `api`, `accountFile` | `both` | Claude Code has no read-only CLI or log source; `claude -p` only reports limits after a paid model call. `accountFile` reads the usage Claude Code itself cached in `~/.claude.json` — no network call, so it can be polled every few seconds (`aiUsage.claude.accountFile.checkIntervalSeconds`), but it is only as fresh as Claude Code's own last request. |
+| `aiUsage.codex.source` | `both`, `cli`, `api`, `sessionLog` | `both` | `cli` runs `codex app-server` (set `aiUsage.codex.cliPath` if it is not on PATH). `sessionLog` is offline but only as fresh as your last Codex turn. |
 | `aiUsage.copilot.source` | `api` | `api` | The Copilot CLI has no headless usage command. |
+
+`both` combines the two: the local file is re-read on every check and used while its reading is no older than that
+service's `checkIntervalMinutes`; once it falls behind, because the CLI has been idle or has never written one, the
+service endpoint fills the gap, called no more often than the `api` source would call it. Usage therefore follows an
+active CLI session within seconds without spending more of the service's rate limit, and keeps updating when no
+session is running.
 
 ## Copilot CLI sessions
 

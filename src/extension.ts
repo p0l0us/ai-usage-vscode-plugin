@@ -19,10 +19,12 @@ import {
   ProviderId,
   codexHomeDir,
   fetchClaudeUsage,
+  fetchClaudeUsageFromAccountFile,
   fetchCodexUsage,
   fetchCodexUsageCli,
   fetchCodexUsageFromSessionLog,
   fetchCopilotUsage,
+  fetchLocalThenApi,
   formatResetIn,
   formatResetRemaining,
   refreshCodexNativeLogin,
@@ -89,13 +91,16 @@ type LiveProvider = {
   icon: string;
   settingKey: string;
   status: vscode.StatusBarItem;
-  fetch: () => Promise<LiveResult>;
+  /** `known` is the newest reading this window already has, so a source that falls back between a
+   *  local file and the service can tell whether anything newer is worth fetching. */
+  fetch: (known?: LiveUsage) => Promise<LiveResult>;
   /** Distinguishes cache entries when the result depends on the workspace (Copilot org). */
   cacheDiscriminator?: () => Promise<string | undefined>;
   /** Name of the extension-managed authentication profile currently selected for this provider. */
   activeProfileName?: () => string | undefined;
-  /** Shared call spacing for providers read through a rate-limited service endpoint. */
-  budget?: ApiCallBudget;
+  /** Shared call spacing for providers read through a rate-limited service endpoint, when the
+   *  currently selected source uses one (a local source needs no spacing). */
+  budget?: () => ApiCallBudget | undefined;
   last?: LiveResult;
   /** Most recent successful reading, kept so errors do not blank the item. */
   lastGood?: LiveUsage;
@@ -104,19 +109,37 @@ type LiveProvider = {
 };
 
 /** Data source per provider, selected with `aiUsage.<provider>.source`. */
-type SourceId = 'api' | 'cli' | 'sessionLog';
-const SOURCE_LABELS: Record<SourceId, string> = { api: 'service API', cli: 'local CLI', sessionLog: 'local session log' };
+type SourceId = 'api' | 'cli' | 'sessionLog' | 'accountFile' | 'both';
+const SOURCE_LABELS: Record<SourceId, string> = {
+  api: 'service API', cli: 'local CLI', sessionLog: 'local session log', accountFile: 'local account file',
+  both: 'local file, service API when stale'
+};
 const DEFAULT_CHECK_MINUTES: Record<ProviderId, number> = { claude: 10, codex: 5, copilot: 5 };
+/** Default and floor for `aiUsage.claude.accountFile.checkIntervalSeconds`; this source is a plain
+ *  local file read, so it can be polled far more often than the rate-limited API. */
+const ACCOUNT_FILE_DEFAULT_SECONDS = 15;
+const ACCOUNT_FILE_MIN_SECONDS = 5;
 
 function settingsFor(provider: ProviderId) {
   const config = vscode.workspace.getConfiguration();
+  const source = config.get<string>(`aiUsage.${provider}.source`, 'api') as SourceId;
   const legacy = config.get<number>('aiUsage.refreshIntervalMinutes');
   const check = config.get<number>(`aiUsage.${provider}.checkIntervalMinutes`);
-  const source = config.get<string>(`aiUsage.${provider}.source`, 'api') as SourceId;
+  /** How often the service endpoint may be called, and the spacing `both` gives its fallback. */
+  const apiCheckIntervalMs = Math.max(1, check ?? legacy ?? DEFAULT_CHECK_MINUTES[provider]) * 60_000;
+  if (provider === 'claude' && (source === 'accountFile' || source === 'both')) {
+    const seconds = config.get<number>('aiUsage.claude.accountFile.checkIntervalSeconds', ACCOUNT_FILE_DEFAULT_SECONDS);
+    return {
+      source,
+      apiCheckIntervalMs,
+      checkIntervalMs: Math.max(ACCOUNT_FILE_MIN_SECONDS, Number.isFinite(seconds) ? seconds : ACCOUNT_FILE_DEFAULT_SECONDS) * 1000
+    };
+  }
   return {
     source,
+    apiCheckIntervalMs,
     /** How often the source is called and the result stored in the shared cache. */
-    checkIntervalMs: Math.max(1, check ?? legacy ?? DEFAULT_CHECK_MINUTES[provider]) * 60_000
+    checkIntervalMs: apiCheckIntervalMs
   };
 }
 
@@ -132,6 +155,10 @@ function claudeMinIntervalMs(): number {
 /** How often every window re-reads the shared cache and redraws (`aiUsage.updateIntervalMinutes`). */
 function updateIntervalMs(): number {
   return Math.max(0.25, vscode.workspace.getConfiguration().get<number>('aiUsage.updateIntervalMinutes', 1)) * 60_000;
+}
+
+function formatInterval(ms: number): string {
+  return ms < 60_000 ? `${Math.round(ms / 1000)}s` : `${Math.round(ms / 60_000)} min`;
 }
 
 /** After this long, a reading shown in place of a failed refresh is greyed out. */
@@ -196,6 +223,12 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(status);
   const claudeBudget = new ApiCallBudget(
     path.join(context.globalStorageUri.fsPath, 'claude-api-budget.json'), claudeMinIntervalMs);
+  // Spacing for the service call the `both` source falls back to: the provider's own check interval,
+  // so the endpoint is called no more often than with the `api` source.
+  const claudeFallbackBudget = new ApiCallBudget(
+    path.join(context.globalStorageUri.fsPath, 'claude-fallback-budget.json'), () => settingsFor('claude').apiCheckIntervalMs);
+  const codexFallbackBudget = new ApiCallBudget(
+    path.join(context.globalStorageUri.fsPath, 'codex-fallback-budget.json'), () => settingsFor('codex').apiCheckIntervalMs);
 
   const liveProviders: LiveProvider[] = [
     {
@@ -204,8 +237,23 @@ export function activate(context: vscode.ExtensionContext): void {
       icon: 'claude',
       settingKey: 'aiUsage.claude.enabled',
       status: vscode.window.createStatusBarItem(STATUS_ALIGNMENT, STATUS_PRIORITY.claude),
-      fetch: () => fetchClaudeUsage(undefined, claudeBudget),
-      budget: claudeBudget,
+      fetch: (known) => {
+        const { source, apiCheckIntervalMs } = settingsFor('claude');
+        if (source === 'accountFile') {
+          return fetchClaudeUsageFromAccountFile();
+        }
+        if (source === 'both') {
+          return fetchLocalThenApi({
+            known, apiCheckIntervalMs, fallback: claudeFallbackBudget, budget: claudeBudget,
+            local: () => fetchClaudeUsageFromAccountFile(),
+            api: () => fetchClaudeUsage(undefined, claudeBudget)
+          });
+        }
+        return fetchClaudeUsage(undefined, claudeBudget);
+      },
+      // Only the "api" source calls the rate-limited endpoint on every check; "accountFile" is a
+      // local read with nothing to space out, and "both" claims its slot only when it falls back.
+      budget: () => (settingsFor('claude').source === 'api' ? claudeBudget : undefined),
       cacheDiscriminator: async () => authProfiles.cacheDiscriminator('claude'),
       activeProfileName: () => authProfiles.activeProfileName('claude')
     },
@@ -214,13 +262,20 @@ export function activate(context: vscode.ExtensionContext): void {
       icon: 'openai',
       settingKey: 'aiUsage.codex.enabled',
       status: vscode.window.createStatusBarItem(STATUS_ALIGNMENT, STATUS_PRIORITY.codex),
-      fetch: async () => {
-        const { source } = settingsFor('codex');
+      fetch: async (known) => {
+        const { source, apiCheckIntervalMs } = settingsFor('codex');
         if (source === 'cli') {
           return fetchCodexUsageCli(vscode.workspace.getConfiguration().get<string>('aiUsage.codex.cliPath') || 'codex');
         }
         if (source === 'sessionLog') {
           return fetchCodexUsageFromSessionLog();
+        }
+        if (source === 'both') {
+          return fetchLocalThenApi({
+            known, apiCheckIntervalMs, fallback: codexFallbackBudget,
+            local: () => fetchCodexUsageFromSessionLog(),
+            api: () => fetchCodexUsage()
+          });
         }
         return fetchCodexUsage();
       },
@@ -296,6 +351,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
       const profileId = provider.id === 'copilot' ? undefined : authProfiles.activeProfileId(provider.id);
       const { source, checkIntervalMs } = settingsFor(provider.id);
+      const budget = provider.budget?.();
       // Each source has its own cache entry so switching sources never shows another source's reading.
       const key = SharedCache.key(provider.id, [source, await provider.cacheDiscriminator?.()].filter(Boolean).join('|'));
       const now = Date.now();
@@ -325,23 +381,29 @@ export function activate(context: vscode.ExtensionContext): void {
         // Another window is fetching right now; its result will show up in the cache shortly.
         log(`${provider.id}: another window is fetching, waiting for the shared cache`);
         result = provider.last ?? (cached ? { kind: 'ok', usage: cached } : undefined);
-      } else if (provider.budget && !provider.budget.reserve(now)) {
+      } else if (budget && !budget.reserve(now)) {
         // The service endpoint is called for every account and on every manual refresh; a reading
         // that has to wait for its slot is shown from the cache instead of spending the quota.
         cache.release(key);
-        const seconds = Math.ceil((provider.budget.nextAllowedAt(now) - now) / 1000);
+        const seconds = Math.ceil((budget.nextAllowedAt(now) - now) / 1000);
         log(`${provider.id}: usage endpoint call skipped, next call allowed in ${seconds}s`);
         result = provider.last ?? (cached ? { kind: 'ok', usage: cached } : undefined);
       } else {
         // Fetch in the background: keep whatever is currently shown (previous reading or nothing
         // on first load) until the new result arrives.
         try {
-          result = await provider.fetch();
+          result = await provider.fetch(provider.lastGood);
         } catch (error) {
           result = { kind: 'error', provider: provider.id, title: titleFor(provider), message: String(error), transient: true };
         }
         if (result.kind === 'ok') {
           cache.recordSuccess(key, result.usage);
+        } else if (result.kind === 'error' && result.transient && (source === 'accountFile' || source === 'both')) {
+          // A local file read has no rate limit to respect, so skip the network backoff (its 1-30 min
+          // floor) and keep to the source's own regular check interval. "both" is included because
+          // that backoff would also stall its free local read, and its fallback call is already
+          // spaced by the provider's check interval and the service's own budget.
+          cache.recordFailure(key, result.message);
         } else if (result.kind === 'error' && result.transient) {
           const until = cache.recordBackoff(key, result.message, result.retryAfterMs, Date.now());
           log(`${provider.id}: backing off until ${new Date(until).toLocaleTimeString()}${result.retryAfterMs ? ' (Retry-After)' : ''}`);
@@ -357,7 +419,10 @@ export function activate(context: vscode.ExtensionContext): void {
         provider.last = result;
         if (result.kind === 'ok') {
           provider.lastGood = result.usage;
-          if (profileId && provider.id !== 'copilot' && source !== 'sessionLog' &&
+          // Codex session-log records carry no account of their own, so they are never attributed to
+          // the active profile — including as the local half of "both".
+          const logSourced = source === 'sessionLog' || (provider.id === 'codex' && source === 'both');
+          if (profileId && provider.id !== 'copilot' && !logSourced &&
             authProfiles.activeProfileId(provider.id) === profileId && await authProfiles.matchesNative(provider.id, profileId)) {
             automation.observe(provider.id, profileId, result.usage);
           }
@@ -1160,11 +1225,12 @@ function providerItems(provider: LiveProvider): DetailItem[] {
   // click. Window names and exact reset times stay one hover away in the status bar tooltip.
   const now = new Date();
   const { source, checkIntervalMs } = settingsFor(provider.id);
-  const throttledMs = provider.budget ? provider.budget.nextAllowedAt(now.getTime()) - now.getTime() : 0;
+  const budget = provider.budget?.();
+  const throttledMs = budget ? budget.nextAllowedAt(now.getTime()) - now.getTime() : 0;
   items.push({
     label: `${usageIcon(worstPercent(usage!))} ${usage!.windows.map((window) => `${window.label} ${usagePart(window, now)}`).join(' · ')}`,
     description: `Updated ${usage!.fetchedAt.toLocaleTimeString()}`,
-    detail: `Refresh now · ${SOURCE_LABELS[source] ?? source} · checked every ${Math.round(checkIntervalMs / 60_000)} min · ` +
+    detail: `Refresh now · ${SOURCE_LABELS[source] ?? source} · checked every ${formatInterval(checkIntervalMs)} · ` +
       (throttledMs > 0
         ? `next call to the service allowed in ${Math.ceil(throttledMs / 1000)}s`
         : `display refreshed every ${Math.round(updateIntervalMs() / 60_000)} min`),
@@ -1335,7 +1401,9 @@ function automationSettings(provider: AuthProvider, authProfiles: AuthProfileMan
     autoRotate: authProfiles.automationEnabled(provider, 'autoRotate'),
     thresholdPercent,
     intervalMs: (Number.isFinite(hours) ? Math.max(0.25, hours) : defaultHours) * 3_600_000,
-    checkIntervalMs: settingsFor(provider).checkIntervalMs,
+    // Account probes always call the service endpoint, whatever source the status bar reads, so they
+    // are spaced by the endpoint's own interval and never by a local file's.
+    checkIntervalMs: settingsFor(provider).apiCheckIntervalMs,
     home: config.get<string>(`${prefix}.keepAlive.home`, `~/.${provider}-tmp`),
     cliPath: config.get<string>(`${prefix}.cliPath`, provider),
     model: config.get<string>(`${prefix}.keepAlive.model`, provider === 'claude' ? 'haiku' : 'gpt-5.6-luna')

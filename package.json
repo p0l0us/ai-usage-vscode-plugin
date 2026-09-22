@@ -2,7 +2,7 @@
   "name": "ai-usage-vscode-plugin",
   "displayName": "AI Usage",
   "description": "Live Claude Code, Codex and GitHub Copilot usage in the status bar and chat input: 5h/7d windows, premium requests, org billing, reset times on hover. Open source, contributions welcome.",
-  "version": "0.0.18",
+  "version": "0.0.20",
   "publisher": "p0l0us",
   "license": "GPL-3.0-only",
   "repository": {
@@ -7016,22 +7016,33 @@
           },
           "aiUsage.claude.source": {
             "type": "string",
-            "default": "api",
+            "default": "both",
             "enum": [
-              "api"
+              "both",
+              "api",
+              "accountFile"
             ],
             "order": 2,
             "markdownEnumDescriptions": [
-              "Anthropic OAuth usage endpoint using the Claude Code login in `~/.claude/.credentials.json` (the same data as `/usage` in Claude Code)."
+              "Both of the below: the account file is read every `#aiUsage.claude.accountFile.checkIntervalSeconds#`, and whenever its reading falls behind `#aiUsage.claude.checkIntervalMinutes#` — Claude Code has been idle, or has never written one — the usage endpoint fills the gap. The endpoint is then called no more often than with `api`, so this follows an active session within seconds without spending more of Anthropic's rate limit.",
+              "Anthropic OAuth usage endpoint using the Claude Code login in `~/.claude/.credentials.json` (the same data as `/usage` in Claude Code).",
+              "**Experimental.** Claude Code's own last fetch from that same endpoint, cached in its account file (`~/.claude.json` or `$CLAUDE_CONFIG_DIR/.claude.json`, key `cachedUsageUtilization`). A plain local read — no network call, so it is not subject to Anthropic's throttling and can be polled every few seconds via `#aiUsage.claude.accountFile.checkIntervalSeconds#`. Only reflects the account Claude Code itself is currently signed into, and only as fresh as Claude Code's own last request on it; undocumented, reverse-engineered state that may change without notice."
             ],
-            "markdownDescription": "Where Claude usage is read from. Claude Code has no read-only CLI or log source for rate limits: `claude -p` only reports limits after a paid model call, so the service API is the only option."
+            "markdownDescription": "Where Claude usage is read from. Claude Code has no read-only CLI for rate limits (`claude -p` only reports limits after a paid model call), so the choice is between its usage endpoint and the reading Claude Code itself caches on disk; `both` prefers the local file and calls the endpoint only when that reading goes stale."
           },
           "aiUsage.claude.checkIntervalMinutes": {
             "type": "number",
             "default": 10,
             "minimum": 1,
             "order": 3,
-            "markdownDescription": "How often (minutes) the Claude source is called and the result stored in the shared cache. One call serves all open windows. Anthropic's usage endpoint rate-limits aggressively; keep this at 5 or more."
+            "markdownDescription": "How often (minutes) Anthropic's usage endpoint is called and the result stored in the shared cache, when `#aiUsage.claude.source#` is `api` or `both`. One call serves all open windows. With `both` it is also the age at which the account file's reading counts as stale and the endpoint is called instead. Anthropic's usage endpoint rate-limits aggressively; keep this at 5 or more."
+          },
+          "aiUsage.claude.accountFile.checkIntervalSeconds": {
+            "type": "number",
+            "default": 15,
+            "minimum": 5,
+            "order": 3.5,
+            "markdownDescription": "How often (seconds) the account file is re-read, when `#aiUsage.claude.source#` is `accountFile` or `both`. It is a local file read with no rate limit of its own, so this can be much shorter than `#aiUsage.claude.checkIntervalMinutes#`; to actually see updates this often, also lower `#aiUsage.updateIntervalMinutes#` (it accepts fractional minutes, e.g. 0.25 for 15 seconds)."
           },
           "aiUsage.claude.api.minIntervalSeconds": {
             "type": "number",
@@ -7101,14 +7112,16 @@
           },
           "aiUsage.codex.source": {
             "type": "string",
-            "default": "cli",
+            "default": "both",
             "enum": [
+              "both",
               "cli",
               "api",
               "sessionLog"
             ],
             "order": 2,
             "markdownEnumDescriptions": [
+              "Session logs, with the usage endpoint filling the gap: the newest log record is used while it is no older than `#aiUsage.codex.checkIntervalMinutes#`, and once it falls behind — Codex has been idle, or has written no record yet — the endpoint is called instead, no more often than with `api`. Costs nothing while you are working in Codex, and still reports usage when you are not.",
               "Local Codex CLI: runs `codex app-server` and calls `account/rateLimits/read`. Uses the CLI's own login and token refresh; documented integration surface.",
               "ChatGPT usage endpoint using the token in `~/.codex/auth.json`. Undocumented; may change without notice.",
               "Newest `rate_limits` record in `~/.codex/sessions` logs. Fully offline, but only as fresh as your last Codex turn."
@@ -7126,7 +7139,7 @@
             "default": 5,
             "minimum": 1,
             "order": 4,
-            "markdownDescription": "How often (minutes) the Codex source is called and the result stored in the shared cache."
+            "markdownDescription": "How often (minutes) the Codex source is called and the result stored in the shared cache. With `#aiUsage.codex.source#` set to `both` it is also the age at which a session-log record counts as stale and the usage endpoint is called instead."
           },
           "aiUsage.codex.keepAlive.enabled": {
             "type": "boolean",

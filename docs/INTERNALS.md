@@ -3,10 +3,19 @@
 ## How live usage is read
 
 - **Claude Code**: reads the OAuth token from `~/.claude/.credentials.json` (or `$CLAUDE_CONFIG_DIR`) and calls
-  Anthropic's `/api/oauth/usage` endpoint, the same data shown by `/usage` inside Claude Code.
-- **Codex**: by default runs `codex app-server` over stdio and calls `account/rateLimits/read`, the same data shown
-  by `/status` inside Codex. The `api` source calls the ChatGPT usage endpoint with the token in `~/.codex/auth.json`;
-  the `sessionLog` source reads the newest `rate_limits` record from `~/.codex/sessions`.
+  Anthropic's `/api/oauth/usage` endpoint, the same data shown by `/usage` inside Claude Code. The `accountFile`
+  source instead reads `cachedUsageUtilization` from `~/.claude.json`, the reading Claude Code itself last fetched
+  from that endpoint.
+- **Codex**: the `cli` source runs `codex app-server` over stdio and calls `account/rateLimits/read`, the same data
+  shown by `/status` inside Codex. The `api` source calls the ChatGPT usage endpoint with the token in
+  `~/.codex/auth.json`; the `sessionLog` source reads the newest `rate_limits` record from `~/.codex/sessions`.
+- **`both`** (the default for Claude and Codex): the local file is read on every check — Claude's account file,
+  Codex's session logs — and serves the reading while it is no older than that service's `checkIntervalMinutes`.
+  Once it falls behind, because the CLI has been idle or has never written a reading, the service endpoint fills
+  the gap. Those fallback calls are spaced by `checkIntervalMinutes` in a ledger of their own
+  (`claude-fallback-budget.json`, `codex-fallback-budget.json`) and, for Claude, also pass the shared endpoint
+  budget below, so the endpoint is never called more often than the `api` source would. While a CLI session is
+  active, usage follows it within seconds and costs no calls at all; a reading is never replaced by an older one.
 - **Copilot**: uses VS Code's existing GitHub sign-in (silently, never prompting) and calls the Copilot user
   endpoint that reports premium-request quota. Unlimited quotas are not shown.
 
@@ -19,6 +28,10 @@ calling the network, and a window that starts a fetch marks the entry so others 
 and the next-allowed time is stored in the same entry so every window backs off together. Backoff is per provider:
 a Claude rate limit never delays Codex or Copilot. During a backoff the last good reading stays visible and is
 greyed out once it is older than 15 minutes.
+
+Sources that read a local file (`accountFile`, and `both`) are exempt from that backoff: there is no rate limit to
+respect, and a shared backoff would also stall the free local read. They keep to their own check interval, and
+`both` spaces its service calls with its fallback ledger instead.
 
 Claude and Codex cache keys include the selected authentication-profile id. A switch therefore cannot reuse the
 previous account's usage reading or backoff entry.

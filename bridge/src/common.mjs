@@ -65,7 +65,10 @@ export async function resolveCommand(command) {
 export function spawnCommand(command, args, options = {}) {
   const child = spawn(command.file, [...command.args, ...args], {
     stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
-    detached: process.platform !== 'win32', ...options, shell: false
+    // Never inherit this process's directory. A bridge whose cwd was deleted
+    // (extension update, removed checkout) makes CLIs refuse to start, which
+    // reads as an incompatible CLI instead of a stale server.
+    detached: process.platform !== 'win32', ...options, cwd: options.cwd || os.tmpdir(), shell: false
   });
   // Do not log stderr: CLIs can include prompts, credentials, or private paths.
   child.stderr.resume();

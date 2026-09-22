@@ -28,7 +28,7 @@ export async function cliVersion(command, signal) {
     await new Promise((resolve, reject) => {
       child.stdout.on('data', data => { output += data; if (output.length > 4096) { void terminate(child); reject(new BridgeError('Invalid CLI version output.', 503, 'cli_incompatible')); } });
       child.once('error', () => reject(new BridgeError('Could not read CLI version.', 503, 'cli_incompatible')));
-      child.once('exit', code => code === 0 ? resolve() : reject(new BridgeError('CLI version check failed.', 503, 'cli_incompatible')));
+      child.once('exit', code => code === 0 ? resolve() : reject(new BridgeError(`CLI version check failed (exit ${code}).`, 503, 'cli_incompatible')));
     });
     const version = output.match(/\b(\d+)\.(\d+)\.(\d+)\b/);
     if (!version) throw new BridgeError('Unrecognized CLI version. Update the CLI.', 503, 'cli_incompatible');

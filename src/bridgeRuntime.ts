@@ -33,7 +33,9 @@ export class BridgeRuntime implements vscode.Disposable {
       const tokenFile = config.get<string>('tokenFile', '') || path.join(os.homedir(), '.cli-byok-bridge', 'token');
       const args = [path.join(this.extensionPath, 'bridge', 'src', 'cli.mjs'), '--port', String(port), '--token-file', tokenFile,
         '--backends', 'codex,claude', '--codex', config.get<string>('codex.executable', 'codex'), '--claude', config.get<string>('claude.executable', 'claude')];
-      const child = spawn(process.execPath, args, { cwd: this.extensionPath, env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, stdio: 'ignore', windowsHide: true });
+      // Start outside the extension directory: an update deletes that path
+      // under the running bridge, and CLIs refuse to run from a deleted cwd.
+      const child = spawn(process.execPath, args, { cwd: os.tmpdir(), env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, stdio: 'ignore', windowsHide: true });
       this.child = child;
       let spawnError: Error | undefined;
       child.once('error', error => { spawnError = error; });
