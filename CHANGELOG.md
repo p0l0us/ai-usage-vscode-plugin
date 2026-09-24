@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.0.25 (2026-09-24)
+
+- Clicking the Claude or Codex status bar item opens that service's Accounts menu, with its profiles and their
+  usage, instead of the general details panel. The Copilot item and the chat chips still open the details panel.
+- The Accounts menu ends with a **Back** item that opens the AI Usage menu of all services, and the account pickers inside
+  it (send keep-alive, rename, delete) have a **Back** item that returns to the Accounts menu.
+
 ## 0.0.24 (2026-09-24)
 
 - Rotation reacts as soon as a threshold is reached. A status bar reading of the active account that reaches a

@@ -57,7 +57,7 @@ function automationKey(provider: AuthProvider, feature: AccountAutomationFeature
 
 type ProfileItem = vscode.QuickPickItem & {
   profile?: ProfileMetadata;
-  action?: 'save' | 'import' | 'rename' | 'delete' | 'keepAliveNow' | 'settings';
+  action?: 'save' | 'import' | 'rename' | 'delete' | 'keepAliveNow' | 'settings' | 'back';
 };
 
 /**
@@ -70,6 +70,8 @@ type ProfileHooks = {
   beforeActivate?: (provider: AuthProvider) => Promise<void>;
   afterActivate?: (provider: AuthProvider, change: ActivationChange) => Promise<void>;
   sendKeepAlive?: (provider: AuthProvider, profile: ProfileMetadata) => Promise<void>;
+  /** Where the menu's Back item leads, the AI Usage menu of every service; no Back item without it. */
+  back?: (provider: AuthProvider) => Promise<void>;
 };
 
 const TITLES: Record<AuthProvider, string> = { claude: 'Claude', codex: 'Codex' };
@@ -300,7 +302,7 @@ export class AuthProfileManager {
     await this.backfillEmails(provider);
     // Management actions return to the list. Choosing a profile activates it and closes the menu.
     while (true) {
-      const item = await vscode.window.showQuickPick(this.items(provider), {
+      const item = await vscode.window.showQuickPick(this.items(provider, Boolean(hooks?.back)), {
         title: `AI Usage · ${TITLES[provider]} accounts`,
         placeHolder: 'Choose a profile to activate, or manage saved profiles',
         matchOnDescription: true,
@@ -317,6 +319,10 @@ export class AuthProfileManager {
           if (await this.activate(provider, item.profile)) {
             await hooks?.afterActivate?.(provider, { kind: 'activated', accountChanged: !unchanged });
           }
+          return;
+        }
+        if (item.action === 'back') {
+          await hooks?.back?.(provider);
           return;
         }
         if (item.action === 'keepAliveNow') {
@@ -397,7 +403,7 @@ export class AuthProfileManager {
     return picked?.provider;
   }
 
-  private items(provider: AuthProvider): ProfileItem[] {
+  private items(provider: AuthProvider, withBack = false): ProfileItem[] {
     const providerState = this.state()[provider];
     const items: ProfileItem[] = providerState.profiles.map((profile) => ({
       label: `${profile.id === providerState.activeProfileId ? '$(check)' : '$(key)'} ${profile.name}`,
@@ -445,6 +451,11 @@ export class AuthProfileManager {
       detail: `Opens Settings: turn periodic checks of every saved ${TITLES[provider]} account and automatic rotation on or off, and set the period, model, rotation strategy and thresholds, and dedicated home.`,
       action: 'settings'
     });
+    if (withBack) {
+      // Last, so the active profile stays the first, preselected item.
+      items.push({ label: '', kind: vscode.QuickPickItemKind.Separator });
+      items.push({ label: '$(arrow-left) Back', description: 'AI Usage menu of all services', action: 'back' });
+    }
     return items;
   }
 
@@ -691,12 +702,16 @@ export class AuthProfileManager {
     return Boolean(profile.email && identity.email && profile.email.toLowerCase() === identity.email.toLowerCase());
   }
 
+  /** Undefined when cancelled or on Back, which both return to the accounts list. */
   private async pickSaved(provider: AuthProvider, title: string): Promise<ProfileMetadata | undefined> {
-    const picked = await vscode.window.showQuickPick(this.state()[provider].profiles.map((profile) => ({
+    const items: Array<vscode.QuickPickItem & { profile?: ProfileMetadata }> = this.state()[provider].profiles.map((profile) => ({
       label: profile.name,
       description: profileDescription(profile, profile.id === this.activeProfileId(provider)),
       profile
-    })), { title });
+    }));
+    items.push({ label: '', kind: vscode.QuickPickItemKind.Separator });
+    items.push({ label: '$(arrow-left) Back', description: `${TITLES[provider]} accounts` });
+    const picked = await vscode.window.showQuickPick(items, { title });
     return picked?.profile;
   }
 

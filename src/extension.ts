@@ -347,7 +347,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const sessionTokens = new Map<'claude' | 'codex', SessionTokenUsage>();
   log(`cache: ${path.join(context.globalStorageUri.fsPath, 'usage-cache.json')}`);
   for (const provider of liveProviders) {
-    provider.status.command = 'aiUsage.showDetails';
+    provider.status.command = clickCommand(provider);
     provider.status.name = `AI Usage: ${provider.id}`;
     context.subscriptions.push(provider.status);
   }
@@ -655,6 +655,7 @@ export function activate(context: vscode.ExtensionContext): void {
         await liveProviders.find((candidate) => candidate.id === provider)?.inFlight;
       },
       afterActivate: afterProfileActivated,
+      back: async () => { await vscode.commands.executeCommand('aiUsage.showDetails'); },
       sendKeepAlive: async (provider, profile) => {
         const title = provider === 'claude' ? 'Claude' : 'Codex';
         await vscode.window.withProgress({
@@ -1088,11 +1089,18 @@ async function updateChipContext(provider: LiveProvider, enabled: boolean): Prom
   );
 }
 
+/** Claude and Codex items open that service's accounts; Copilot, which has none, opens the usage details. */
+function clickCommand(provider: LiveProvider): vscode.Command {
+  return provider.id === 'copilot'
+    ? { command: 'aiUsage.showDetails', title: 'Show usage details' }
+    : { command: 'aiUsage.manageAuthProfiles', title: 'Manage accounts', arguments: [provider.id] };
+}
+
 function renderLive(provider: LiveProvider): void {
   const result = provider.last;
   const item = provider.status;
   item.color = undefined;
-  item.command = 'aiUsage.showDetails';
+  item.command = clickCommand(provider);
   if (!statusBarVisible()) {
     item.hide();
     return;

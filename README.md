@@ -14,8 +14,8 @@ accounts without signing in again, and shows live rate-limit and quota usage for
   chat is using; click for the named windows and reset countdowns.
 - **Per-chat tokens**: `400k tokens` for the newest Claude or Codex chat in the current workspace; click for the
   exact input, output and cached-input breakdown.
-- **Details panel**: click any status bar item or chip for plan, account or organization, reset countdowns and
-  source, with Refresh, Open log and Settings actions.
+- **Details panel**: click a chat chip or the Copilot status bar item, or choose **Back** in an Accounts menu, for
+  plan, account or organization, reset countdowns and source, with Refresh, Open log and Settings actions.
 - **Organization aware**: Copilot follows the GitHub account whose Copilot organization owns the workspace
   repository, so org-billed seats show org data.
 - **Gentle on the services**: one shared cache for all open windows, per-service check intervals and
@@ -77,7 +77,8 @@ extension host (local, SSH, WSL, or container) where the command is run.
 
 ### Account keep-alives and automatic rotation
 
-Open the **AI Usage** menu (click a usage item), then choose **Accounts** under Claude or Codex. This menu lets
+Click the Claude or Codex status bar item to open that service's **Accounts** menu (or choose **Accounts** in the
+details panel); **Back** leads to the AI Usage menu of all services. This menu lets
 you switch accounts manually, save the current login to a new or existing profile, and send a keep-alive on
 demand. **Account keep-alive and usage collection** (`aiUsage.<service>.keepAlive.enabled`) and **automatic
 account rotation** (`aiUsage.<service>.autoRotate.enabled`) are turned on in Settings, independently per service;
