@@ -7,16 +7,20 @@ import { registerBridgeModels } from './bridgeModels';
 import { AuthProvider, readNativeCredential } from './authFiles';
 import { ActivationChange, AuthProfileManager } from './authProfiles';
 import { activateClaudeAccountMetadata, claudeAccountFileConfirms } from './accountIdentity';
-import { AccountAutomation, AutomationSettings } from './accountAutomation';
+import { AccountAutomation, AutomationSettings, modelWindowFilter, RotationStrategy, RotationTrigger } from './accountAutomation';
+import { signInIsolated } from './accountLogin';
 import { probeAccount } from './accountProbe';
 import { SharedCache, deserializeUsage } from './cache';
+import { codexConfigPath } from './codexConfig';
 import { findStaleCodexProcesses } from './codexProcesses';
 import { CodexProxyRuntime } from './codexProxyRuntime';
+import { applyCodexSettingsToFile, readCodexSettingAssignments } from './codexSettings';
 import {
   GitHubAccount,
   LiveResult,
   LiveUsage,
   ProviderId,
+  claudeConfigDir,
   codexHomeDir,
   fetchClaudeUsage,
   fetchClaudeUsageCli,
@@ -232,6 +236,22 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(codexProxy);
   authProfiles.codexChatsFollowSwitch = () => codexProxy.active;
   void codexProxy.sync();
+  // Writes the aiUsage.codexConfig.* values that are set into Codex's config.toml; unset ones leave the file alone.
+  const syncCodexSettings = () => {
+    const file = codexConfigPath(codexHomeDir());
+    const configuration = vscode.workspace.getConfiguration();
+    const assignments = readCodexSettingAssignments((setting) => configuration.get(setting),
+      (setting, value) => log(`codex config: ignoring ${setting.setting} = ${JSON.stringify(value)}; expected an integer of at least ${setting.minimum}`));
+    try {
+      if (applyCodexSettingsToFile(file, assignments,
+        (assignment, error) => log(`codex config: could not set ${assignment.table}.${assignment.key}: ${error.message}`))) {
+        log(`codex config: updated ${file} (${assignments.map((a) => `${a.table}.${a.key} = ${a.value}`).join(', ')}); new Codex chats use it`);
+      }
+    } catch (error) {
+      log(`codex config: could not update ${file}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  };
+  syncCodexSettings();
   const status = vscode.window.createStatusBarItem(STATUS_ALIGNMENT, STATUS_PRIORITY.manual);
   status.command = 'aiUsage.showDetails';
   status.name = 'AI Usage';
@@ -568,6 +588,54 @@ export function activate(context: vscode.ExtensionContext): void {
       return probeAccount(provider, credential, settings, keepAlive, signal, provider === 'claude' ? claudeBudget : undefined);
     });
   context.subscriptions.push(automation);
+  /** A broken saved login is reported by name and email; a revoked one can be signed in again in the keep-alive home. */
+  const reportAccountProblem = async (provider: AuthProvider, id: string, reason: string, revoked: boolean) => {
+    const profile = authProfiles.profile(provider, id);
+    if (!profile) { return; }
+    const title = provider === 'claude' ? 'Claude' : 'Codex';
+    const who = `“${profile.name}”${profile.email ? ` (${profile.email})` : ''}`;
+    if (!revoked) {
+      void vscode.window.showWarningMessage(
+        `AI Usage: automatic rotation will not switch to the ${title} account ${who}: its keep-alive failed. ${reason}`);
+      return;
+    }
+    const choice = await vscode.window.showWarningMessage(
+      `AI Usage: the saved ${title} login for ${who} was revoked and no longer works, so it cannot be used or rotated to. ${reason}`,
+      'Sign in again', 'Skip');
+    if (choice !== 'Sign in again') { return; }
+    try {
+      const credential = await signInIsolated(provider, automationSettings(provider, authProfiles), `${title} ${who}`);
+      if (!credential) {
+        void vscode.window.showWarningMessage(`AI Usage: sign-in for the ${title} account ${who} was not completed; the profile is unchanged.`);
+        return;
+      }
+      const identity = await authProfiles.identity(provider, credential);
+      const current = authProfiles.profile(provider, id);
+      if (!current) { return; }
+      const otherAccount = (current.accountId && identity.accountId && current.accountId !== identity.accountId) ||
+        (current.email && identity.email && current.email.toLowerCase() !== identity.email.toLowerCase());
+      if (otherAccount) {
+        const replace = await vscode.window.showWarningMessage(
+          `You signed in as ${identity.email ?? identity.accountId}, but the profile “${current.name}” holds ${current.email ?? current.accountId}. Replace its login anyway?`,
+          { modal: true }, 'Replace');
+        if (replace !== 'Replace') { return; }
+      }
+      const active = await automation.withPaused(() => authProfiles.replaceCredential(provider, id, credential));
+      if (active) { await afterProfileActivated(provider, { kind: 'saved', accountChanged: false }); }
+      // The login is saved either way; a busy check elsewhere only delays the usage reading.
+      const result = await automation.credentialReplaced(provider, id).catch((error: unknown) =>
+        ({ usage: undefined, usageError: error instanceof Error ? error.message : String(error) }));
+      const signedInAs = identity.email ? ` as ${identity.email}` : '';
+      void vscode.window.showInformationMessage(`AI Usage: ${title} profile “${current.name}” signed in again${signedInAs}.${result.usage
+        ? ' Usage statistics updated.' : result.usageError ? ` Usage could not be read yet: ${result.usageError}` : ''}`);
+      void automation.tick();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      log(`${provider}: signing in again for "${profile.name}" failed: ${message}`);
+      void vscode.window.showErrorMessage(`AI Usage: could not sign in again for the ${title} account ${who}: ${message}`);
+    }
+  };
+  automation.onAccountProblem = (provider, id, reason, revoked) => { void reportAccountProblem(provider, id, reason, revoked); };
   const accountTimer = setInterval(() => {
     void automation.tick();
     void warnAboutStaleCodexProcesses();
@@ -756,6 +824,9 @@ export function activate(context: vscode.ExtensionContext): void {
     }
     if (event.affectsConfiguration('aiUsage.codex.proxy')) {
       void codexProxy.sync();
+    }
+    if (event.affectsConfiguration('aiUsage.codexConfig')) {
+      syncCodexSettings();
     }
     if (
       event.affectsConfiguration('aiUsage.claude') ||
@@ -1414,10 +1485,26 @@ function automationSettings(provider: AuthProvider, authProfiles: AuthProfileMan
   const thresholdPercent = Number.isFinite(configuredThreshold)
     ? Math.min(100, Math.max(1, configuredThreshold))
     : 99.5;
+  // Unset (null) per-window thresholds fall back to thresholdPercent.
+  const windowThreshold = (key: string) => {
+    const value = config.get<number | null>(`${prefix}.autoRotate.${key}`, null);
+    return typeof value === 'number' && Number.isFinite(value) ? Math.min(100, Math.max(1, value)) : undefined;
+  };
+  const strategies: RotationStrategy[] = ['sequential', 'soonestReset', 'evenPace', 'leastWaste'];
+  const strategy = config.get<RotationStrategy>(`${prefix}.autoRotate.strategy`, provider === 'claude' ? 'soonestReset' : 'sequential');
+  const minStay = config.get<number>(`${prefix}.autoRotate.minStayMinutes`, 30);
   return {
     enabled: authProfiles.automationEnabled(provider, 'keepAlive'),
     autoRotate: authProfiles.automationEnabled(provider, 'autoRotate'),
     thresholdPercent,
+    fiveHourThresholdPercent: windowThreshold('fiveHourThresholdPercent'),
+    weeklyThresholdPercent: windowThreshold('weeklyThresholdPercent'),
+    modelWeeklyThresholdPercent: windowThreshold('modelWeeklyThresholdPercent'),
+    countsWindow: modelWindowFilter(config.get<string>(`${prefix}.autoRotate.modelLimits`, 'auto'),
+      provider === 'claude' ? claudeCodeModel() : undefined),
+    strategy: strategies.includes(strategy) ? strategy : 'sequential',
+    trigger: config.get<RotationTrigger>(`${prefix}.autoRotate.trigger`, 'limit') === 'proactive' ? 'proactive' : 'limit',
+    minStayMs: (Number.isFinite(minStay) ? Math.max(5, minStay) : 30) * 60_000,
     intervalMs: (Number.isFinite(hours) ? Math.max(0.25, hours) : defaultHours) * 3_600_000,
     // Account probes always call the service endpoint, whatever source the status bar reads, so they
     // are spaced by the endpoint's own interval and never by a local file's.
@@ -1426,4 +1513,12 @@ function automationSettings(provider: AuthProvider, authProfiles: AuthProfileMan
     cliPath: config.get<string>(`${prefix}.cliPath`, provider),
     model: config.get<string>(`${prefix}.keepAlive.model`, provider === 'claude' ? 'haiku' : 'gpt-5.6-luna')
   };
+}
+
+/** The model Claude Code is configured to use (its user settings `model`), or undefined when unset or unreadable. */
+function claudeCodeModel(): string | undefined {
+  try {
+    const settings = JSON.parse(fs.readFileSync(path.join(claudeConfigDir(), 'settings.json'), 'utf8'));
+    return typeof settings?.model === 'string' && settings.model.trim() ? settings.model.trim() : undefined;
+  } catch { return undefined; }
 }

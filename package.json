@@ -1,8 +1,8 @@
 {
   "name": "ai-usage-vscode-plugin",
-  "displayName": "AI Usage",
-  "description": "Live Claude Code, Codex and GitHub Copilot usage in the status bar and chat input: 5h/7d windows, premium requests, org billing, reset times on hover. Open source, contributions welcome.",
-  "version": "0.0.21",
+  "displayName": "AI subscription management and usage",
+  "description": "Manage your Claude Code, Codex and GitHub Copilot subscriptions and see what is left of them: switch between saved accounts without signing in again, keep them warm, rotate on exhaustion, and read live 5h/7d windows, premium requests and org billing in the status bar and chat input. Open source, contributions welcome.",
+  "version": "0.0.23",
   "publisher": "p0l0us",
   "license": "GPL-3.0-only",
   "repository": {
@@ -22,7 +22,10 @@
     "claude code",
     "codex",
     "copilot",
-    "status bar"
+    "status bar",
+    "subscription",
+    "accounts",
+    "account switching"
   ],
   "engines": {
     "vscode": "^1.137.0"
@@ -7064,7 +7067,7 @@
             "type": "boolean",
             "default": false,
             "order": 6,
-            "markdownDescription": "**Automatic Claude account rotation.** When the active account reaches `#aiUsage.claude.autoRotate.thresholdPercent#` in any usage window, switch to the next saved account that is below it in every window. Requires at least two saved profiles."
+            "markdownDescription": "**Automatic Claude account rotation.** Switch the active account when it reaches its rotation threshold in any usage window (`#aiUsage.claude.autoRotate.thresholdPercent#`, or the per-window thresholds below), or proactively (`#aiUsage.claude.autoRotate.trigger#`). The account switched to is chosen by `#aiUsage.claude.autoRotate.strategy#` and must be below its threshold in every window. Requires at least two saved profiles."
           },
           "aiUsage.claude.keepAlive.periodHours": {
             "type": "number",
@@ -7084,8 +7087,96 @@
             "minimum": 1,
             "maximum": 100,
             "default": 99.5,
-            "markdownDescription": "**Claude automatic-rotation threshold.** Rotate when any Claude usage window reaches this percentage. Candidate accounts must be below it in every reported window.",
+            "markdownDescription": "**Claude automatic-rotation threshold.** Rotate when any Claude usage window reaches this percentage. Candidate accounts must be below it in every counted window. The 5-hour, weekly and Fable thresholds below override it for their window.",
             "order": 9
+          },
+          "aiUsage.claude.autoRotate.fiveHourThresholdPercent": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "minimum": 1,
+            "maximum": 100,
+            "default": null,
+            "markdownDescription": "**Claude 5-hour rotation threshold.** Threshold for the short (5h) usage window. Empty uses `#aiUsage.claude.autoRotate.thresholdPercent#`.",
+            "order": 9.1
+          },
+          "aiUsage.claude.autoRotate.weeklyThresholdPercent": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "minimum": 1,
+            "maximum": 100,
+            "default": null,
+            "markdownDescription": "**Claude weekly rotation threshold.** Threshold for the weekly (7d) usage window of all models. Empty uses `#aiUsage.claude.autoRotate.thresholdPercent#`.",
+            "order": 9.2
+          },
+          "aiUsage.claude.autoRotate.modelWeeklyThresholdPercent": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "minimum": 1,
+            "maximum": 100,
+            "default": null,
+            "markdownDescription": "**Claude Fable weekly rotation threshold.** Threshold for model-specific weekly windows such as `7d Fable`. Empty uses `#aiUsage.claude.autoRotate.weeklyThresholdPercent#`, or `#aiUsage.claude.autoRotate.thresholdPercent#` when that is empty too.",
+            "order": 9.3
+          },
+          "aiUsage.claude.autoRotate.modelLimits": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "always",
+              "never"
+            ],
+            "default": "auto",
+            "enumDescriptions": [
+              "Count `7d Fable` (and other model-specific weekly windows) only when Claude Code's configured `model` is that model, or when no model is configured.",
+              "Always count model-specific weekly windows.",
+              "Ignore model-specific weekly windows; only the 5h and all-models 7d windows decide."
+            ],
+            "markdownDescription": "**Claude Fable limit in rotation.** Whether the `7d Fable` window blocks an account and counts when ranking accounts. `auto` reads `model` from Claude Code's `settings.json`.",
+            "order": 10
+          },
+          "aiUsage.claude.autoRotate.strategy": {
+            "type": "string",
+            "enum": [
+              "soonestReset",
+              "evenPace",
+              "leastWaste",
+              "sequential"
+            ],
+            "default": "soonestReset",
+            "enumDescriptions": [
+              "Soonest reset first: use the account whose weekly window resets soonest, so allowance about to expire is spent first. An account far ahead of an even spend with more than half its week left goes to the back of the queue.",
+              "Even pace: use the account furthest below a straight line from 0% at the start of its week to 100% at its reset. No account runs out early; switches more often.",
+              "Least waste: use the account with the highest weekly allowance left per hour until reset, with a small bonus for a 5h window about to reset unused.",
+              "Sequential: the next saved profile in list order (the behaviour before 0.0.23)."
+            ],
+            "markdownDescription": "**Claude rotation strategy.** How automatic rotation chooses the account to switch to. Ranking uses the readings already collected for each account (see `#aiUsage.claude.keepAlive.enabled#`); the chosen account is always read again and sent a keep-alive before switching.",
+            "order": 11
+          },
+          "aiUsage.claude.autoRotate.trigger": {
+            "type": "string",
+            "enum": [
+              "limit",
+              "proactive"
+            ],
+            "default": "limit",
+            "enumDescriptions": [
+              "Switch only when the active account reaches a rotation threshold.",
+              "Also switch when the strategy ranks another account clearly better, at most once per `#aiUsage.claude.autoRotate.minStayMinutes#`. Has no effect with the sequential strategy."
+            ],
+            "markdownDescription": "**Claude rotation trigger.** When automatic rotation switches accounts.",
+            "order": 12
+          },
+          "aiUsage.claude.autoRotate.minStayMinutes": {
+            "type": "number",
+            "minimum": 5,
+            "default": 30,
+            "markdownDescription": "**Claude minimum stay before a proactive switch, in minutes.** With the `proactive` trigger, an account that became active, automatically or by hand, is kept at least this long unless it reaches its limit.",
+            "order": 13
           },
           "aiUsage.claude.keepAlive.home": {
             "type": "string",
@@ -7173,8 +7264,30 @@
             "minimum": 1,
             "maximum": 100,
             "default": 99.5,
-            "markdownDescription": "**Codex automatic-rotation threshold.** Rotate when either Codex usage window reaches this percentage. Candidate accounts must be below it in every reported window.",
+            "markdownDescription": "**Codex automatic-rotation threshold.** Rotate when either Codex usage window reaches this percentage. Candidate accounts must be below it in every reported window. The 5-hour and weekly thresholds below override it for their window.",
             "order": 10
+          },
+          "aiUsage.codex.autoRotate.fiveHourThresholdPercent": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "minimum": 1,
+            "maximum": 100,
+            "default": null,
+            "markdownDescription": "**Codex 5-hour rotation threshold.** Threshold for the short (5h) usage window. Empty uses `#aiUsage.codex.autoRotate.thresholdPercent#`.",
+            "order": 10.1
+          },
+          "aiUsage.codex.autoRotate.weeklyThresholdPercent": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "minimum": 1,
+            "maximum": 100,
+            "default": null,
+            "markdownDescription": "**Codex weekly rotation threshold.** Threshold for the weekly (7d) usage window. Empty uses `#aiUsage.codex.autoRotate.thresholdPercent#`.",
+            "order": 10.2
           },
           "aiUsage.codex.switchRestartHint": {
             "type": "boolean",
@@ -7213,8 +7326,47 @@
         }
       },
       {
-        "title": "GitHub Copilot",
+        "title": "Codex config",
         "order": 4,
+        "properties": {
+          "aiUsage.codexConfig.agents.maxConcurrentThreadsPerSession": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "default": null,
+            "minimum": 1,
+            "scope": "machine",
+            "markdownDescription": "Maximum number of agent threads (the main chat plus its subagents) Codex runs at the same time in one session. Written to `[agents] max_concurrent_threads_per_session` in `config.toml` in the Codex home (`$CODEX_HOME`, default `~/.codex`) when AI Usage starts and whenever this setting changes; Codex reads it when a chat starts. Leave empty (`null`) to keep whatever Codex's `config.toml` already says; clearing the setting later does not remove the value from the file.",
+            "order": 1
+          },
+          "aiUsage.codexConfig.agents.maxDepth": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "default": null,
+            "minimum": 1,
+            "scope": "machine",
+            "markdownDescription": "How deep Codex subagents may nest (a subagent spawning its own subagents). Written to `[agents] max_depth` in Codex's `config.toml`. Leave empty (`null`) to keep whatever Codex's `config.toml` already says; clearing the setting later does not remove the value from the file.",
+            "order": 2
+          },
+          "aiUsage.codexConfig.agents.jobMaxRuntimeSeconds": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "default": null,
+            "minimum": 1,
+            "scope": "machine",
+            "markdownDescription": "Maximum runtime of a Codex agent job, in seconds. Written to `[agents] job_max_runtime_seconds` in Codex's `config.toml`. Leave empty (`null`) to keep whatever Codex's `config.toml` already says; clearing the setting later does not remove the value from the file.",
+            "order": 3
+          }
+        }
+      },
+      {
+        "title": "GitHub Copilot",
+        "order": 5,
         "properties": {
           "aiUsage.copilot.enabled": {
             "type": "boolean",
@@ -7251,7 +7403,7 @@
       },
       {
         "title": "Copilot CLI bridge (experimental)",
-        "order": 5,
+        "order": 6,
         "properties": {
           "aiUsage.bridge.modelsEnabled": {
             "type": "boolean",
@@ -7479,7 +7631,7 @@
       },
       {
         "title": "Advanced",
-        "order": 6,
+        "order": 7,
         "properties": {
           "aiUsage.chatChips.debug": {
             "type": "boolean",

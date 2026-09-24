@@ -3,7 +3,7 @@ const test = require('node:test');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { probeAccount, isolatedHome, isolatedEnvironment, acquireAccountLock, keepAliveArgs, describeCliFailure } = require('../out/accountProbe');
+const { probeAccount, isolatedHome, isolatedEnvironment, acquireAccountLock, keepAliveArgs, describeCliFailure, isRevokedCredentialError, loginArgs } = require('../out/accountProbe');
 
 function temporary(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-probe-'));
@@ -191,4 +191,24 @@ test('a failed keep-alive names the CLI error instead of only the exit code', ()
   assert.equal(describeCliFailure('Not logged in\n'), 'Not logged in');
   assert.equal(describeCliFailure('WARNING: only a warning\n'), undefined);
   assert.equal(describeCliFailure(''), undefined);
+});
+
+test('revoked logins are told apart from limits and transient failures', () => {
+  for (const message of [
+    'Keep-alive CLI exited with code 1: Your access token could not be refreshed because your refresh token was revoked. Please log out and sign in again.',
+    'Codex CLI: account/rateLimits/read failed: GET https://chatgpt.com/backend-api/wham/usage failed: 401 Unauthorized; body={"error":{"code":"token_revoked"}}',
+    'Not authorized. Run `claude` once to sign in again.',
+    'Keep-alive CLI exited with code 1: OAuth token revoked · Please run /login'
+  ]) assert.equal(isRevokedCredentialError(message), true, message);
+  for (const message of [
+    undefined,
+    'Keep-alive CLI exited with code 1: Your workspace is out of credits. Add credits to continue.',
+    'Login token expired. Run `codex` once to refresh it.',
+    'Keep-alive timed out after 90 seconds.'
+  ]) assert.equal(isRevokedCredentialError(message), false, message);
+});
+
+test('sign-in runs the vendor login and keeps a Codex login in its file', () => {
+  assert.deepEqual(loginArgs('claude'), ['auth', 'login']);
+  assert.deepEqual(loginArgs('codex'), ['-c', 'cli_auth_credentials_store="file"', 'login']);
 });

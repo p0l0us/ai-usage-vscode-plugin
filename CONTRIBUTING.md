@@ -1,4 +1,4 @@
-# Contributing to AI Usage
+# Contributing to AI subscription management and usage
 
 Thanks for your interest. Everyone is welcome to report bugs, suggest features, or send pull requests.
 

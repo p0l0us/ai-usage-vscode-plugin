@@ -81,6 +81,32 @@ export function keepAliveArgs(provider: AuthProvider, model: string): string[] {
     ...(model ? ['--model', model] : []), prompt];
 }
 
+/**
+ * True when a check failed because the saved login itself is dead, so only a new sign-in can fix it, as opposed
+ * to a usage limit, a network error or a missing CLI. Both vendors revoke a whole login when a rotated refresh
+ * token is reused, and Codex and Claude word that differently in the CLI and in the usage endpoint.
+ */
+export function isRevokedCredentialError(message: string | undefined): boolean {
+  return Boolean(message) && /token_revoked|refresh_token_reused|invalid_grant|refresh token (?:was|has been) (?:revoked|already used)|refresh token has expired|invalidated oauth token|oauth token (?:has been )?revoked|sign in again|log out and sign in|please run \/login|\b401 unauthorized\b/i.test(message!);
+}
+
+/** Interactive login for a staged account; Codex is told to keep the login in auth.json rather than a keyring. */
+export function loginArgs(provider: AuthProvider): string[] {
+  return provider === 'claude' ? ['auth', 'login'] : ['-c', 'cli_auth_credentials_store="file"', 'login'];
+}
+
+/** Sign-ins get their own folder inside the keep-alive home so a background probe can keep using the home itself. */
+export function loginHome(provider: AuthProvider, configured: string): string {
+  const home = path.join(isolatedHome(provider, configured), 'login');
+  fs.mkdirSync(home, { recursive: true, mode: 0o700 });
+  return home;
+}
+
+/** Where a CLI writes its login inside an isolated home. */
+export function stagedCredentialPath(provider: AuthProvider, home: string): string {
+  return path.join(home, provider === 'claude' ? '.credentials.json' : 'auth.json');
+}
+
 /** Most useful line of a failed CLI's stderr: the message of the last `ERROR: {json}` line, else the last line. */
 export function describeCliFailure(stderr: string): string | undefined {
   const lines = stderr.split(/\r?\n/).map((line) => line.trim()).filter((line) => line && !line.startsWith('WARNING:'));
@@ -141,7 +167,7 @@ export async function probeAccount(provider: AuthProvider, credential: StoredCre
   const home = isolatedHome(provider, settings.home);
   const unlock = acquireAccountLock(path.join(home, '.ai-usage.lock'));
   if (!unlock) { throw new Error('Another account check is using the keep-alive home.'); }
-  const file = path.join(home, provider === 'claude' ? '.credentials.json' : 'auth.json');
+  const file = stagedCredentialPath(provider, home);
   let staged = false;
   try {
     // Only the provider-owned auth fields, never native settings, hooks, MCP servers or sessions.

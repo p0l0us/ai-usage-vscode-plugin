@@ -3,10 +3,14 @@ const test = require('node:test');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { AccountAutomation, atLimit, eligibleAccount } = require('../out/accountAutomation');
+const { AccountAutomation, atLimit, eligibleAccount, modelWindowFilter, rotationScore } = require('../out/accountAutomation');
 
+const HOUR = 3600000;
+// A window is a plain percentage ("5h", then "7d") or [label, percent, hours until reset].
 const usage = (provider, percents, now) => ({ provider, title: provider, fetchedAt: new Date(now),
-  windows: percents.map((usedPercent, i) => ({ label: i ? '7d' : '5h', usedPercent, resetsAt: new Date(now + 86400000) })) });
+  windows: percents.map((value, i) => Array.isArray(value)
+    ? { label: value[0], usedPercent: value[1], resetsAt: new Date(now + value[2] * HOUR) }
+    : { label: i ? '7d' : '5h', usedPercent: value, resetsAt: new Date(now + 86400000) }) });
 
 function fixture(t, options = {}) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-automation-'));
@@ -14,13 +18,13 @@ function fixture(t, options = {}) {
   let now = Date.now();
   const active = { claude: 'a', codex: 'a' };
   const values = { a: [99.5, 10], b: [10, 10], c: [20, 20], ...options.values };
-  const calls = [], switches = [], refreshed = [], messages = [];
+  const calls = [], switches = [], refreshed = [], messages = [], problems = [];
   const settings = Object.fromEntries(['claude', 'codex'].map(provider => [provider, {
     enabled: false, autoRotate: false, thresholdPercent: 99.5, intervalMs: (provider === 'claude' ? 2 : 6) * 3600000,
     checkIntervalMs: 600000, home: directory, cliPath: provider, model: '', ...options.settings?.[provider]
   }]));
   const profiles = {
-    profiles: () => ['a', 'b', 'c'].map(id => ({ id, name: id })),
+    profiles: () => (options.ids ?? ['a', 'b', 'c']).map(id => ({ id, name: id })),
     activeProfileId: provider => active[provider],
     credential: async (provider, id) => ({ id }),
     refreshedCredential: async (...args) => refreshed.push(args),
@@ -35,15 +39,24 @@ function fixture(t, options = {}) {
     calls.push([provider, credential.id, keepAlive]);
     if (options.beforeProbe) await options.beforeProbe(provider, credential, keepAlive);
     const percents = values[credential.id];
-    return { credential: { ...credential, refreshed: true }, result: percents
-      ? { kind: 'ok', usage: usage(provider, percents, now) }
-      : { kind: 'error', provider, title: provider, message: 'Unavailable' } };
+    return { credential: { ...credential, refreshed: true },
+      keepAliveError: keepAlive ? options.keepAliveErrors?.[credential.id] : undefined,
+      result: percents
+        ? { kind: 'ok', usage: usage(provider, percents, now) }
+        : { kind: 'error', provider, title: provider, message: options.usageErrors?.[credential.id] ?? 'Unavailable' } };
   };
-  const make = () => new AccountAutomation(directory, profiles, p => settings[p], async () => {}, m => messages.push(m), probe, () => now);
+  const make = () => {
+    const service = new AccountAutomation(directory, profiles, p => settings[p], async () => {}, m => messages.push(m), probe, () => now);
+    service.onAccountProblem = (...args) => problems.push(args);
+    return service;
+  };
   const service = make();
   t.after(() => service.dispose());
-  return { service, make, active, values, calls, switches, refreshed, settings, messages,
-    observe: (provider, percents) => service.observe(provider, active[provider], usage(provider, percents, now)),
+  return { service, make, active, values, calls, switches, refreshed, settings, messages, problems,
+    observe: (provider, percents, id = active[provider]) => service.observe(provider, id, usage(provider, percents, now)),
+    /** Cache every account's configured reading, as a keep-alive sweep would. */
+    observeAll: provider => Object.entries(values).forEach(([id, percents]) =>
+      percents && service.observe(provider, id, usage(provider, percents, now))),
     advance: ms => { now += ms; } };
 }
 
@@ -89,7 +102,41 @@ test('a weekly Codex limit skips exhausted next account and activates the next e
   f.observe('codex', [10, 99.5]);
   await f.service.tick();
   assert.deepEqual(f.switches, [['codex', 'c', true]]);
-  assert.deepEqual(f.calls, [['codex', 'a', false], ['codex', 'b', false], ['codex', 'c', false]]);
+  // The eligible candidate gets a real keep-alive before anything is switched.
+  assert.deepEqual(f.calls, [['codex', 'a', false], ['codex', 'b', false], ['codex', 'c', false], ['codex', 'c', true]]);
+});
+
+test('a candidate whose pre-switch keep-alive fails is reported and skipped for the next healthy account', async t => {
+  const f = fixture(t, { values: { a: [99.5, 10] }, keepAliveErrors: { b: 'Keep-alive CLI exited with code 1: Your workspace is out of credits.' },
+    settings: { codex: { autoRotate: true } } });
+  f.observe('codex', [99.5, 10]);
+  await f.service.tick();
+  assert.deepEqual(f.switches, [['codex', 'c', true]]);
+  assert.deepEqual(f.problems, [['codex', 'b', 'Keep-alive CLI exited with code 1: Your workspace is out of credits.', false]]);
+});
+
+test('a revoked candidate is never switched to and is announced once per credential', async t => {
+  const revoked = 'Keep-alive CLI exited with code 1: Your access token could not be refreshed because your refresh token was revoked. Please log out and sign in again.';
+  const f = fixture(t, { values: { a: [99.5, 10], c: [99.5, 10] }, keepAliveErrors: { b: revoked }, settings: { codex: { autoRotate: true } } });
+  f.observe('codex', [99.5, 10]);
+  await f.service.tick();
+  f.advance(600001);
+  await f.service.tick();
+  assert.deepEqual(f.switches, []);
+  assert.deepEqual(f.problems, [['codex', 'b', revoked, true]]);
+});
+
+test('a revoked login found by a usage check is announced, and a new sign-in clears it', async t => {
+  const revoked = 'Codex CLI: account/rateLimits/read failed: 401 Unauthorized; {"code": "token_revoked"}';
+  const f = fixture(t, { values: { b: undefined }, usageErrors: { b: revoked } });
+  await f.service.sendKeepAliveNow('codex', 'b');
+  await f.service.sendKeepAliveNow('codex', 'b');
+  assert.deepEqual(f.problems, [['codex', 'b', revoked, true]]);
+  f.values.b = [5, 5];
+  const result = await f.service.credentialReplaced('codex', 'b');
+  assert.equal(result.usage.windows[0].usedPercent, 5);
+  assert.deepEqual(f.calls.at(-1), ['codex', 'b', false]);
+  assert.doesNotMatch(f.service.usageDetail('codex', 'b'), /token_revoked/);
 });
 
 test('all exhausted accounts leave the active login unchanged and throttle repeated sweeps', async t => {
@@ -196,4 +243,111 @@ test('per-service rotation threshold controls triggering and candidate eligibili
   f.observe('codex', [80, 10]);
   await f.service.tick();
   assert.deepEqual(f.switches, [['codex', 'b', true]]);
+});
+
+test('5-hour, weekly and Fable thresholds apply to their own windows and fall back in order', () => {
+  const now = Date.now();
+  const limits = { thresholdPercent: 99.5, fiveHourThresholdPercent: 80, weeklyThresholdPercent: 60 };
+  assert.equal(atLimit(usage('claude', [['5h', 85, 1], ['7d', 10, 24]], now), limits), true);
+  assert.equal(atLimit(usage('claude', [['5h', 50, 1], ['7d', 59, 24]], now), limits), false);
+  assert.equal(atLimit(usage('claude', [['5h', 50, 1], ['7d', 61, 24]], now), limits), true);
+  // "7d Fable" uses the weekly threshold until its own is set.
+  assert.equal(atLimit(usage('claude', [['5h', 1, 1], ['7d', 1, 24], ['7d Fable', 65, 24]], now), limits), true);
+  assert.equal(atLimit(usage('claude', [['5h', 1, 1], ['7d', 1, 24], ['7d Fable', 65, 24]], now),
+    { ...limits, modelWeeklyThresholdPercent: 90 }), false);
+  assert.equal(atLimit(usage('claude', [['5h', 99, 1]], now), { thresholdPercent: 99.5 }), false);
+});
+
+test('the Fable window counts only for the configured model in auto mode', () => {
+  const now = Date.now();
+  const fableOut = usage('claude', [['5h', 1, 1], ['7d', 50, 24], ['7d Fable', 100, 24]], now);
+  const limits = countsWindow => ({ thresholdPercent: 99.5, countsWindow });
+  assert.equal(eligibleAccount(fableOut, now, limits(modelWindowFilter('auto', 'claude-fable-5-1'))), false);
+  assert.equal(eligibleAccount(fableOut, now, limits(modelWindowFilter('auto', 'opus'))), true);
+  assert.equal(eligibleAccount(fableOut, now, limits(modelWindowFilter('auto', undefined))), false);
+  assert.equal(eligibleAccount(fableOut, now, limits(modelWindowFilter('never', 'fable'))), true);
+  assert.equal(eligibleAccount(fableOut, now, limits(modelWindowFilter('always', 'opus'))), false);
+});
+
+// The five accounts of a real afternoon: c is active.
+const afternoon = {
+  a: [['5h', 0, 3], ['7d', 71, 120], ['7d Fable', 71, 120]],
+  b: [['5h', 100, 1], ['7d', 83, 48], ['7d Fable', 79, 48]],
+  c: [['5h', 2, 0.1], ['7d', 91, 48], ['7d Fable', 89, 48]],
+  d: [['5h', 100, 4], ['7d', 39, 144], ['7d Fable', 33, 144]],
+  e: [['5h', 53, 4], ['7d', 9, 96], ['7d Fable', 17, 96]]
+};
+
+test('soonest reset skips 5h-locked accounts and defers one spending its week too early', async t => {
+  const f = fixture(t, { ids: ['a', 'b', 'c', 'd', 'e'], values: { ...afternoon, c: [['5h', 100, 0.1], ['7d', 91, 48], ['7d Fable', 89, 48]] },
+    settings: { claude: { autoRotate: true, strategy: 'soonestReset' } } });
+  f.active.claude = 'c';
+  f.observeAll('claude');
+  await f.service.tick();
+  // e resets in 4 days and is behind pace; a resets later and is 42 points ahead with most of its week left.
+  assert.deepEqual(f.switches, [['claude', 'e', true]]);
+  assert.deepEqual(f.calls, [['claude', 'c', false], ['claude', 'e', false], ['claude', 'e', true]]);
+});
+
+test('proactive soonest reset keeps the account resetting first without spending any calls', async t => {
+  const f = fixture(t, { ids: ['a', 'b', 'c', 'd', 'e'], values: afternoon,
+    settings: { claude: { autoRotate: true, strategy: 'soonestReset', trigger: 'proactive', minStayMs: 0 } } });
+  f.active.claude = 'c';
+  f.observeAll('claude');
+  await f.service.tick();
+  assert.deepEqual(f.switches, []);
+  assert.deepEqual(f.calls, []);
+});
+
+test('proactive even pace leaves an account ahead of pace, but only after the minimum stay', async t => {
+  const f = fixture(t, { ids: ['a', 'b', 'c', 'd', 'e'], values: afternoon,
+    settings: { claude: { autoRotate: true, strategy: 'evenPace', trigger: 'proactive', minStayMs: 30 * 60000 } } });
+  f.active.claude = 'c';
+  f.observeAll('claude');
+  await f.service.tick();
+  assert.deepEqual(f.switches, []);
+  f.advance(31 * 60000);
+  f.observeAll('claude');
+  await f.service.tick();
+  assert.deepEqual(f.switches, [['claude', 'e', true]]);
+  // Just switched: the stay starts again.
+  f.advance(10 * 60000);
+  f.values.a = [['5h', 0, 3], ['7d', 0, 167], ['7d Fable', 0, 167]];
+  f.observeAll('claude');
+  await f.service.tick();
+  assert.deepEqual(f.switches, [['claude', 'e', true]]);
+});
+
+test('proactive rotation does not switch when the fresh reading no longer shows a better account', async t => {
+  const f = fixture(t, { ids: ['a', 'b', 'c', 'd', 'e'], values: afternoon,
+    settings: { claude: { autoRotate: true, strategy: 'evenPace', trigger: 'proactive', minStayMs: 0 } } });
+  f.active.claude = 'c';
+  f.observeAll('claude');
+  f.values.e = [['5h', 53, 4], ['7d', 95, 96], ['7d Fable', 95, 96]];
+  await f.service.tick();
+  assert.deepEqual(f.switches, []);
+  assert.deepEqual(f.calls.map(call => call[1]), ['c', 'e']);
+});
+
+test('least waste prefers the most allowance per hour over the soonest reset', async t => {
+  const values = { a: [['5h', 99.5, 1], ['7d', 50, 72]], b: [['5h', 0, 5], ['7d', 90, 24]], c: [['5h', 0, 5], ['7d', 20, 100]] };
+  for (const [strategy, expected] of [['soonestReset', 'b'], ['leastWaste', 'c'], ['sequential', 'b']]) {
+    const f = fixture(t, { values, settings: { codex: { autoRotate: true, strategy } } });
+    f.observeAll('codex');
+    await f.service.tick();
+    assert.deepEqual(f.switches, [['codex', expected, true]], strategy);
+  }
+});
+
+test('a cached window whose reset has passed ranks as fresh', () => {
+  const now = Date.now();
+  const limits = { thresholdPercent: 99.5 };
+  const stale = usage('claude', [['5h', 100, -1], ['7d', 95, -2]], now);
+  // Rolled forward: the 7d window restarted 2 hours ago.
+  const fresh = usage('claude', [['5h', 0, 4], ['7d', 0, 166]], now);
+  for (const strategy of ['soonestReset', 'evenPace', 'leastWaste']) {
+    assert.ok(Math.abs(rotationScore(strategy, stale, now, limits) - rotationScore(strategy, fresh, now, limits)) < 1e-6, strategy);
+  }
+  assert.equal(rotationScore('sequential', fresh, now, limits), undefined);
+  assert.equal(rotationScore('evenPace', usage('claude', [['5h', 10, 4]], now), now, limits), undefined);
 });

@@ -1,8 +1,36 @@
 # Changelog
 
-## 0.0.21 (unreleased)
+## 0.0.23 (2026-09-23)
 
-- 
+- Smarter Claude rotation. `aiUsage.claude.autoRotate.strategy` picks the account to switch to from each account's
+  stored readings: `soonestReset` (the new default) spends the account whose weekly window resets soonest first,
+  but moves one that is spending its week too early to the back; `evenPace` keeps every account close to an even
+  weekly spend; `leastWaste` prefers the most allowance left per hour until reset; `sequential` is the old saved
+  order. `aiUsage.claude.autoRotate.trigger` chooses between switching only at the limit (default) and also
+  switching proactively to a clearly better account, at most once per `autoRotate.minStayMinutes` (30).
+- Separate rotation thresholds for the 5h window, the weekly window and, for Claude, the Fable weekly window
+  (`autoRotate.fiveHourThresholdPercent`, `.weeklyThresholdPercent`, `.modelWeeklyThresholdPercent`). Empty keeps
+  using `autoRotate.thresholdPercent`. `aiUsage.claude.autoRotate.modelLimits` decides whether `7d Fable` counts at
+  all: `auto` counts it when Claude Code's configured model is Fable or no model is set.
+
+## 0.0.22 (2026-09-23)
+
+- Rename the extension to **AI subscription management and usage**, which is what it has grown into: the account
+  switching, keep-alive and rotation are no longer a sideline to the usage figures. Only the Marketplace name and
+  description change. The extension id, every `aiUsage.*` setting and command, and the short name used in
+  notifications and the status bar all stay as they are, so updates keep flowing and no configuration needs editing.
+- Tell you when a saved Claude or Codex login has been revoked. An account check that finds a revoked login now
+  names the profile and its email once, and offers **Sign in again**: the vendor's own login (`codex login`,
+  `claude auth login`) runs in a terminal inside the keep-alive home, never the native one, and the new login is
+  saved to that profile (and made the native login too when it is the active profile). Until now a revoked login
+  only showed up in the profile's usage detail, so rotation could quietly find nothing to switch to.
+- Automatic rotation sends a keep-alive to the account it is about to switch to and only switches when that call
+  succeeds. A usage reading alone does not prove a login still works. A candidate whose keep-alive fails is
+  reported and skipped in favour of the next eligible account.
+- New **Codex config** settings section that writes selected keys of Codex's `config.toml` from VS Code settings:
+  `aiUsage.codexConfig.agents.maxConcurrentThreadsPerSession` (`[agents] max_concurrent_threads_per_session`),
+  `.maxDepth` and `.jobMaxRuntimeSeconds`. Empty by default, which leaves the file alone; a set value is written on
+  startup and on every change, touching only that one line, and new Codex chats pick it up.
 
 ## 0.0.20 (2026-09-22)
 

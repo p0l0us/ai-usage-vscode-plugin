@@ -1,12 +1,12 @@
-# AI Usage for VS Code
+# AI subscription management and usage for VS Code
 
 The extension also bundles an experimental [CLI BYOK bridge](bridge/README.md) that offers your existing
 Codex/Claude subscription logins as models in the Copilot model picker. Its settings are tagged **Experimental**
 in the Settings editor, and the bridge can also run standalone as a local model endpoint.
 
-See how much of your AI coding budget is left without leaving the editor. **AI Usage** shows live rate-limit and
-quota usage for **Claude Code**, **Codex** and **GitHub Copilot** in the status bar and, in the Agents window, behind
-a chip beneath the chat input.
+Run several AI subscriptions without losing track of them. **AI Usage** switches Claude Code and Codex between saved
+accounts without signing in again, and shows live rate-limit and quota usage for **Claude Code**, **Codex** and
+**GitHub Copilot** in the status bar and, in the Agents window, behind a chip beneath the chat input.
 
 - **Status bar**: `17% (3h) 25% (3d)` for Claude, where parentheses show the time until reset—not the fixed
   quota-window length. The item turns yellow at 80% and red at 95%.
@@ -88,11 +88,14 @@ the menu shows what each one is set to.
   reads account limits through its CLI. Its model is configurable; an empty model setting uses the CLI default.
 - Both collect usage for inactive accounts. The authentication profile list shows each account's last usage,
   check time and errors. Model calls consume subscription usage and run only while this extension host is running.
-- Automatic rotation starts when **any** window reaches the service's configured threshold (default **99.5%**),
-  including either Codex period. It checks the current account and candidates again, switches to the next account
-  below the threshold in **every** reported window,
+- Automatic rotation starts when **any** window reaches the service's configured threshold (default **99.5%**;
+  the 5h, weekly and Claude's Fable weekly window can each have their own), including either Codex period. It
+  checks the current account and candidates again, switches to an account below the threshold in **every** counted
+  window, chosen for Claude by `aiUsage.claude.autoRotate.strategy` (soonest weekly reset first by default, or even
+  pace, least waste, or saved order) and for Codex in saved order,
   and keeps the current login if all accounts are exhausted or unavailable. A failed sweep is throttled until
-  the provider's next check interval. Rotation also works without keep-alives enabled.
+  the provider's next check interval. Rotation also works without keep-alives enabled. Claude can also switch
+  proactively to a clearly better account (`aiUsage.claude.autoRotate.trigger`).
 
 Models, keep-alive periods, rotation thresholds, CLI paths, dedicated homes and usage sources are configurable
 under `aiUsage.claude.*` and `aiUsage.codex.*`; see

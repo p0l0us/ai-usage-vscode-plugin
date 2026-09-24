@@ -205,6 +205,26 @@ Status-bar items turn yellow when any displayed window reaches 80% usage and red
 
 ![Claude high usage highlighted yellow beside neutral Codex usage](../images/screenshots/status-bar-high-usage.png)
 
+## Codex config
+
+The **Codex config** settings section sets a few keys of Codex's own `config.toml` in the Codex home
+(`$CODEX_HOME`, default `~/.codex`), so they can be changed from VS Code settings (and synced with them) instead of
+by editing the file:
+
+| Setting | `config.toml` key |
+|---|---|
+| `aiUsage.codexConfig.agents.maxConcurrentThreadsPerSession` | `[agents] max_concurrent_threads_per_session` |
+| `aiUsage.codexConfig.agents.maxDepth` | `[agents] max_depth` |
+| `aiUsage.codexConfig.agents.jobMaxRuntimeSeconds` | `[agents] job_max_runtime_seconds` |
+
+Every setting defaults to empty (`null`), which leaves the file alone. A set value is written when AI Usage starts
+and whenever the setting changes; Codex reads `config.toml` when a chat starts, so chats started afterwards use it.
+Only that one `key = value` line changes (a trailing comment on it is kept, the rest of the file is untouched); a
+missing `[agents]` table is added, and a root-level `agents.<key> = …` line is updated in place. Clearing a setting
+later does not remove the value from the file, and a manual edit of the key is overwritten the next time AI Usage
+starts while the setting is set. Invalid values and an `agents = { … }` inline table are skipped and noted in the
+AI Usage log.
+
 
 ## Account automation
 
@@ -218,6 +238,13 @@ turned on in Settings, per provider, and default to off. The menu shows their cu
 | `autoRotate.enabled` | `false` | `false` | Switch accounts automatically once the active one reaches the threshold. |
 | `keepAlive.periodHours` | `2` | `6` | Per-account keep-alive period, minimum 0.25 hours. |
 | `autoRotate.thresholdPercent` | `99.5` | `99.5` | Rotate when any reported usage window reaches this percentage. |
+| `autoRotate.fiveHourThresholdPercent` | empty | empty | Threshold for the 5h window; empty uses `thresholdPercent`. |
+| `autoRotate.weeklyThresholdPercent` | empty | empty | Threshold for the all-models 7d window; empty uses `thresholdPercent`. |
+| `autoRotate.modelWeeklyThresholdPercent` | empty | — | Threshold for model-specific weekly windows such as `7d Fable`; empty uses the weekly threshold. |
+| `autoRotate.modelLimits` | `auto` | — | Whether `7d Fable` counts: `auto` (when Claude Code's `model` is Fable or unset), `always`, `never`. |
+| `autoRotate.strategy` | `soonestReset` | — | How the next account is chosen: `soonestReset`, `evenPace`, `leastWaste` or `sequential`. |
+| `autoRotate.trigger` | `limit` | — | `limit` switches only at a threshold; `proactive` also switches to a clearly better account. |
+| `autoRotate.minStayMinutes` | `30` | — | With `proactive`, how long a newly active account is kept before another proactive switch. |
 | `keepAlive.home` | `~/.claude-tmp` | `~/.codex-tmp` | Dedicated CLI home; must be separate from the native home. |
 | `keepAlive.model` | `haiku` | `gpt-5.6-luna` | Select a subscription model for the small request. |
 | `cliPath` | `claude` | `codex` | CLI command or executable path. |
@@ -243,9 +270,26 @@ once, without replaying missed intervals. Each provider checks its accounts sequ
 lock across windows. Failed keep-alive attempts wait the configured interval; transient usage errors honor the
 provider check interval and any longer `Retry-After`.
 
-Rotation rechecks the active account and visits subsequent saved profiles in order, wrapping once. It requires a
-successful current reading and a candidate with every required window below the configured threshold; both Codex
-primary and secondary limits are considered. Missing, failed, incomplete or expired candidate readings never
+Rotation rechecks the active account and visits candidate profiles in the order the strategy ranks them. Codex,
+and Claude's `sequential` strategy, visit subsequent saved profiles in order, wrapping once. It requires a
+successful current reading and a candidate with every counted window below its threshold; both Codex
+primary and secondary limits are considered.
+
+Claude strategies rank candidates from the readings already stored for each account, so ranking costs no endpoint
+calls; keep-alives keep those readings current. A window whose reset has passed since its reading counts as fresh.
+Candidates that look usable come first, then those that look exhausted, then accounts never read. The ranking uses
+each account's weekly windows (and `7d Fable` when it counts), with the 5h window acting as a gate:
+
+- `soonestReset`: the weekly window that resets soonest first, so allowance about to expire is spent first. An
+  account more than 10 points ahead of an even spend, with more than half its week left, goes to the back.
+- `evenPace`: the account furthest below a straight line from 0% at the start of its week to 100% at its reset.
+- `leastWaste`: the highest weekly allowance left per hour until reset, with a 10% bonus when unused 5h allowance
+  resets within the hour.
+
+With `autoRotate.trigger` set to `proactive`, a working account is also left when a candidate scores clearly better
+(3 hours earlier reset, 5 points further behind pace, or 0.1 %/hour more allowance) on its cached reading and again
+on a fresh one, but not within `autoRotate.minStayMinutes` of the account becoming active, automatically or by
+hand. Endpoint calls are only made once the cached readings show such a candidate. Missing, failed, incomplete or expired candidate readings never
 authorize a switch. If
 all candidates are exhausted, no native credential is changed. Another sweep may run after
 `aiUsage.<provider>.checkIntervalMinutes`, allowing accounts to become eligible after their limits reset.

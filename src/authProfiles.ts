@@ -137,6 +137,36 @@ export class AuthProfileManager {
     return this.state()[provider].profiles;
   }
 
+  profile(provider: AuthProvider, id: string): ProfileMetadata | undefined {
+    return this.profiles(provider).find((profile) => profile.id === id);
+  }
+
+  /** Which login a credential belongs to; empty when the vendor cannot be asked. */
+  async identity(provider: AuthProvider, credential: StoredCredential): Promise<CredentialIdentity> {
+    try { return await this.identityOf(provider, credential); } catch { return {}; }
+  }
+
+  /**
+   * Stores a fresh sign-in for an existing profile, for example after its tokens were revoked. When the profile is
+   * active its native login is dead too, so the new one replaces it there as well. Returns whether it was active.
+   */
+  async replaceCredential(provider: AuthProvider, id: string, credential: StoredCredential): Promise<boolean> {
+    const profile = this.profile(provider, id);
+    if (!profile) { throw new Error('The profile no longer exists.'); }
+    const active = this.activeProfileId(provider) === id;
+    if (active) { writeNativeCredential(provider, credential); }
+    await this.storeSecret(provider, id, credential);
+    const state = this.state();
+    const target = state[provider].profiles.find((candidate) => candidate.id === id);
+    if (target) {
+      target.updatedAt = new Date().toISOString();
+      await this.updateState(state);
+    }
+    await this.recordIdentity(provider, id, credential);
+    this.log(`${provider}: replaced the login of profile "${profile.name}" with a new sign-in${active ? ' (active)' : ''}`);
+    return active;
+  }
+
   async credential(provider: AuthProvider, id: string): Promise<StoredCredential | undefined> {
     if (!this.profiles(provider).some((profile) => profile.id === id)) { return undefined; }
     if (this.activeProfileId(provider) === id) { await this.syncActiveProfile(provider); }
@@ -383,7 +413,12 @@ export class AuthProfileManager {
     }
     const keepAlive = this.automationEnabled(provider, 'keepAlive');
     const autoRotate = this.automationEnabled(provider, 'autoRotate');
-    const threshold = vscode.workspace.getConfiguration().get<number>(`aiUsage.${provider}.autoRotate.thresholdPercent`, 99.5);
+    const config = vscode.workspace.getConfiguration();
+    const threshold = config.get<number>(`aiUsage.${provider}.autoRotate.thresholdPercent`, 99.5);
+    // Only Claude contributes a strategy and trigger; Codex always rotates in saved order at its limit.
+    const strategy = provider === 'claude'
+      ? `${config.get<string>('aiUsage.claude.autoRotate.strategy', 'soonestReset')}, ${config.get<string>('aiUsage.claude.autoRotate.trigger', 'limit')}`
+      : `at ${threshold}%`;
     items.push({ label: 'Account features', kind: vscode.QuickPickItemKind.Separator });
     if (providerState.profiles.length) {
       items.push({
@@ -394,8 +429,8 @@ export class AuthProfileManager {
     }
     items.push({
       label: '$(gear) Keep-alive and rotation settings…',
-      description: `Keep-alive ${keepAlive ? 'on' : 'off'} · rotation ${autoRotate ? `on at ${threshold}%` : 'off'}`,
-      detail: `Opens Settings: turn periodic checks of every saved ${TITLES[provider]} account and automatic rotation on or off, and set the period, model, threshold and dedicated home.`,
+      description: `Keep-alive ${keepAlive ? 'on' : 'off'} · rotation ${autoRotate ? `on (${strategy})` : 'off'}`,
+      detail: `Opens Settings: turn periodic checks of every saved ${TITLES[provider]} account and automatic rotation on or off, and set the period, model, rotation strategy and thresholds, and dedicated home.`,
       action: 'settings'
     });
     return items;
