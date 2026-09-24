@@ -2,7 +2,7 @@
   "name": "ai-usage-vscode-plugin",
   "displayName": "AI subscription management and usage",
   "description": "Manage your Claude Code, Codex and GitHub Copilot subscriptions and see what is left of them: switch between saved accounts without signing in again, keep them warm, rotate on exhaustion, and read live 5h/7d windows, premium requests and org billing in the status bar and chat input. Open source, contributions welcome.",
-  "version": "0.0.25",
+  "version": "0.0.26",
   "publisher": "p0l0us",
   "license": "GPL-3.0-only",
   "repository": {
@@ -7200,8 +7200,37 @@
         }
       },
       {
-        "title": "Codex",
+        "title": "Claude Code config",
         "order": 3,
+        "properties": {
+          "aiUsage.claudeConfig.env.maxConcurrentSubagents": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "default": null,
+            "minimum": 1,
+            "scope": "machine",
+            "markdownDescription": "Maximum number of subagents (Agent tool) Claude Code runs at the same time; Claude Code defaults to 20. Written as `env.CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS` in Claude Code user settings (`settings.json` in `$CLAUDE_CONFIG_DIR`, default `~/.claude`) when AI Usage starts and whenever this setting changes. New Claude Code sessions use it; running sessions keep the old value until restarted. Needs Claude Code 2.1.217 or later. A higher cap does not raise your account usage limit. Leave empty (`null`) to keep whatever `settings.json` already says; clearing the setting later does not remove the value from the file.",
+            "order": 1
+          },
+          "aiUsage.claudeConfig.env.workflowMaxConcurrentAgents": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "default": null,
+            "minimum": 1,
+            "maximum": 256,
+            "scope": "machine",
+            "markdownDescription": "Maximum number of workflow agents Claude Code runs at the same time (at most 256); Claude Code defaults to 16, or fewer on machines with few CPUs. Written as `env.CLAUDE_CODE_WORKFLOW_MAX_CONCURRENT_AGENTS` in Claude Code user settings. Needs Claude Code 2.1.269 or later. Leave empty (`null`) to keep whatever `settings.json` already says; clearing the setting later does not remove the value from the file.",
+            "order": 2
+          }
+        }
+      },
+      {
+        "title": "Codex",
+        "order": 4,
         "properties": {
           "aiUsage.codex.enabled": {
             "type": "boolean",
@@ -7339,7 +7368,7 @@
       },
       {
         "title": "Codex config",
-        "order": 4,
+        "order": 5,
         "properties": {
           "aiUsage.codexConfig.agents.maxConcurrentThreadsPerSession": {
             "type": [
@@ -7378,7 +7407,7 @@
       },
       {
         "title": "GitHub Copilot",
-        "order": 5,
+        "order": 6,
         "properties": {
           "aiUsage.copilot.enabled": {
             "type": "boolean",
@@ -7415,7 +7444,7 @@
       },
       {
         "title": "Copilot CLI bridge (experimental)",
-        "order": 6,
+        "order": 7,
         "properties": {
           "aiUsage.bridge.modelsEnabled": {
             "type": "boolean",
@@ -7643,7 +7672,7 @@
       },
       {
         "title": "Advanced",
-        "order": 7,
+        "order": 8,
         "properties": {
           "aiUsage.chatChips.debug": {
             "type": "boolean",

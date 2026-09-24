@@ -15,6 +15,8 @@ import { codexConfigPath } from './codexConfig';
 import { findStaleCodexProcesses } from './codexProcesses';
 import { CodexProxyRuntime } from './codexProxyRuntime';
 import { applyCodexSettingsToFile, readCodexSettingAssignments } from './codexSettings';
+import { applyClaudeSettingsToFile, readClaudeSettingAssignments } from './claudeSettings';
+import { openAiUsageSettings } from './settingsLink';
 import {
   GitHubAccount,
   LiveResult,
@@ -254,6 +256,21 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   };
   syncCodexSettings();
+  // Writes the aiUsage.claudeConfig.* values that are set into the env of Claude Code's user settings.json.
+  const syncClaudeSettings = () => {
+    const file = path.join(claudeConfigDir(), 'settings.json');
+    const configuration = vscode.workspace.getConfiguration();
+    const assignments = readClaudeSettingAssignments((setting) => configuration.get(setting),
+      (setting, value) => log(`claude config: ignoring ${setting.setting} = ${JSON.stringify(value)}; expected an integer from ${setting.minimum}${setting.maximum === undefined ? '' : ` to ${setting.maximum}`}`));
+    try {
+      if (applyClaudeSettingsToFile(file, assignments)) {
+        log(`claude config: updated ${file} (${assignments.map((a) => `env.${a.env} = ${a.value}`).join(', ')}); new Claude Code sessions use it`);
+      }
+    } catch (error) {
+      log(`claude config: could not update ${file}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  };
+  syncClaudeSettings();
   const status = vscode.window.createStatusBarItem(STATUS_ALIGNMENT, STATUS_PRIORITY.manual);
   status.command = 'aiUsage.showDetails';
   status.name = 'AI Usage';
@@ -833,6 +850,9 @@ export function activate(context: vscode.ExtensionContext): void {
     if (event.affectsConfiguration('aiUsage.codexConfig')) {
       syncCodexSettings();
     }
+    if (event.affectsConfiguration('aiUsage.claudeConfig')) {
+      syncClaudeSettings();
+    }
     if (
       event.affectsConfiguration('aiUsage.claude') ||
       event.affectsConfiguration('aiUsage.codex') ||
@@ -1389,7 +1409,9 @@ async function showDetailsPanel(providers: LiveProvider[], refreshAll: () => Pro
     }
     items.push({ label: '$(refresh) Refresh now', action: 'refresh' });
     items.push({ label: '$(output) Open log', description: 'Output → AI Usage', action: 'log' });
-    items.push({ label: '$(gear) Settings', description: 'aiUsage.*', action: 'settings' });
+    items.push(focused
+      ? { label: `$(gear) ${titleFor(focused)} settings`, description: `aiUsage.${focused.id}.*`, action: 'settings', providerId: focused.id }
+      : { label: '$(gear) Settings', description: 'aiUsage.*', action: 'settings' });
     return items;
   };
 
@@ -1437,7 +1459,7 @@ async function showDetailsPanel(providers: LiveProvider[], refreshAll: () => Pro
     } else if (picked.action === 'log') {
       output?.show(true);
     } else {
-      await vscode.commands.executeCommand('workbench.action.openSettings', '@ext:p0l0us.ai-usage-vscode-plugin');
+      await openAiUsageSettings(picked.providerId && `aiUsage.${picked.providerId}`);
     }
   });
   picker.onDidHide(() => picker.dispose());

@@ -208,6 +208,24 @@ Status-bar items turn yellow when any displayed window reaches 80% usage and red
 
 ![Claude high usage highlighted yellow beside neutral Codex usage](../images/screenshots/status-bar-high-usage.png)
 
+## Claude Code config
+
+The **Claude Code config** settings section sets how many agents Claude Code runs at once, through environment
+variables in the `env` object of Claude Code's user settings (`settings.json` in `$CLAUDE_CONFIG_DIR`, default
+`~/.claude`):
+
+| Setting | `settings.json` entry | Claude Code default |
+|---|---|---|
+| `aiUsage.claudeConfig.env.maxConcurrentSubagents` | `env.CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS` (Claude Code 2.1.217+) | 20 |
+| `aiUsage.claudeConfig.env.workflowMaxConcurrentAgents` | `env.CLAUDE_CODE_WORKFLOW_MAX_CONCURRENT_AGENTS` (Claude Code 2.1.269+, at most 256) | 16, fewer on machines with few CPUs |
+
+Every setting defaults to empty (`null`), which leaves the file alone. A set value is written as a string when
+AI Usage starts and whenever the setting changes. Claude Code reads it when a session starts, so running sessions
+keep the old value until they are restarted. Other keys and `env` entries are kept, and the file is written with
+its own indentation. A file that is not valid JSON is not touched, and the problem is noted in the AI Usage log.
+Clearing a setting later does not remove the value from the file. The project `.claude/settings.json` is never
+changed. A higher cap does not raise the account's usage limit, so more parallel agents reach it sooner.
+
 ## Codex config
 
 The **Codex config** settings section sets a few keys of Codex's own `config.toml` in the Codex home

@@ -10,6 +10,7 @@ import {
   writeNativeCredential
 } from './authFiles';
 import { CredentialIdentity, resolveCredentialIdentity } from './accountIdentity';
+import { openAiUsageSettings } from './settingsLink';
 
 const STATE_KEY = 'aiUsage.authProfiles.v1';
 const AUTOMATION_STATE_KEY = 'aiUsage.accountAutomation.v1';
@@ -57,7 +58,7 @@ function automationKey(provider: AuthProvider, feature: AccountAutomationFeature
 
 type ProfileItem = vscode.QuickPickItem & {
   profile?: ProfileMetadata;
-  action?: 'save' | 'import' | 'rename' | 'delete' | 'keepAliveNow' | 'settings' | 'back';
+  action?: 'save' | 'import' | 'rename' | 'delete' | 'keepAliveNow' | 'settings' | 'serviceSettings' | 'back';
 };
 
 /**
@@ -328,8 +329,8 @@ export class AuthProfileManager {
         if (item.action === 'keepAliveNow') {
           const profile = await this.pickSaved(provider, `Send a ${TITLES[provider]} keep-alive now`);
           if (profile) { await hooks?.sendKeepAlive?.(provider, profile); }
-        } else if (item.action === 'settings') {
-          await vscode.commands.executeCommand('workbench.action.openSettings', `@ext:p0l0us.ai-usage-vscode-plugin aiUsage.${provider}`);
+        } else if (item.action === 'settings' || item.action === 'serviceSettings') {
+          await openAiUsageSettings(`aiUsage.${provider}`);
           return;
         } else if (item.action === 'save') {
           // Saving copies the login that is already active into a profile; no process starts using a new account.
@@ -450,6 +451,12 @@ export class AuthProfileManager {
       description: `Keep-alive ${keepAlive ? 'on' : 'off'} · rotation ${autoRotate ? `on (${strategy})` : 'off'}`,
       detail: `Opens Settings: turn periodic checks of every saved ${TITLES[provider]} account and automatic rotation on or off, and set the period, model, rotation strategy and thresholds, and dedicated home.`,
       action: 'settings'
+    });
+    items.push({
+      label: `$(settings-gear) ${TITLES[provider]} settings…`,
+      description: `aiUsage.${provider}.*`,
+      detail: `Opens Settings on every ${TITLES[provider]} setting, including the ${TITLES[provider]} config section.`,
+      action: 'serviceSettings'
     });
     if (withBack) {
       // Last, so the active profile stays the first, preselected item.

@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.0.26 (2026-09-24)
+
+- New **Claude Code config** settings section that sets how many agents Claude Code runs at once:
+  `aiUsage.claudeConfig.env.maxConcurrentSubagents` (`CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS`, default 20) and
+  `.workflowMaxConcurrentAgents` (`CLAUDE_CODE_WORKFLOW_MAX_CONCURRENT_AGENTS`, default 16, up to 256). A set value
+  is written to `env` in Claude Code's user `settings.json` on startup and on every change. Empty by default, which
+  leaves the file alone. New Claude Code sessions pick it up.
+- Each service menu has its own settings item. The Claude and Codex Accounts menus have **Claude settings…** /
+  **Codex settings…**, and the details panel for one service (Copilot's status bar item, or a chat chip) has
+  **Copilot settings** (or Claude, Codex). Each opens Settings filtered to that service's settings, including its config section.
+- The **Settings** item of the AI Usage menu of all services always opens AI Usage's settings in the Settings editor.
+  With `workbench.settings.editor` set to `json`, it used to open the raw `settings.json` instead.
+
 ## 0.0.25 (2026-09-24)
 
 - Clicking the Claude or Codex status bar item opens that service's Accounts menu, with its profiles and their
