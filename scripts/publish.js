@@ -4,12 +4,15 @@
 //   npm run publish -- --pre-release
 //   npm run publish -- --ovsx       # also publish to Open VSX (needs OVSX_PAT)
 //   npm run publish -- --yes        # non-interactive: auto-bump patch if the version is taken
-//   npm run publish -- --dry-run    # do everything except the publish step
+//   npm run publish -- --dry-run    # do everything except the publish and git steps
+//   npm run publish -- --no-push    # commit and tag locally, but do not push
 //
 // Before publishing it checks that the version in package.json is not already on the
-// Marketplace. If it is, it offers to bump (patch/minor/major) using scripts/bump-version.js,
-// then builds, packages to a temp folder and publishes. Afterwards it offers to commit, tag
-// (v<version>) and push; that step is skipped when non-interactive (--yes or no TTY).
+// Marketplace. If it is, it offers to bump (patch/minor/major) using scripts/bump-version.js.
+// CHANGELOG.md must have a filled-in section for the version. It then builds and packages to a
+// temp folder, commits the working tree as "Release v<version>" and creates the annotated tag
+// v<version> on that commit, so the tag is exactly what was packaged, and publishes. A failed
+// publish removes the tag and undoes the commit. Finally it pushes the branch and the tag.
 const { spawnSync } = require('child_process');
 const fs = require('fs');
 const os = require('os');
@@ -23,6 +26,7 @@ const preRelease = flag('--pre-release');
 const alsoOvsx = flag('--ovsx');
 const assumeYes = flag('--yes') || flag('-y');
 const dryRun = flag('--dry-run');
+const noPush = flag('--no-push');
 
 const readPkg = () => JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
 const run = (cmd, cmdArgs, opts = {}) => {
@@ -33,6 +37,11 @@ const run = (cmd, cmdArgs, opts = {}) => {
 };
 const capture = (cmd, cmdArgs) =>
   spawnSync(cmd, cmdArgs, { cwd: root, encoding: 'utf8', shell: process.platform === 'win32' });
+/** Like run, but reports failure instead of exiting, for steps that must be undone or only warned about. */
+const attempt = (cmd, cmdArgs) =>
+  spawnSync(cmd, cmdArgs, { stdio: 'inherit', cwd: root, shell: process.platform === 'win32' }).status === 0;
+const git = (...gitArgs) => capture('git', gitArgs);
+const gitOut = (...gitArgs) => (git(...gitArgs).stdout || '').trim();
 
 const compare = (a, b) => {
   const pa = a.split('.').map(Number);
@@ -78,6 +87,48 @@ function publishedVersions(id) {
   }
 }
 
+const changelogPath = path.join(root, 'CHANGELOG.md');
+
+/**
+ * The CHANGELOG section for `version`: 'missing', 'empty' (only the "- " placeholder bump-version.js writes) or
+ * 'ok'. An "(unreleased)" header of a filled-in section is dated today.
+ */
+function checkChangelog(version) {
+  if (!fs.existsSync(changelogPath)) {
+    return 'ok';
+  }
+  let changelog = fs.readFileSync(changelogPath, 'utf8');
+  const escaped = version.replace(/\./g, '\\.');
+  const header = new RegExp(`^## ${escaped}(?: \\(([^)]*)\\))?[ \\t]*$`, 'm');
+  const match = header.exec(changelog);
+  if (!match) {
+    return 'missing';
+  }
+  const rest = changelog.slice(match.index + match[0].length);
+  const next = rest.search(/^## /m);
+  const body = (next < 0 ? rest : rest.slice(0, next)).split('\n').map((line) => line.trim()).filter(Boolean);
+  if (!body.some((line) => line !== '-')) {
+    return 'empty';
+  }
+  if (match[1] === 'unreleased' && !dryRun) {
+    const today = new Date().toISOString().slice(0, 10);
+    changelog = changelog.slice(0, match.index) + `## ${version} (${today})` + changelog.slice(match.index + match[0].length);
+    fs.writeFileSync(changelogPath, changelog);
+    console.log(`Dated the CHANGELOG.md section: ${version} (${today}).`);
+  }
+  return 'ok';
+}
+
+/** Where tag `tag` points locally and on origin, as commit ids; undefined where it does not exist. */
+function tagTargets(tag) {
+  const local = git('rev-parse', '-q', '--verify', `refs/tags/${tag}^{commit}`);
+  const remote = git('ls-remote', '--tags', 'origin', `refs/tags/${tag}`, `refs/tags/${tag}^{}`);
+  const lines = (remote.stdout || '').trim().split('\n').filter(Boolean).map((line) => line.split(/\s+/));
+  // An annotated tag is listed twice; the peeled ^{} line names the commit.
+  const peeled = lines.find(([, ref]) => ref.endsWith('^{}')) ?? lines[0];
+  return { local: local.status === 0 ? local.stdout.trim() : undefined, remote: peeled?.[0] };
+}
+
 (async () => {
   let pkg = readPkg();
   const id = `${pkg.publisher}.${pkg.name}`;
@@ -111,6 +162,47 @@ function publishedVersions(id) {
     console.log(`Version is now ${pkg.version}. Remember to fill in CHANGELOG.md before committing.`);
   }
 
+  const untagged = published.filter((version) => git('rev-parse', '-q', '--verify', `refs/tags/v${version}`).status !== 0);
+  if (untagged.length) {
+    console.log(`Note: published versions without a git tag: ${untagged.join(', ')}.`);
+  }
+
+  let changelogState = checkChangelog(pkg.version);
+  while (changelogState !== 'ok') {
+    const problem = changelogState === 'missing'
+      ? `CHANGELOG.md has no "## ${pkg.version}" section.`
+      : `The CHANGELOG.md section for ${pkg.version} is still empty.`;
+    if (dryRun) {
+      console.log(`Warning: ${problem} A real publish would stop here.`);
+      break;
+    }
+    if (assumeYes || !process.stdin.isTTY) {
+      console.error(`${problem} The release commit and tag are made before publishing, so fill it in first.`);
+      process.exit(1);
+    }
+    const retry = await ask(`${problem} Fill it in, then continue?`, ['y', 'abort'], 'y');
+    if (retry === 'abort') {
+      console.log('Aborted. Nothing was published.');
+      process.exit(1);
+    }
+    changelogState = checkChangelog(pkg.version);
+  }
+
+  const tag = `v${pkg.version}`;
+  const existing = tagTargets(tag);
+  const head = gitOut('rev-parse', 'HEAD');
+  const clean = gitOut('status', '--porcelain') === '';
+  // A tag left from an earlier attempt is only reused when it already names exactly what would be released.
+  const reuseTag = (existing.local || existing.remote) && clean &&
+    (!existing.local || existing.local === head) && (!existing.remote || existing.remote === head);
+  if ((existing.local || existing.remote) && !reuseTag) {
+    console.error(`Tag ${tag} already exists (${[existing.local && `local ${existing.local.slice(0, 7)}`,
+      existing.remote && `origin ${existing.remote.slice(0, 7)}`].filter(Boolean).join(', ')}) but does not name the ` +
+      `current${clean ? '' : ', uncommitted'} tree. Delete it (git tag -d ${tag}; git push origin :refs/tags/${tag}) ` +
+      'or bump the version, then retry.');
+    process.exit(1);
+  }
+
   if (pkg.enabledApiProposals?.length) {
     console.error('package.json declares enabledApiProposals; the Marketplace rejects those. Remove them first.');
     process.exit(1);
@@ -137,7 +229,30 @@ function publishedVersions(id) {
     console.log(`Aborted. The package is at ${vsix}`);
     process.exit(1);
   }
-  run('npx', publishArgs);
+
+  // Commit and tag before publishing so the tag names exactly the tree that was packaged.
+  let committed = false;
+  let tagged = false;
+  if (!clean) {
+    run('git', ['add', '-A']);
+    run('git', ['commit', '-m', `Release ${tag}`]);
+    committed = true;
+  }
+  if (!existing.local) {
+    run('git', ['tag', '-a', tag, '-m', `Release ${tag}`]);
+    tagged = true;
+  }
+
+  if (!attempt('npx', publishArgs)) {
+    console.error('Publishing failed; undoing the release commit and tag.');
+    if (tagged) {
+      attempt('git', ['tag', '-d', tag]);
+    }
+    if (committed) {
+      attempt('git', ['reset', '--soft', 'HEAD~1']);
+    }
+    process.exit(1);
+  }
 
   if (alsoOvsx) {
     if (!process.env.OVSX_PAT) {
@@ -147,30 +262,18 @@ function publishedVersions(id) {
     }
   }
 
-  console.log(`\nPublished ${id}@${pkg.version}.`);
+  console.log(`\nPublished ${id}@${pkg.version}${committed ? `, committed as "Release ${tag}"` : ''} and tagged ${tag}.`);
 
-  const tag = `v${pkg.version}`;
-  const manual = `  git add -A && git commit -m "Release ${tag}" && git tag ${tag} && git push && git push --tags`;
-  const dirty = (capture('git', ['status', '--porcelain']).stdout || '').trim().length > 0;
-  const tagExists = capture('git', ['rev-parse', '-q', '--verify', `refs/tags/${tag}`]).status === 0;
-  if (tagExists) {
-    console.log(`Tag ${tag} already exists; not committing or pushing. If needed, run by hand:\n${manual}`);
+  const manual = `  git push origin HEAD && git push origin ${tag}`;
+  const push = noPush ? 'n' : await ask(`Push the branch and tag ${tag} to origin?`, ['y', 'n'], 'y');
+  if (push !== 'y') {
+    console.log(`Not pushed. To push later:\n${manual}`);
     return;
   }
-  console.log('Fill in CHANGELOG.md now if needed, before confirming.');
-  const commit = await ask(`Commit${dirty ? ' changes' : ''}, tag ${tag} and push?`, ['y', 'n'], 'n');
-  if (commit !== 'y') {
-    console.log(`Skipped. To do it by hand:\n${manual}`);
-    return;
+  // The release is already out: a failed push is reported, not undone.
+  const pushed = attempt('git', ['push', 'origin', 'HEAD']) && attempt('git', ['push', 'origin', tag]);
+  console.log(pushed ? `Pushed the branch and ${tag}.` : `Push failed. The release commit and tag are local; retry with:\n${manual}`);
+  if (!pushed) {
+    process.exitCode = 1;
   }
-  if (dirty) {
-    run('git', ['add', '-A']);
-    run('git', ['commit', '-m', `Release ${tag}`]);
-  } else {
-    console.log('Working tree is clean; tagging the current commit.');
-  }
-  run('git', ['tag', tag]);
-  run('git', ['push']);
-  run('git', ['push', '--tags']);
-  console.log(`Committed, tagged ${tag} and pushed.`);
 })();
