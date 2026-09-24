@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.0.27 (2026-09-24)
+
+- The status bar's account number and the Accounts menu's **Active** mark follow the native login when it is
+  switched outside this window, by another VS Code window's switch or rotation or by signing in with the vendor
+  CLI. The status bar used to keep the number of the profile this window last activated beside the other
+  account's figures. The owner is found locally, from a matching token or the account id (Claude's account file,
+  Codex's `auth.json`), with no endpoint call. A native login that belongs to no saved profile shows no number.
+
 ## 0.0.26 (2026-09-24)
 
 - New **Claude Code config** settings section that sets how many agents Claude Code runs at once:

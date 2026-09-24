@@ -330,3 +330,28 @@ test('switching to another profile is reported as an account change', async t =>
   assert.deepEqual(changes, [true]);
   assert.equal(JSON.parse(fs.readFileSync(f.file)).claudeAiOauth.accessToken, 'b');
 });
+
+test('a native login switched outside this window makes its saved profile active', async t => {
+  const f = fixture(t);
+  const state = f.globalValues.get('aiUsage.authProfiles.v1');
+  state.claude.profiles = [{ id: 'a', name: 'A', accountId: 'account-a' }, { id: 'b', name: 'B', accountId: 'account-b' }];
+  f.globalValues.set('aiUsage.authProfiles.v1', state);
+  f.secrets.set('aiUsage.authProfile.v1.claude.b', JSON.stringify({ claudeAiOauth: { accessToken: 'b', refreshToken: 'refresh-b' } }));
+  assert.equal(f.manager.activeProfileNumber('claude'), 1);
+  // The same token as the saved copy.
+  fs.writeFileSync(f.file, JSON.stringify({ claudeAiOauth: { accessToken: 'b', refreshToken: 'refresh-b' } }));
+  await f.manager.followNative('claude');
+  assert.equal(f.manager.activeProfileId('claude'), 'b');
+  assert.equal(f.manager.activeProfileNumber('claude'), 2);
+  // Rotated tokens: the account file's account UUID decides.
+  fs.writeFileSync(f.file, JSON.stringify({ claudeAiOauth: { accessToken: 'new', refreshToken: 'refresh-new' } }));
+  fs.writeFileSync(path.join(path.dirname(f.file), '.claude.json'), JSON.stringify({ oauthAccount: { accountUuid: 'account-a' } }));
+  await f.manager.followNative('claude');
+  assert.equal(f.manager.activeProfileId('claude'), 'a');
+  // A login no saved profile owns keeps the active profile but drops its number.
+  fs.writeFileSync(f.file, JSON.stringify({ claudeAiOauth: { accessToken: 'other', refreshToken: 'refresh-other' } }));
+  fs.writeFileSync(path.join(path.dirname(f.file), '.claude.json'), JSON.stringify({ oauthAccount: { accountUuid: 'account-z' } }));
+  await f.manager.followNative('claude');
+  assert.equal(f.manager.activeProfileId('claude'), 'a');
+  assert.equal(f.manager.activeProfileNumber('claude'), undefined);
+});

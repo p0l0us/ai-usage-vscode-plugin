@@ -408,6 +408,10 @@ export function activate(context: vscode.ExtensionContext): void {
       // Show the chat chip right away; until the first reading arrives a click says it is waiting.
       await updateChipContext(provider, config.get<boolean>('aiUsage.chatChips.enabled', true));
 
+      // A switch made outside this window (another window, the vendor CLI) is followed before the reading is keyed.
+      if (provider.id !== 'copilot') {
+        await authProfiles.followNative(provider.id);
+      }
       const profileId = provider.id === 'copilot' ? undefined : authProfiles.activeProfileId(provider.id);
       const { source, checkIntervalMs } = settingsFor(provider.id);
       const budget = provider.budget?.();

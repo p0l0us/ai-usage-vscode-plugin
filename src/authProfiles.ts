@@ -1,3 +1,4 @@
+import * as fs from 'fs';
 import * as vscode from 'vscode';
 import { randomUUID } from 'crypto';
 import {
@@ -9,7 +10,7 @@ import {
   readNativeCredential,
   writeNativeCredential
 } from './authFiles';
-import { CredentialIdentity, resolveCredentialIdentity } from './accountIdentity';
+import { claudeAccountFile, CredentialIdentity, resolveCredentialIdentity } from './accountIdentity';
 import { openAiUsageSettings } from './settingsLink';
 
 const STATE_KEY = 'aiUsage.authProfiles.v1';
@@ -124,6 +125,21 @@ function validName(value: string): string | undefined {
   return undefined;
 }
 
+/** Stable account id of a native login, read locally: Codex's token field, Claude's account file. */
+function nativeAccountId(provider: AuthProvider, native: StoredCredential): string | undefined {
+  if (provider === 'codex') {
+    const tokens = native.tokens;
+    const id = typeof tokens === 'object' && tokens !== null ? (tokens as Record<string, unknown>).account_id : undefined;
+    return typeof id === 'string' && id ? id : undefined;
+  }
+  try {
+    const account = JSON.parse(fs.readFileSync(claudeAccountFile(), 'utf8'))?.oauthAccount;
+    return typeof account?.accountUuid === 'string' && account.accountUuid ? account.accountUuid : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export class AuthProfileManager {
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -132,6 +148,11 @@ export class AuthProfileManager {
     private readonly verifyActivation?: ActivationVerifier,
     private readonly identityOf: (provider: AuthProvider, credential: StoredCredential) => Promise<CredentialIdentity> = resolveCredentialIdentity
   ) {}
+
+  /** The native login `followNative` last looked at, per provider, so an unchanged file is not checked again. */
+  private nativeChecked: Partial<Record<AuthProvider, string>> = {};
+  /** Whether that native login belongs to no saved profile. */
+  private nativeUnsaved: Partial<Record<AuthProvider, boolean>> = {};
 
   /** Set by extension.ts: true while the Codex account proxy routes Codex chats, so a switch needs no restart. */
   codexChatsFollowSwitch: () => boolean = () => false;
@@ -261,8 +282,47 @@ export class AuthProfileManager {
     return this.state()[provider].activeProfileId;
   }
 
+  /**
+   * Makes the active profile the one that owns the native login, when that changed outside this window (another
+   * window's switch or rotation, or a sign-in with the vendor CLI). Only local data is used: a matching token, then
+   * the account id (Codex `tokens.account_id`, Claude's `oauthAccount.accountUuid` in its account file). When no
+   * saved profile owns the native login, the active profile is kept but not numbered in the status bar.
+   */
+  async followNative(provider: AuthProvider): Promise<void> {
+    let native: StoredCredential;
+    try { native = readNativeCredential(provider); } catch { return; }
+    const nativeKey = JSON.stringify(native);
+    if (this.nativeChecked[provider] === nativeKey) { return; }
+    const state = this.state();
+    const providerState = state[provider];
+    const owners: ProfileMetadata[] = [];
+    for (const profile of providerState.profiles) {
+      const stored = await this.readSecret(provider, profile.id);
+      if (stored && isSameCredentialOwner(provider, stored, native)) { owners.push(profile); }
+    }
+    if (!owners.length) {
+      const accountId = nativeAccountId(provider, native);
+      if (accountId) { owners.push(...providerState.profiles.filter((profile) => profile.accountId === accountId)); }
+    }
+    const owner = owners.length === 1 ? owners[0] : owners.find((profile) => profile.id === providerState.activeProfileId);
+    if (!owner) {
+      if (!this.nativeUnsaved[provider]) {
+        this.log(`${provider}: the native login is not one of the saved profiles; the status bar shows no profile number until it is`);
+      }
+    } else if (owner.id !== providerState.activeProfileId) {
+      const previous = providerState.profiles.find((profile) => profile.id === providerState.activeProfileId);
+      providerState.activeProfileId = owner.id;
+      await this.updateState(state);
+      this.log(`${provider}: the native login was switched outside this window to profile "${owner.name}"${previous ? ` (was "${previous.name}")` : ''}; following it`);
+    }
+    // Set after updateState, which forgets the last check.
+    this.nativeChecked[provider] = nativeKey;
+    this.nativeUnsaved[provider] = !owner;
+  }
+
   /** 1-based position of the active profile in the saved list, as the Accounts menu orders it. */
   activeProfileNumber(provider: AuthProvider): number | undefined {
+    if (this.nativeUnsaved[provider]) { return undefined; }
     const { profiles, activeProfileId } = this.state()[provider];
     const index = profiles.findIndex((profile) => profile.id === activeProfileId);
     return index < 0 ? undefined : index + 1;
@@ -301,6 +361,7 @@ export class AuthProfileManager {
     }
 
     await this.backfillEmails(provider);
+    await this.followNative(provider);
     // Management actions return to the list. Choosing a profile activates it and closes the menu.
     while (true) {
       const item = await vscode.window.showQuickPick(this.items(provider, Boolean(hooks?.back)), {
@@ -371,6 +432,8 @@ export class AuthProfileManager {
 
   private async updateState(state: ProfileState): Promise<void> {
     await this.context.globalState.update(STATE_KEY, state);
+    // A saved, renamed or activated profile can change who owns the native login; check again next time.
+    this.nativeChecked = {};
   }
 
   private secretKey(provider: AuthProvider, id: string): string {
