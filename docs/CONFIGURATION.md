@@ -75,6 +75,9 @@ for details.
   `iconOnly` (default) or `iconAndName`.
 - `aiUsage.statusBar.usage`: `rich` (default) shows every window, `17% (3h) 25% (3d)`; the value in parentheses
   is time until reset, reduced to one largest unit (`42m`, `3h`, or `4d`). `simple` shows only the most-used window.
+- `aiUsage.claude.statusBar.accountNumber` / `aiUsage.codex.statusBar.accountNumber` (default `true`): put the
+  active saved profile's position in the Accounts list between the icon and the figures, e.g. `#2 17% (3h)` after the Claude icon.
+  Shown only when the service has at least two saved profiles and the active login is one of them.
 - `aiUsage.chatChips.labels`: `name` (default) prefixes the first chip with the service name, `Claude 4%`;
   `none` shows figures only. Chips cannot carry the vendor icon: VS Code drops the text of a toolbar item that has
   an icon.
@@ -293,6 +296,12 @@ hand. Endpoint calls are only made once the cached readings show such a candidat
 authorize a switch. If
 all candidates are exhausted, no native credential is changed. Another sweep may run after
 `aiUsage.<provider>.checkIntervalMinutes`, allowing accounts to become eligible after their limits reset.
+
+Rotation reacts as soon as a threshold is reached: a status bar reading of the active account that reaches one
+starts a sweep right away instead of waiting for the one-minute scheduler, and a reading at most 2 minutes old is
+used as the active account's current reading, so the rate-limited usage endpoint is not asked again. When the
+active account cannot be read (its checks are paused after a provider error), the sweep is retried as soon as that
+pause ends rather than a full check interval later.
 The selected account must still match the native login immediately before activation. As with manual switching,
 Claude picks the new login up on its next request; open Codex chats follow it on their next turn when the Codex
 account proxy is on and otherwise need the extension restart described above.

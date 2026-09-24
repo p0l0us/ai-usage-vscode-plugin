@@ -2,7 +2,7 @@
   "name": "ai-usage-vscode-plugin",
   "displayName": "AI subscription management and usage",
   "description": "Manage your Claude Code, Codex and GitHub Copilot subscriptions and see what is left of them: switch between saved accounts without signing in again, keep them warm, rotate on exhaustion, and read live 5h/7d windows, premium requests and org billing in the status bar and chat input. Open source, contributions welcome.",
-  "version": "0.0.23",
+  "version": "0.0.24",
   "publisher": "p0l0us",
   "license": "GPL-3.0-only",
   "repository": {
@@ -7017,6 +7017,12 @@
             "description": "Show live Claude Code rate-limit usage in the status bar when a Claude Code login is found (~/.claude/.credentials.json or $CLAUDE_CONFIG_DIR).",
             "order": 1
           },
+          "aiUsage.claude.statusBar.accountNumber": {
+            "type": "boolean",
+            "default": true,
+            "order": 1.5,
+            "markdownDescription": "**Show the Claude account number in the status bar.** Puts the active saved profile's position in the Accounts list between the icon and the figures, e.g. `#2 17% (3h)`. Shown only when at least two Claude profiles are saved and the active login is one of them."
+          },
           "aiUsage.claude.source": {
             "type": "string",
             "default": "both",
@@ -7202,6 +7208,12 @@
             "default": true,
             "description": "Show live Codex rate-limit usage in the status bar when a Codex login is found (~/.codex/auth.json or $CODEX_HOME).",
             "order": 1
+          },
+          "aiUsage.codex.statusBar.accountNumber": {
+            "type": "boolean",
+            "default": true,
+            "order": 1.5,
+            "markdownDescription": "**Show the Codex account number in the status bar.** Puts the active saved profile's position in the Accounts list between the icon and the figures, e.g. `#2 17% (3h)`. Shown only when at least two Codex profiles are saved and the active login is one of them."
           },
           "aiUsage.codex.source": {
             "type": "string",

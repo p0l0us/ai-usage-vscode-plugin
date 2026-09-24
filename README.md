@@ -154,6 +154,7 @@ it is installed and runs on the remote machine, so:
 |---|---|---|
 | `aiUsage.statusBar.labels` | `iconOnly` | What precedes the figures: `none`, `nameOnly`, `iconOnly` or `iconAndName`. |
 | `aiUsage.statusBar.usage` | `rich` | `simple` shows one figure, the most used window, instead of every window. |
+| `aiUsage.<claude\|codex>.statusBar.accountNumber` | `true` | Show the active saved profile's number (`#2`) between the icon and the figures, when several are saved. |
 | `aiUsage.chatChips.labels` / `.usage` | `name` / `rich` | The same two choices for the chat chips (no icon there). |
 | `aiUsage.chatTokens.enabled` | on | Show the local Claude/Codex chat's consumed-token chip. |
 | `aiUsage.<service>.source` | `both` | Local file first (Claude's account file, Codex's session logs), service endpoint when that reading goes stale. |

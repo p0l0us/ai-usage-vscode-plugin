@@ -90,6 +90,55 @@ export function isRevokedCredentialError(message: string | undefined): boolean {
   return Boolean(message) && /token_revoked|refresh_token_reused|invalid_grant|refresh token (?:was|has been) (?:revoked|already used)|refresh token has expired|invalidated oauth token|oauth token (?:has been )?revoked|sign in again|log out and sign in|please run \/login|\b401 unauthorized\b/i.test(message!);
 }
 
+export type AccountProblem = {
+  /** A few words for a list, such as "Insufficient credits"; the vendor's own text when it is not recognized. */
+  label: string;
+  /** One sentence on what it means or what to do, for a notification. */
+  advice?: string;
+  known: boolean;
+};
+
+/** Known vendor and extension errors, most specific first; the first match names the problem. */
+const KNOWN_PROBLEMS: Array<{ test: (raw: string) => boolean; label: string; advice: (raw: string) => string }> = [
+  { test: (raw) => /oauth token has expired|login token expired/i.test(raw), label: 'Login expired',
+    advice: () => 'The saved login has expired. Sign in again for this profile.' },
+  { test: isRevokedCredentialError, label: 'Invalid token', advice: () => 'The saved login no longer works. Sign in again for this profile.' },
+  { test: (raw) => /out of credits|credit balance is too low|insufficient (?:credits|balance|funds|quota)|add credits|refill/i.test(raw),
+    label: 'Insufficient credits', advice: (raw) => /workspace owner/i.test(raw)
+      ? 'The workspace has no credits left. Ask the workspace owner to add credits, or wait for the usage limit to reset.'
+      : 'No credits are left. Add credits, or wait for the usage limit to reset.' },
+  { test: (raw) => /usage limit|limit (?:reached|exceeded)|hit your (?:usage )?limit|quota exceeded/i.test(raw), label: 'Usage limit reached',
+    advice: () => 'Wait for the limit to reset, or switch to another account.' },
+  { test: (raw) => /\bmodel\b.*(?:not supported|not found|does not exist|may not exist|not available|no access|not have access)|unsupported model/i.test(raw),
+    label: 'Keep-alive model unavailable', advice: () => 'This account cannot use the configured keep-alive model. Choose another one in Settings.' },
+  { test: (raw) => /rate limited|too many requests|\b429\b/i.test(raw), label: 'Rate limited',
+    advice: () => 'The service is limiting requests; the check is retried later.' },
+  { test: (raw) => /overloaded|internal server error|service unavailable|bad gateway|HTTP 5\d\d/i.test(raw), label: 'Service unavailable',
+    advice: () => 'The service had a temporary problem; the check is retried later.' },
+  { test: (raw) => /\b403\b|forbidden|permission denied|not allowed|access denied/i.test(raw), label: 'Access denied',
+    advice: () => 'This account is not allowed to use the service.' },
+  { test: (raw) => /request failed|fetch failed|ENOTFOUND|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EAI_AGAIN|network/i.test(raw), label: 'Network error',
+    advice: () => 'The service could not be reached. Check the connection; the check is retried later.' },
+  { test: (raw) => /timed out/i.test(raw), label: 'Timed out', advice: () => 'The CLI did not answer in time; the check is retried later.' },
+  { test: (raw) => /CLI (?:"[^"]*" )?not found|could not start the keep-alive CLI/i.test(raw), label: 'CLI not found',
+    advice: () => 'The CLI could not be started. Check its path in Settings.' },
+  { test: (raw) => /temporarily paused after a provider error/i.test(raw), label: 'Paused after an error',
+    advice: () => 'Checks resume after the provider check interval.' },
+  { test: (raw) => /usage endpoint is already being called/i.test(raw), label: 'Waiting for the usage endpoint',
+    advice: () => 'Other checks are using the usage endpoint; this one is retried later.' },
+  { test: (raw) => /saved credential is missing/i.test(raw), label: 'Saved login missing', advice: () => 'Save or import a login for this profile again.' },
+  { test: (raw) => /cancelled/i.test(raw), label: 'Cancelled', advice: () => 'The check was cancelled and runs again later.' }
+];
+
+/** Translates a keep-alive or usage-check error into a short, readable description, when it is a known one. */
+export function explainAccountProblem(raw: string): AccountProblem {
+  for (const known of KNOWN_PROBLEMS) {
+    if (known.test(raw)) { return { label: known.label, advice: known.advice(raw), known: true }; }
+  }
+  const reason = raw.replace(/^Keep-alive CLI exited with code \S+?:\s*/i, '').replace(/\.$/, '');
+  return { label: reason || raw, known: false };
+}
+
 /** Interactive login for a staged account; Codex is told to keep the login in auth.json rather than a keyring. */
 export function loginArgs(provider: AuthProvider): string[] {
   return provider === 'claude' ? ['auth', 'login'] : ['-c', 'cli_auth_credentials_store="file"', 'login'];

@@ -43,7 +43,8 @@ function fixture(t, options = {}) {
       keepAliveError: keepAlive ? options.keepAliveErrors?.[credential.id] : undefined,
       result: percents
         ? { kind: 'ok', usage: usage(provider, percents, now) }
-        : { kind: 'error', provider, title: provider, message: options.usageErrors?.[credential.id] ?? 'Unavailable' } };
+        : { kind: 'error', provider, title: provider, message: options.usageErrors?.[credential.id] ?? 'Unavailable',
+          transient: Boolean(options.transientErrors?.[credential.id]) } };
   };
   const make = () => {
     const service = new AccountAutomation(directory, profiles, p => settings[p], async () => {}, m => messages.push(m), probe, () => now);
@@ -52,7 +53,7 @@ function fixture(t, options = {}) {
   };
   const service = make();
   t.after(() => service.dispose());
-  return { service, make, active, values, calls, switches, refreshed, settings, messages, problems,
+  return { service, make, options, active, values, calls, switches, refreshed, settings, messages, problems,
     observe: (provider, percents, id = active[provider]) => service.observe(provider, id, usage(provider, percents, now)),
     /** Cache every account's configured reading, as a keep-alive sweep would. */
     observeAll: provider => Object.entries(values).forEach(([id, percents]) =>
@@ -102,8 +103,9 @@ test('a weekly Codex limit skips exhausted next account and activates the next e
   f.observe('codex', [10, 99.5]);
   await f.service.tick();
   assert.deepEqual(f.switches, [['codex', 'c', true]]);
-  // The eligible candidate gets a real keep-alive before anything is switched.
-  assert.deepEqual(f.calls, [['codex', 'a', false], ['codex', 'b', false], ['codex', 'c', false], ['codex', 'c', true]]);
+  // The active account's reading is moments old, so only candidates are read; the eligible one gets a real
+  // keep-alive before anything is switched.
+  assert.deepEqual(f.calls, [['codex', 'b', false], ['codex', 'c', false], ['codex', 'c', true]]);
 });
 
 test('a candidate whose pre-switch keep-alive fails is reported and skipped for the next healthy account', async t => {
@@ -113,6 +115,8 @@ test('a candidate whose pre-switch keep-alive fails is reported and skipped for 
   await f.service.tick();
   assert.deepEqual(f.switches, [['codex', 'c', true]]);
   assert.deepEqual(f.problems, [['codex', 'b', 'Keep-alive CLI exited with code 1: Your workspace is out of credits.', false]]);
+  // The menu shows the problem in a few words, not the CLI's output.
+  assert.match(f.service.usageDetail('codex', 'b'), /\$\(warning\) Insufficient credits$/);
 });
 
 test('a revoked candidate is never switched to and is announced once per credential', async t => {
@@ -144,7 +148,7 @@ test('all exhausted accounts leave the active login unchanged and throttle repea
   f.observe('codex', [99.5, 10]);
   await f.service.tick();
   await f.service.tick();
-  assert.equal(f.calls.length, 3);
+  assert.equal(f.calls.length, 2);
   assert.deepEqual(f.switches, []);
   f.advance(600001);
   f.values.b = [2, 2];
@@ -155,6 +159,7 @@ test('all exhausted accounts leave the active login unchanged and throttle repea
 test('fresh active reading after a reset prevents rotation from an old exhausted cache', async t => {
   const f = fixture(t, { values: { a: [0, 2] }, settings: { claude: { autoRotate: true } } });
   f.observe('claude', [100, 10]);
+  f.advance(3 * 60000);
   await f.service.tick();
   assert.deepEqual(f.switches, []);
   assert.equal(f.calls.length, 1);
@@ -170,6 +175,7 @@ test('unavailable and partial-window accounts cannot become rotation targets', a
 test('failed active refresh never rotates using its last good reading', async t => {
   const f = fixture(t, { values: { a: undefined }, settings: { claude: { autoRotate: true } } });
   f.observe('claude', [99.5, 10]);
+  f.advance(3 * 60000);
   await f.service.tick();
   assert.equal(f.calls.length, 1);
   assert.deepEqual(f.switches, []);
@@ -286,7 +292,7 @@ test('soonest reset skips 5h-locked accounts and defers one spending its week to
   await f.service.tick();
   // e resets in 4 days and is behind pace; a resets later and is 42 points ahead with most of its week left.
   assert.deepEqual(f.switches, [['claude', 'e', true]]);
-  assert.deepEqual(f.calls, [['claude', 'c', false], ['claude', 'e', false], ['claude', 'e', true]]);
+  assert.deepEqual(f.calls, [['claude', 'e', false], ['claude', 'e', true]]);
 });
 
 test('proactive soonest reset keeps the account resetting first without spending any calls', async t => {
@@ -326,7 +332,7 @@ test('proactive rotation does not switch when the fresh reading no longer shows 
   f.values.e = [['5h', 53, 4], ['7d', 95, 96], ['7d Fable', 95, 96]];
   await f.service.tick();
   assert.deepEqual(f.switches, []);
-  assert.deepEqual(f.calls.map(call => call[1]), ['c', 'e']);
+  assert.deepEqual(f.calls.map(call => call[1]), ['e']);
 });
 
 test('least waste prefers the most allowance per hour over the soonest reset', async t => {
@@ -350,4 +356,36 @@ test('a cached window whose reset has passed ranks as fresh', () => {
   }
   assert.equal(rotationScore('sequential', fresh, now, limits), undefined);
   assert.equal(rotationScore('evenPace', usage('claude', [['5h', 10, 4]], now), now, limits), undefined);
+});
+
+test('a reading that reaches a threshold rotates at once, without waiting for a tick or re-reading the account', async t => {
+  const f = fixture(t, { settings: { claude: { autoRotate: true, fiveHourThresholdPercent: 91 } } });
+  f.observe('claude', [91, 10]);
+  await f.service.tick(); // joins the rotation the reading started
+  assert.deepEqual(f.switches, [['claude', 'b', true]]);
+  assert.deepEqual(f.calls, [['claude', 'b', false], ['claude', 'b', true]]);
+});
+
+test('a reading below every threshold does not start rotation', async t => {
+  const f = fixture(t, { settings: { claude: { autoRotate: true, fiveHourThresholdPercent: 91 } } });
+  f.observe('claude', [90, 10]);
+  await f.service.tick();
+  assert.deepEqual(f.calls, []);
+});
+
+test('a sweep that cannot read the active account retries once its pause ends, not a full interval later', async t => {
+  const f = fixture(t, { values: { a: undefined }, transientErrors: { a: true }, settings: { claude: { autoRotate: false } } });
+  // A rate-limited check pauses the active account's checks for the 10-minute interval.
+  await f.service.sendKeepAliveNow('claude', 'a');
+  f.observe('claude', [99.5, 10]);
+  f.advance(8 * 60000);
+  f.settings.claude.autoRotate = true;
+  await f.service.tick();
+  assert.deepEqual(f.switches, []);
+  // The pause ends two minutes later; the old throttle would have waited until 18 minutes.
+  f.values.a = [99.5, 10];
+  f.options.transientErrors = {};
+  f.advance(2 * 60000 + 1);
+  await f.service.tick();
+  assert.deepEqual(f.switches, [['claude', 'b', true]]);
 });

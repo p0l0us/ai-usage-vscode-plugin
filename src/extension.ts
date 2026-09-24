@@ -9,7 +9,7 @@ import { ActivationChange, AuthProfileManager } from './authProfiles';
 import { activateClaudeAccountMetadata, claudeAccountFileConfirms } from './accountIdentity';
 import { AccountAutomation, AutomationSettings, modelWindowFilter, RotationStrategy, RotationTrigger } from './accountAutomation';
 import { signInIsolated } from './accountLogin';
-import { probeAccount } from './accountProbe';
+import { explainAccountProblem, probeAccount } from './accountProbe';
 import { SharedCache, deserializeUsage } from './cache';
 import { codexConfigPath } from './codexConfig';
 import { findStaleCodexProcesses } from './codexProcesses';
@@ -103,6 +103,8 @@ type LiveProvider = {
   cacheDiscriminator?: () => Promise<string | undefined>;
   /** Name of the extension-managed authentication profile currently selected for this provider. */
   activeProfileName?: () => string | undefined;
+  /** "#2" for the second saved profile, when there are several and the setting shows it. */
+  accountNumber?: () => string | undefined;
   /** Shared call spacing for providers read through a rate-limited service endpoint, when the
    *  currently selected source uses one (a local source needs no spacing). */
   budget?: () => ApiCallBudget | undefined;
@@ -293,7 +295,8 @@ export function activate(context: vscode.ExtensionContext): void {
       // local read with nothing to space out, and "both" claims its slot only when it falls back.
       budget: () => (claudeSpendsEndpointQuota(settingsFor('claude').source) ? claudeBudget : undefined),
       cacheDiscriminator: async () => authProfiles.cacheDiscriminator('claude'),
-      activeProfileName: () => authProfiles.activeProfileName('claude')
+      activeProfileName: () => authProfiles.activeProfileName('claude'),
+      accountNumber: () => accountNumberLabel(authProfiles, 'claude')
     },
     {
       id: 'codex',
@@ -318,7 +321,8 @@ export function activate(context: vscode.ExtensionContext): void {
         return fetchCodexUsage();
       },
       cacheDiscriminator: async () => authProfiles.cacheDiscriminator('codex'),
-      activeProfileName: () => authProfiles.activeProfileName('codex')
+      activeProfileName: () => authProfiles.activeProfileName('codex'),
+      accountNumber: () => accountNumberLabel(authProfiles, 'codex')
     },
     {
       id: 'copilot',
@@ -596,11 +600,11 @@ export function activate(context: vscode.ExtensionContext): void {
     const who = `“${profile.name}”${profile.email ? ` (${profile.email})` : ''}`;
     if (!revoked) {
       void vscode.window.showWarningMessage(
-        `AI Usage: automatic rotation will not switch to the ${title} account ${who}: its keep-alive failed. ${reason}`);
+        `AI Usage: automatic rotation will not switch to the ${title} account ${who}: its keep-alive failed. ${readableProblem(reason)}`);
       return;
     }
     const choice = await vscode.window.showWarningMessage(
-      `AI Usage: the saved ${title} login for ${who} was revoked and no longer works, so it cannot be used or rotated to. ${reason}`,
+      `AI Usage: the saved ${title} login for ${who} was revoked and no longer works, so it cannot be used or rotated to. Sign in again to keep using it.`,
       'Sign in again', 'Skip');
     if (choice !== 'Sign in again') { return; }
     try {
@@ -627,7 +631,7 @@ export function activate(context: vscode.ExtensionContext): void {
         ({ usage: undefined, usageError: error instanceof Error ? error.message : String(error) }));
       const signedInAs = identity.email ? ` as ${identity.email}` : '';
       void vscode.window.showInformationMessage(`AI Usage: ${title} profile “${current.name}” signed in again${signedInAs}.${result.usage
-        ? ' Usage statistics updated.' : result.usageError ? ` Usage could not be read yet: ${result.usageError}` : ''}`);
+        ? ' Usage statistics updated.' : result.usageError ? ` Usage could not be read yet: ${readableProblem(result.usageError)}` : ''}`);
       void automation.tick();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -661,11 +665,11 @@ export function activate(context: vscode.ExtensionContext): void {
           const result = await automation.sendKeepAliveNow(provider, profile.id);
           if (result.keepAliveError) {
             const suffix = result.usage ? ' Usage statistics were still updated.' : '';
-            void vscode.window.showWarningMessage(`AI Usage: ${title} keep-alive failed for “${profile.name}”: ${result.keepAliveError}${suffix}`);
+            void vscode.window.showWarningMessage(`AI Usage: ${title} keep-alive failed for “${profile.name}”: ${readableProblem(result.keepAliveError)}${suffix}`);
           } else if (result.usage) {
             void vscode.window.showInformationMessage(`AI Usage: ${title} keep-alive completed for “${profile.name}”. Usage statistics updated.`);
           } else {
-            void vscode.window.showWarningMessage(`AI Usage: ${title} keep-alive completed for “${profile.name}”, but usage statistics could not be updated${result.usageError ? `: ${result.usageError}` : '.'}`);
+            void vscode.window.showWarningMessage(`AI Usage: ${title} keep-alive completed for “${profile.name}”, but usage statistics could not be updated${result.usageError ? `: ${readableProblem(result.usageError)}` : '.'}`);
           }
         });
       }
@@ -851,7 +855,8 @@ export function activate(context: vscode.ExtensionContext): void {
     ) {
       void updateSessionTokens();
     }
-    if (event.affectsConfiguration('aiUsage.statusBar')) {
+    if (event.affectsConfiguration('aiUsage.statusBar') || event.affectsConfiguration('aiUsage.claude.statusBar') ||
+      event.affectsConfiguration('aiUsage.codex.statusBar')) {
       refreshManual();
       for (const provider of liveProviders) {
         renderLive(provider);
@@ -1190,12 +1195,23 @@ function formatUsageLabel(usage: LiveUsage, withTitle = true, style: UsageStyle 
   return withTitle ? `${usage.title} ${parts.join(' ')}` : parts.join(' ');
 }
 
-/** Status bar text: the figures behind whatever `aiUsage.statusBar.labels` puts in front of them. */
+/** "#N" for the active saved profile when `aiUsage.<service>.statusBar.accountNumber` is on and several are saved. */
+function accountNumberLabel(authProfiles: AuthProfileManager, provider: AuthProvider): string | undefined {
+  if (!vscode.workspace.getConfiguration().get<boolean>(`aiUsage.${provider}.statusBar.accountNumber`, true) ||
+    authProfiles.profileCount(provider) < 2) {
+    return undefined;
+  }
+  const number = authProfiles.activeProfileNumber(provider);
+  return number === undefined ? undefined : `#${number}`;
+}
+
+/** Status bar text: the figures behind whatever `aiUsage.statusBar.labels` puts in front of them, and the account number. */
 function statusText(provider: LiveProvider, body: string, title?: string): string {
   const { labels } = statusBarStyle();
   const icon = labels === 'iconOnly' || labels === 'iconAndName' ? `$(${provider.icon}) ` : '';
   const name = (labels === 'nameOnly' || labels === 'iconAndName') && title ? `${title} ` : '';
-  return `${icon}${name}${body}`.trimEnd();
+  const account = provider.accountNumber?.();
+  return `${icon}${name}${account ? `${account} ` : ''}${body}`.trimEnd();
 }
 
 function buildTooltip(usage: LiveUsage, refreshError?: string, activeProfile?: string): vscode.MarkdownString {
@@ -1467,6 +1483,13 @@ function summarize(accounts: AccountUsage[]): { remainingPercent: number; lines:
 
 export function deactivate(): void {
   // noop
+}
+
+/** A keep-alive or usage-check error for a notification: "Insufficient credits. <what to do>", else the vendor's text. */
+function readableProblem(raw: string): string {
+  const problem = explainAccountProblem(raw);
+  const text = problem.advice ? `${problem.label}. ${problem.advice}` : problem.label;
+  return /[.!?]$/.test(text) ? text : `${text}.`;
 }
 
 /** Machine-scoped account automation settings; intervals are bounded even for hand-edited JSON. */

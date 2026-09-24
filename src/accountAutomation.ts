@@ -4,7 +4,7 @@ import { createHash } from 'crypto';
 import { AuthProvider, StoredCredential, writeJsonAtomically } from './authFiles';
 import { CacheEntry, deserializeUsage } from './cache';
 import { formatResetRemaining, LiveUsage, UsageWindow } from './live';
-import { ProbeSettings, ProbeResult, acquireAccountLock, isRevokedCredentialError, probeAccount } from './accountProbe';
+import { ProbeSettings, ProbeResult, acquireAccountLock, explainAccountProblem, isRevokedCredentialError, probeAccount } from './accountProbe';
 import type { ActivationChange } from './authProfiles';
 
 /** How rotation picks the next account; `sequential` is saved-profile order. */
@@ -119,6 +119,8 @@ export function eligibleAccount(usage: LiveUsage, now = Date.now(), limits: numb
 
 /** Ahead of an even spend by more than this many points, with over half the week to go, is spending too early. */
 const PACE_MARGIN = 10;
+/** An active-account reading at most this old decides rotation without reading the account again. */
+const RECENT_READING_MS = 2 * 60_000;
 /** How much better a candidate must score before proactive rotation leaves a working account. */
 const SWITCH_MARGIN: Record<Exclude<RotationStrategy, 'sequential'>, number> = { soonestReset: 3, evenPace: 5, leastWaste: 0.1 };
 
@@ -219,8 +221,14 @@ export class AccountAutomation {
       }).join(' · '));
       parts.push(`Checked ${usage.fetchedAt.toLocaleString()}`);
     }
-    if (state.lastError) { parts.push(`Usage check: ${state.lastError}`); }
-    if (state.keepAliveError) { parts.push(state.keepAliveError); }
+    // Known errors read as a few words ("Insufficient credits"); the vendor's own text stays in the log.
+    const problems = new Set<string>();
+    for (const [check, error] of [['Keep-alive', state.keepAliveError], ['Usage check', state.lastError]] as const) {
+      if (!error) { continue; }
+      const problem = explainAccountProblem(error);
+      problems.add(problem.known ? problem.label : `${check} failed: ${problem.label}`);
+    }
+    parts.push(...[...problems].map((problem) => `$(warning) ${problem}`));
     return parts.join(' · ') || undefined;
   }
 
@@ -230,6 +238,9 @@ export class AccountAutomation {
     const previous = deserializeUsage(state);
     if (previous && previous.fetchedAt > usage.fetchedAt) { return; }
     this.write(provider, id, { ...state, usage: this.serialize(usage), checkedAt: usage.fetchedAt.getTime(), lastError: undefined });
+    // A reading that reaches a threshold starts rotation now, not on the next minute's tick.
+    const settings = this.settings(provider);
+    if (settings.autoRotate && this.profiles.activeProfileId(provider) === id && atLimit(usage, settings)) { void this.tick(); }
   }
 
   /** Run an explicitly requested keep-alive regardless of the periodic feature state or current backoff. */
@@ -342,7 +353,7 @@ export class AccountAutomation {
         this.onAccountProblem?.(provider, id, problem, Boolean(revoked));
       }
     }
-    this.log(`${provider}: account ${id} ${keepAlive ? 'keep-alive / ' : ''}usage: ${result.kind}${outcome.keepAliveError ? ` (${outcome.keepAliveError})` : ''}`);
+    this.log(`${provider}: account ${id} ${keepAlive ? 'keep-alive / ' : ''}usage: ${result.kind}${usageError ? ` (${usageError})` : ''}${outcome.keepAliveError ? `; keep-alive: ${outcome.keepAliveError}` : ''}`);
     return { usage: result.kind === 'ok' ? result.usage : undefined, keepAliveError: outcome.keepAliveError, usageError };
   }
 
@@ -389,15 +400,31 @@ export class AccountAutomation {
       if (own === undefined || !this.ranked(provider, active, settings).some((candidate) =>
         candidate.usable && candidate.score !== undefined && candidate.score + margin < own)) { return; }
     }
-    // The sweep timestamp also throttles all-exhausted and error cases across windows/restarts.
+    // The sweep record throttles all-exhausted and error cases across windows/restarts. Records from before
+    // `nextAllowedAt` was kept wait a full interval after `checkedAt`.
     const rotationId = 'rotation-sweep';
     const sweep = this.read(provider, rotationId);
-    if (sweep.checkedAt !== undefined && this.now() - sweep.checkedAt < settings.checkIntervalMs) { return; }
-    this.write(provider, rotationId, { checkedAt: this.now() });
-    // Never rotate based on a stale cache, offline log, expired reset or a failed refresh.
-    const current = (await this.checkAccount(provider, active, settings, false)).usage;
-    if (!current) { return; }
+    const retryAt = sweep.nextAllowedAt ?? (sweep.checkedAt !== undefined ? sweep.checkedAt + settings.checkIntervalMs : undefined);
+    if (retryAt !== undefined && this.now() < retryAt) { return; }
+    const sweepStart = this.now();
+    this.write(provider, rotationId, { checkedAt: sweepStart, nextAllowedAt: sweepStart + settings.checkIntervalMs });
+    // Never rotate based on a stale cache, offline log, expired reset or a failed refresh. A reading taken moments
+    // ago (the status bar's) is as good as a new one and spares the rate-limited endpoint, unless a reset has passed.
+    const recent = this.now() - usage.fetchedAt.getTime() <= RECENT_READING_MS &&
+      usage.windows.every((window) => !window.resetsAt || window.resetsAt.getTime() > this.now());
+    const current = recent ? usage : (await this.checkAccount(provider, active, settings, false)).usage;
+    if (!current) {
+      // Not a real sweep: try again as soon as the active account can be read, not a full interval later.
+      const readableAt = this.read(provider, active).nextAllowedAt;
+      if (readableAt !== undefined) { this.write(provider, rotationId, { checkedAt: sweepStart, nextAllowedAt: readableAt }); }
+      return;
+    }
     const exhausted = atLimit(current, settings);
+    if (!exhausted && !proactive) {
+      // The cached reading was out of date and has now been replaced; nothing was spent on candidates.
+      this.write(provider, rotationId, { checkedAt: sweepStart });
+      return;
+    }
     // A working account is only left for one that scores clearly better on a fresh reading too.
     const own = exhausted ? undefined : rotationScore(strategy, current, this.now(), settings);
     if (!exhausted && (!proactive || own === undefined)) { return; }

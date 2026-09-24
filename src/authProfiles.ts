@@ -258,6 +258,18 @@ export class AuthProfileManager {
     return this.state()[provider].activeProfileId;
   }
 
+  /** 1-based position of the active profile in the saved list, as the Accounts menu orders it. */
+  activeProfileNumber(provider: AuthProvider): number | undefined {
+    const { profiles, activeProfileId } = this.state()[provider];
+    const index = profiles.findIndex((profile) => profile.id === activeProfileId);
+    return index < 0 ? undefined : index + 1;
+  }
+
+  /** Number of saved profiles for the provider. */
+  profileCount(provider: AuthProvider): number {
+    return this.state()[provider].profiles.length;
+  }
+
   activeProfileName(provider: AuthProvider): string | undefined {
     const providerState = this.state()[provider];
     return providerState.profiles.find((profile) => profile.id === providerState.activeProfileId)?.name;

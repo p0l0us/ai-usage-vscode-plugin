@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.0.24 (2026-09-24)
+
+- Rotation reacts as soon as a threshold is reached. A status bar reading of the active account that reaches a
+  threshold starts rotation at once instead of on the next minute's check, and that reading is trusted for up to
+  2 minutes instead of asking the rate-limited usage endpoint again. A sweep that could not read the active account,
+  because its checks were paused after a rate limit, now retries as soon as the pause ends; it used to wait a whole
+  `checkIntervalMinutes` (10 by default), so an account at its limit could keep being used for that long.
+- Account problems read in plain words. The Accounts menu shows a known keep-alive or usage-check failure as a short
+  label with a warning icon, such as **Insufficient credits**, **Invalid token**, **Login expired**, **Usage limit
+  reached**, **Rate limited**, **Network error** or **Keep-alive model unavailable**, instead of the CLI's raw
+  output, and the notifications add what to do about it. The vendor's own message is still written to the AI Usage
+  log, and unrecognized errors are shown as before, without the "Keep-alive CLI exited with code 1" prefix.
+- The status bar shows which saved account is active, e.g. `#2 17% (3h)` after the service icon, numbered as in the Accounts menu.
+  Turn it off per service with `aiUsage.claude.statusBar.accountNumber` and `aiUsage.codex.statusBar.accountNumber`.
+  It only appears when at least two profiles are saved.
+
 ## 0.0.23 (2026-09-23)
 
 - Smarter Claude rotation. `aiUsage.claude.autoRotate.strategy` picks the account to switch to from each account's

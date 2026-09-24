@@ -212,3 +212,23 @@ test('sign-in runs the vendor login and keeps a Codex login in its file', () => 
   assert.deepEqual(loginArgs('claude'), ['auth', 'login']);
   assert.deepEqual(loginArgs('codex'), ['-c', 'cli_auth_credentials_store="file"', 'login']);
 });
+
+test('known keep-alive and usage errors read as a short description with advice', () => {
+  const { explainAccountProblem } = require('../out/accountProbe');
+  const credits = explainAccountProblem('Keep-alive CLI exited with code 1: Your workspace is out of credits. Add credits to continue.');
+  assert.equal(credits.label, 'Insufficient credits');
+  assert.match(credits.advice, /Add credits/);
+  const owner = explainAccountProblem('Keep-alive CLI exited with code 1: Your workspace is out of credits. Ask your workspace owner to refill in order to continue.');
+  assert.equal(owner.label, 'Insufficient credits');
+  assert.match(owner.advice, /workspace owner/);
+  assert.equal(explainAccountProblem('Keep-alive CLI exited with code 1: Your access token could not be refreshed because your refresh token was revoked. Please log out and sign in again.').label, 'Invalid token');
+  assert.equal(explainAccountProblem('Codex CLI: account/rateLimits/read failed: 401 Unauthorized; {"code": "token_revoked"}').label, 'Invalid token');
+  assert.equal(explainAccountProblem('Login token expired. Run `codex` once to refresh it.').label, 'Login expired');
+  assert.equal(explainAccountProblem("Keep-alive CLI exited with code 1: You've hit your usage limit. Try again at 3:00 PM.").label, 'Usage limit reached');
+  assert.equal(explainAccountProblem('Rate limited by the service.').label, 'Rate limited');
+  assert.equal(explainAccountProblem('Request failed: getaddrinfo ENOTFOUND api.anthropic.com').label, 'Network error');
+  assert.equal(explainAccountProblem('Keep-alive timed out after 90 seconds.').label, 'Timed out');
+  assert.equal(explainAccountProblem("Keep-alive CLI exited with code 1: The 'gpt-x' model is not supported when using Codex with a ChatGPT account.").label, 'Keep-alive model unavailable');
+  const unknown = explainAccountProblem('Keep-alive CLI exited with code 2: Something odd happened.');
+  assert.deepEqual(unknown, { label: 'Something odd happened', known: false });
+});
