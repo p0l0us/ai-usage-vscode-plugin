@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.0.28 (2026-09-24)
+
+- Fewer rotation thresholds. Claude has `aiUsage.claude.autoRotate.fiveHourThresholdPercent` (default **95**) and
+  `aiUsage.claude.autoRotate.weeklyThresholdPercent` (default **99.5**, for `7d` and, when it counts, `7d Fable`).
+  Codex has `aiUsage.codex.autoRotate.weeklyThresholdPercent` (default **99**); a Codex 5-hour window rotates only
+  once it is used up. The general `autoRotate.thresholdPercent`, Claude's `modelWeeklyThresholdPercent` and Codex's
+  `fiveHourThresholdPercent` are gone, and values saved for them are no longer read.
+- Codex rotation reacts to the status bar. Its figures usually come from the session logs, which name no account and
+  were never used by rotation, so rotation only saw the account's stored reading, refreshed every few hours by
+  keep-alives. A session-log reading at the threshold now makes rotation read the active account at once.
+- When the active account is at its limit and no saved account is below the thresholds, a notification says so,
+  naming the window, instead of rotation keeping the account silently.
+- New [Rotation strategies and thresholds](docs/CONFIGURATION.md#rotation-strategies-and-thresholds) documentation:
+  when a rotation starts (usage ≥ threshold), which accounts can be switched to (below every threshold), and how each
+  strategy ranks them.
+
 ## 0.0.27 (2026-09-24)
 
 - The status bar's account number and the Accounts menu's **Active** mark follow the native login when it is

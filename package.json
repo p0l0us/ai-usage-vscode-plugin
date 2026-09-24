@@ -2,7 +2,7 @@
   "name": "ai-usage-vscode-plugin",
   "displayName": "AI subscription management and usage",
   "description": "Manage your Claude Code, Codex and GitHub Copilot subscriptions and see what is left of them: switch between saved accounts without signing in again, keep them warm, rotate on exhaustion, and read live 5h/7d windows, premium requests and org billing in the status bar and chat input. Open source, contributions welcome.",
-  "version": "0.0.27",
+  "version": "0.0.28",
   "publisher": "p0l0us",
   "license": "GPL-3.0-only",
   "repository": {
@@ -7073,7 +7073,7 @@
             "type": "boolean",
             "default": false,
             "order": 6,
-            "markdownDescription": "**Automatic Claude account rotation.** Switch the active account when it reaches its rotation threshold in any usage window (`#aiUsage.claude.autoRotate.thresholdPercent#`, or the per-window thresholds below), or proactively (`#aiUsage.claude.autoRotate.trigger#`). The account switched to is chosen by `#aiUsage.claude.autoRotate.strategy#` and must be below its threshold in every window. Requires at least two saved profiles."
+            "markdownDescription": "**Automatic Claude account rotation.** Switch the active account as soon as its usage reaches `#aiUsage.claude.autoRotate.fiveHourThresholdPercent#` in the 5-hour window or `#aiUsage.claude.autoRotate.weeklyThresholdPercent#` in a weekly window, or proactively (`#aiUsage.claude.autoRotate.trigger#`). The account switched to is chosen by `#aiUsage.claude.autoRotate.strategy#` and must be below both thresholds. Requires at least two saved profiles. See [Rotation strategies and thresholds](https://github.com/p0l0us/ai-usage-vscode-plugin/blob/main/docs/CONFIGURATION.md#rotation-strategies-and-thresholds)."
           },
           "aiUsage.claude.keepAlive.periodHours": {
             "type": "number",
@@ -7088,46 +7088,21 @@
             "description": "Subscription model used for the small keep-alive request (default: haiku).",
             "order": 8
           },
-          "aiUsage.claude.autoRotate.thresholdPercent": {
+          "aiUsage.claude.autoRotate.fiveHourThresholdPercent": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 95,
+            "markdownDescription": "**Claude 5-hour rotation threshold.** Rotate when the 5-hour window reaches this percentage (usage ≥ threshold). An account can only be switched to while its 5-hour usage is below it.",
+            "order": 9
+          },
+          "aiUsage.claude.autoRotate.weeklyThresholdPercent": {
             "type": "number",
             "minimum": 1,
             "maximum": 100,
             "default": 99.5,
-            "markdownDescription": "**Claude automatic-rotation threshold.** Rotate when any Claude usage window reaches this percentage. Candidate accounts must be below it in every counted window. The 5-hour, weekly and Fable thresholds below override it for their window.",
-            "order": 9
-          },
-          "aiUsage.claude.autoRotate.fiveHourThresholdPercent": {
-            "type": [
-              "number",
-              "null"
-            ],
-            "minimum": 1,
-            "maximum": 100,
-            "default": null,
-            "markdownDescription": "**Claude 5-hour rotation threshold.** Threshold for the short (5h) usage window. Empty uses `#aiUsage.claude.autoRotate.thresholdPercent#`.",
+            "markdownDescription": "**Claude weekly rotation threshold.** Rotate when a weekly window reaches this percentage (usage ≥ threshold): the all-models `7d` window, and `7d Fable` when `#aiUsage.claude.autoRotate.modelLimits#` counts it. An account can only be switched to while every counted weekly window is below it.",
             "order": 9.1
-          },
-          "aiUsage.claude.autoRotate.weeklyThresholdPercent": {
-            "type": [
-              "number",
-              "null"
-            ],
-            "minimum": 1,
-            "maximum": 100,
-            "default": null,
-            "markdownDescription": "**Claude weekly rotation threshold.** Threshold for the weekly (7d) usage window of all models. Empty uses `#aiUsage.claude.autoRotate.thresholdPercent#`.",
-            "order": 9.2
-          },
-          "aiUsage.claude.autoRotate.modelWeeklyThresholdPercent": {
-            "type": [
-              "number",
-              "null"
-            ],
-            "minimum": 1,
-            "maximum": 100,
-            "default": null,
-            "markdownDescription": "**Claude Fable weekly rotation threshold.** Threshold for model-specific weekly windows such as `7d Fable`. Empty uses `#aiUsage.claude.autoRotate.weeklyThresholdPercent#`, or `#aiUsage.claude.autoRotate.thresholdPercent#` when that is empty too.",
-            "order": 9.3
           },
           "aiUsage.claude.autoRotate.modelLimits": {
             "type": "string",
@@ -7143,7 +7118,7 @@
               "Ignore model-specific weekly windows; only the 5h and all-models 7d windows decide."
             ],
             "markdownDescription": "**Claude Fable limit in rotation.** Whether the `7d Fable` window blocks an account and counts when ranking accounts. `auto` reads `model` from Claude Code's `settings.json`.",
-            "order": 10
+            "order": 9.2
           },
           "aiUsage.claude.autoRotate.strategy": {
             "type": "string",
@@ -7285,7 +7260,7 @@
             "type": "boolean",
             "default": false,
             "order": 6,
-            "markdownDescription": "**Automatic Codex account rotation.** When the active account reaches `#aiUsage.codex.autoRotate.thresholdPercent#` in any usage window, switch to the next saved account that is below it in every window. Requires at least two saved profiles."
+            "markdownDescription": "**Automatic Codex account rotation.** When the active account reaches `#aiUsage.codex.autoRotate.weeklyThresholdPercent#` in its weekly window, or uses up its 5-hour window, switch to the next saved account that is below both. Requires at least two saved profiles. See [Rotation strategies and thresholds](https://github.com/p0l0us/ai-usage-vscode-plugin/blob/main/docs/CONFIGURATION.md#rotation-strategies-and-thresholds)."
           },
           "aiUsage.codex.keepAlive.periodHours": {
             "type": "number",
@@ -7300,35 +7275,13 @@
             "description": "Subscription model used for the small keep-alive request (default: gpt-5.6-luna). Empty uses the Codex CLI default.",
             "order": 9
           },
-          "aiUsage.codex.autoRotate.thresholdPercent": {
+          "aiUsage.codex.autoRotate.weeklyThresholdPercent": {
             "type": "number",
             "minimum": 1,
             "maximum": 100,
-            "default": 99.5,
-            "markdownDescription": "**Codex automatic-rotation threshold.** Rotate when either Codex usage window reaches this percentage. Candidate accounts must be below it in every reported window. The 5-hour and weekly thresholds below override it for their window.",
+            "default": 99,
+            "markdownDescription": "**Codex weekly rotation threshold.** Rotate when the weekly (7d) window reaches this percentage (usage ≥ threshold). An account can only be switched to while its weekly usage is below it. A 5-hour window, when Codex reports one, rotates only once it is used up (100%).",
             "order": 10
-          },
-          "aiUsage.codex.autoRotate.fiveHourThresholdPercent": {
-            "type": [
-              "number",
-              "null"
-            ],
-            "minimum": 1,
-            "maximum": 100,
-            "default": null,
-            "markdownDescription": "**Codex 5-hour rotation threshold.** Threshold for the short (5h) usage window. Empty uses `#aiUsage.codex.autoRotate.thresholdPercent#`.",
-            "order": 10.1
-          },
-          "aiUsage.codex.autoRotate.weeklyThresholdPercent": {
-            "type": [
-              "number",
-              "null"
-            ],
-            "minimum": 1,
-            "maximum": 100,
-            "default": null,
-            "markdownDescription": "**Codex weekly rotation threshold.** Threshold for the weekly (7d) usage window. Empty uses `#aiUsage.codex.autoRotate.thresholdPercent#`.",
-            "order": 10.2
           },
           "aiUsage.codex.switchRestartHint": {
             "type": "boolean",

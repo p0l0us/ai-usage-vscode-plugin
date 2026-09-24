@@ -496,11 +496,11 @@ export class AuthProfileManager {
     const keepAlive = this.automationEnabled(provider, 'keepAlive');
     const autoRotate = this.automationEnabled(provider, 'autoRotate');
     const config = vscode.workspace.getConfiguration();
-    const threshold = config.get<number>(`aiUsage.${provider}.autoRotate.thresholdPercent`, 99.5);
     // Only Claude contributes a strategy and trigger; Codex always rotates in saved order at its limit.
     const strategy = provider === 'claude'
-      ? `${config.get<string>('aiUsage.claude.autoRotate.strategy', 'soonestReset')}, ${config.get<string>('aiUsage.claude.autoRotate.trigger', 'limit')}`
-      : `at ${threshold}%`;
+      ? `${config.get<string>('aiUsage.claude.autoRotate.strategy', 'soonestReset')}, ${config.get<string>('aiUsage.claude.autoRotate.trigger', 'limit')}, ` +
+        `5h ≥ ${config.get<number>('aiUsage.claude.autoRotate.fiveHourThresholdPercent', 95)}%, 7d ≥ ${config.get<number>('aiUsage.claude.autoRotate.weeklyThresholdPercent', 99.5)}%`
+      : `7d ≥ ${config.get<number>('aiUsage.codex.autoRotate.weeklyThresholdPercent', 99)}%`;
     items.push({ label: 'Account features', kind: vscode.QuickPickItemKind.Separator });
     if (providerState.profiles.length) {
       items.push({

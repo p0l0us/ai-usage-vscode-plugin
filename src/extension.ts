@@ -488,6 +488,9 @@ export function activate(context: vscode.ExtensionContext): void {
           if (profileId && provider.id !== 'copilot' && !logSourced &&
             authProfiles.activeProfileId(provider.id) === profileId && await authProfiles.matchesNative(provider.id, profileId)) {
             automation.observe(provider.id, profileId, result.usage);
+          } else if (logSourced && provider.id === 'codex') {
+            // Session logs name no account, but a limit they show still starts a sweep that reads the active account.
+            automation.hintLimit(provider.id, result.usage);
           }
         }
       }
@@ -661,6 +664,13 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   };
   automation.onAccountProblem = (provider, id, reason, revoked) => { void reportAccountProblem(provider, id, reason, revoked); };
+  automation.onNoCandidate = (provider, detail) => {
+    const title = provider === 'claude' ? 'Claude' : 'Codex';
+    void vscode.window.showWarningMessage(`AI Usage: not rotating ${title}: ${detail}.`, 'Accounts', 'Settings').then((choice) => {
+      if (choice === 'Accounts') { void vscode.commands.executeCommand('aiUsage.manageAuthProfiles', provider); }
+      if (choice === 'Settings') { void openAiUsageSettings(`aiUsage.${provider}.autoRotate`); }
+    });
+  };
   const accountTimer = setInterval(() => {
     void automation.tick();
     void warnAboutStaleCodexProcesses();
@@ -1538,14 +1548,9 @@ function automationSettings(provider: AuthProvider, authProfiles: AuthProfileMan
   // the user saves the newly named setting; it is intentionally no longer shown in Settings UI.
   const legacyPeriod = config.get<number>(`${prefix}.keepAlive.intervalHours`);
   const hours = configuredPeriod ?? legacyPeriod ?? config.get<number>(periodKey, defaultHours);
-  const configuredThreshold = config.get<number>(`${prefix}.autoRotate.thresholdPercent`, 99.5);
-  const thresholdPercent = Number.isFinite(configuredThreshold)
-    ? Math.min(100, Math.max(1, configuredThreshold))
-    : 99.5;
-  // Unset (null) per-window thresholds fall back to thresholdPercent.
-  const windowThreshold = (key: string) => {
-    const value = config.get<number | null>(`${prefix}.autoRotate.${key}`, null);
-    return typeof value === 'number' && Number.isFinite(value) ? Math.min(100, Math.max(1, value)) : undefined;
+  const threshold = (key: string, fallback: number) => {
+    const value = config.get<number | null>(`${prefix}.autoRotate.${key}`, fallback);
+    return typeof value === 'number' && Number.isFinite(value) ? Math.min(100, Math.max(1, value)) : fallback;
   };
   const strategies: RotationStrategy[] = ['sequential', 'soonestReset', 'evenPace', 'leastWaste'];
   const strategy = config.get<RotationStrategy>(`${prefix}.autoRotate.strategy`, provider === 'claude' ? 'soonestReset' : 'sequential');
@@ -1553,10 +1558,9 @@ function automationSettings(provider: AuthProvider, authProfiles: AuthProfileMan
   return {
     enabled: authProfiles.automationEnabled(provider, 'keepAlive'),
     autoRotate: authProfiles.automationEnabled(provider, 'autoRotate'),
-    thresholdPercent,
-    fiveHourThresholdPercent: windowThreshold('fiveHourThresholdPercent'),
-    weeklyThresholdPercent: windowThreshold('weeklyThresholdPercent'),
-    modelWeeklyThresholdPercent: windowThreshold('modelWeeklyThresholdPercent'),
+    // Codex has no 5-hour setting: when it reports that window, only a used-up one (100%) rotates.
+    fiveHourThresholdPercent: provider === 'claude' ? threshold('fiveHourThresholdPercent', 95) : 100,
+    weeklyThresholdPercent: threshold('weeklyThresholdPercent', provider === 'claude' ? 99.5 : 99),
     countsWindow: modelWindowFilter(config.get<string>(`${prefix}.autoRotate.modelLimits`, 'auto'),
       provider === 'claude' ? claudeCodeModel() : undefined),
     strategy: strategies.includes(strategy) ? strategy : 'sequential',

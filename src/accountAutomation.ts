@@ -12,15 +12,15 @@ export type RotationStrategy = 'sequential' | 'soonestReset' | 'evenPace' | 'lea
 /** `limit`: switch only once the active account is exhausted; `proactive`: also when a clearly better one appears. */
 export type RotationTrigger = 'limit' | 'proactive';
 
-/** Per-window rotation thresholds; an unset one falls back to `thresholdPercent`. */
+/**
+ * Rotation thresholds per kind of window. An account is at its limit once any counted window's usage is at or
+ * above its threshold, and can only be switched to while every counted window is below it.
+ */
 export type RotationLimits = {
-  thresholdPercent: number;
   /** Windows measured in hours or minutes, such as "5h". */
-  fiveHourThresholdPercent?: number;
-  /** The all-models weekly window, such as "7d". */
-  weeklyThresholdPercent?: number;
-  /** Model-scoped weekly windows such as "7d Fable"; unset falls back to the weekly threshold. */
-  modelWeeklyThresholdPercent?: number;
+  fiveHourThresholdPercent: number;
+  /** Weekly windows: the all-models "7d" and model-scoped ones such as "7d Fable". */
+  weeklyThresholdPercent: number;
   /** Whether a window counts at all; model-scoped windows can be left out when that model is not used. */
   countsWindow?: (label: string) => boolean;
 };
@@ -79,11 +79,7 @@ function windowMs(label: string): number | undefined {
 
 export function windowThreshold(label: string, limits: number | RotationLimits): number {
   if (typeof limits === 'number') { return limits; }
-  const kind = windowKind(label);
-  const value = kind === 'short' ? limits.fiveHourThresholdPercent
-    : kind === 'weekly' ? limits.weeklyThresholdPercent
-      : limits.modelWeeklyThresholdPercent ?? limits.weeklyThresholdPercent;
-  return value ?? limits.thresholdPercent;
+  return windowKind(label) === 'short' ? limits.fiveHourThresholdPercent : limits.weeklyThresholdPercent;
 }
 
 function counted(usage: LiveUsage, limits: number | RotationLimits): UsageWindow[] {
@@ -190,6 +186,15 @@ export class AccountAutomation {
    */
   onAccountProblem?: (provider: AuthProvider, id: string, reason: string, revoked: boolean) => void;
 
+  /**
+   * Set by extension.ts: told once while the active account is at its limit and no saved account is below its
+   * thresholds, so rotation keeping the active account is not silent. Told again after a switch or a recovery.
+   */
+  onNoCandidate?: (provider: AuthProvider, detail: string) => void;
+
+  /** A reading that belongs to no known profile (Codex session logs) showed the limit; the next sweep reads the active account. */
+  private readonly limitHint = new Set<AuthProvider>();
+
   dispose(): void { this.disposed = true; this.abort.abort(); }
 
   isCheckingActive(provider: AuthProvider): boolean { return this.checkingActive.has(provider); }
@@ -241,6 +246,19 @@ export class AccountAutomation {
     // A reading that reaches a threshold starts rotation now, not on the next minute's tick.
     const settings = this.settings(provider);
     if (settings.autoRotate && this.profiles.activeProfileId(provider) === id && atLimit(usage, settings)) { void this.tick(); }
+  }
+
+  /**
+   * A reading that cannot be attributed to a profile, such as Codex's session logs (they carry no account), still
+   * tells when the active account has probably reached its limit. It never becomes a profile's reading; it only
+   * makes the next sweep read the active account itself instead of trusting its older stored reading.
+   */
+  hintLimit(provider: AuthProvider, usage: LiveUsage): void {
+    const settings = this.settings(provider);
+    if (!settings.autoRotate || !atLimit(usage, settings)) { this.limitHint.delete(provider); return; }
+    if (!this.limitHint.has(provider)) { this.log(`${provider}: the status bar reading is at a rotation threshold; checking the active account`); }
+    this.limitHint.add(provider);
+    void this.tick();
   }
 
   /** Run an explicitly requested keep-alive regardless of the periodic feature state or current backoff. */
@@ -392,11 +410,12 @@ export class AccountAutomation {
     const proactive = settings.trigger === 'proactive' && strategy !== 'sequential';
     const margin = strategy === 'sequential' ? 0 : SWITCH_MARGIN[strategy];
     const usage = deserializeUsage(this.read(provider, active));
-    if (!usage) { return; }
-    if (!atLimit(usage, settings)) {
+    const hinted = this.limitHint.has(provider);
+    if (!usage && !hinted) { return; }
+    if (!hinted && !atLimit(usage!, settings)) {
       if (!proactive || this.stayedMs(provider, active) < (settings.minStayMs ?? 30 * 60_000)) { return; }
       // Only spend endpoint calls when the cached readings already show a clearly better account.
-      const own = rotationScore(strategy, usage, this.now(), settings);
+      const own = rotationScore(strategy, usage!, this.now(), settings);
       if (own === undefined || !this.ranked(provider, active, settings).some((candidate) =>
         candidate.usable && candidate.score !== undefined && candidate.score + margin < own)) { return; }
     }
@@ -408,9 +427,10 @@ export class AccountAutomation {
     if (retryAt !== undefined && this.now() < retryAt) { return; }
     const sweepStart = this.now();
     this.write(provider, rotationId, { checkedAt: sweepStart, nextAllowedAt: sweepStart + settings.checkIntervalMs });
+    this.limitHint.delete(provider);
     // Never rotate based on a stale cache, offline log, expired reset or a failed refresh. A reading taken moments
     // ago (the status bar's) is as good as a new one and spares the rate-limited endpoint, unless a reset has passed.
-    const recent = this.now() - usage.fetchedAt.getTime() <= RECENT_READING_MS &&
+    const recent = !hinted && usage !== undefined && this.now() - usage.fetchedAt.getTime() <= RECENT_READING_MS &&
       usage.windows.every((window) => !window.resetsAt || window.resetsAt.getTime() > this.now());
     const current = recent ? usage : (await this.checkAccount(provider, active, settings, false)).usage;
     if (!current) {
@@ -420,6 +440,7 @@ export class AccountAutomation {
       return;
     }
     const exhausted = atLimit(current, settings);
+    if (!exhausted) { this.write(provider, 'rotation-exhausted', {}); }
     if (!exhausted && !proactive) {
       // The cached reading was out of date and has now been replaced; nothing was spent on candidates.
       this.write(provider, rotationId, { checkedAt: sweepStart });
@@ -449,11 +470,21 @@ export class AccountAutomation {
       if (this.profiles.activeProfileId(provider) !== active || !await this.profiles.matchesNative(provider, active)) { return; }
       if (await this.profiles.activateProfile(provider, candidate.id, true)) {
         this.write(provider, 'rotation-stay', { activeId: candidate.id, checkedAt: this.now() });
+        this.write(provider, 'rotation-exhausted', {});
         this.log(`${provider}: automatically rotated to "${candidate.name}" (${strategy}, ${exhausted ? 'active account at its limit' : 'better account available'})`);
         await this.afterActivate(provider, { kind: 'activated', accountChanged: true });
       }
       return; // At most one switch per sweep, including when every account is exhausted.
     }
-    if (exhausted) { this.log(`${provider}: no account below its rotation thresholds in every usage window; keeping the active account`); }
+    if (exhausted) {
+      const reached = counted(current, settings).filter((window) => window.usedPercent >= windowThreshold(window.label, settings))
+        .map((window) => `${window.label} ${window.usedPercent}% ≥ ${windowThreshold(window.label, settings)}%`).join(', ');
+      const detail = `the active account is at its limit (${reached}), but no other saved account is below its rotation thresholds in every usage window`;
+      this.log(`${provider}: ${detail}; keeping the active account`);
+      if (this.read(provider, 'rotation-exhausted').checkedAt === undefined) {
+        this.write(provider, 'rotation-exhausted', { checkedAt: this.now() });
+        this.onNoCandidate?.(provider, detail);
+      }
+    }
   }
 }

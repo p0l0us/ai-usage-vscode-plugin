@@ -89,14 +89,15 @@ the menu shows what each one is set to.
   reads account limits through its CLI. Its model is configurable; an empty model setting uses the CLI default.
 - Both collect usage for inactive accounts. The authentication profile list shows each account's last usage,
   check time and errors. Model calls consume subscription usage and run only while this extension host is running.
-- Automatic rotation starts when **any** window reaches the service's configured threshold (default **99.5%**;
-  the 5h, weekly and Claude's Fable weekly window can each have their own), including either Codex period. It
-  checks the current account and candidates again, switches to an account below the threshold in **every** counted
-  window, chosen for Claude by `aiUsage.claude.autoRotate.strategy` (soonest weekly reset first by default, or even
-  pace, least waste, or saved order) and for Codex in saved order,
-  and keeps the current login if all accounts are exhausted or unavailable. A failed sweep is throttled until
-  the provider's next check interval. Rotation also works without keep-alives enabled. Claude can also switch
-  proactively to a clearly better account (`aiUsage.claude.autoRotate.trigger`).
+- Automatic rotation switches as soon as the active account's usage reaches a threshold (usage ≥ threshold).
+  Claude has two: **95%** for the 5-hour window and **99.5%** for the weekly windows (all models, and `7d Fable` when it
+  counts). Codex has one: **99%** for the weekly window; a Codex 5-hour window, when reported, rotates only once it is
+  used up. The account switched to must be below the thresholds in every window. Claude picks it with
+  `aiUsage.claude.autoRotate.strategy` (soonest weekly reset first by default, or even pace, least waste or saved
+  order); Codex uses saved order. When no account is below the thresholds, the current login is kept and a
+  notification says so. Rotation also works without keep-alives enabled. Claude can also switch proactively to a
+  clearly better account (`aiUsage.claude.autoRotate.trigger`). Details:
+  [Rotation strategies and thresholds](docs/CONFIGURATION.md#rotation-strategies-and-thresholds).
 
 Models, keep-alive periods, rotation thresholds, CLI paths, dedicated homes and usage sources are configurable
 under `aiUsage.claude.*` and `aiUsage.codex.*`; see

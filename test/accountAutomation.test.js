@@ -20,7 +20,7 @@ function fixture(t, options = {}) {
   const values = { a: [99.5, 10], b: [10, 10], c: [20, 20], ...options.values };
   const calls = [], switches = [], refreshed = [], messages = [], problems = [];
   const settings = Object.fromEntries(['claude', 'codex'].map(provider => [provider, {
-    enabled: false, autoRotate: false, thresholdPercent: 99.5, intervalMs: (provider === 'claude' ? 2 : 6) * 3600000,
+    enabled: false, autoRotate: false, fiveHourThresholdPercent: 99.5, weeklyThresholdPercent: 99.5, intervalMs: (provider === 'claude' ? 2 : 6) * 3600000,
     checkIntervalMs: 600000, home: directory, cliPath: provider, model: '', ...options.settings?.[provider]
   }]));
   const profiles = {
@@ -244,30 +244,31 @@ test('rotation wraps once through saved order without selecting current account'
 test('per-service rotation threshold controls triggering and candidate eligibility', async t => {
   const f = fixture(t, {
     values: { a: [80, 10], b: [79.9, 20] },
-    settings: { codex: { autoRotate: true, thresholdPercent: 80 } }
+    settings: { codex: { autoRotate: true, fiveHourThresholdPercent: 80, weeklyThresholdPercent: 80 } }
   });
   f.observe('codex', [80, 10]);
   await f.service.tick();
   assert.deepEqual(f.switches, [['codex', 'b', true]]);
 });
 
-test('5-hour, weekly and Fable thresholds apply to their own windows and fall back in order', () => {
+test('the 5-hour threshold applies to the 5h window and the weekly one to every weekly window, at usage >= threshold', () => {
   const now = Date.now();
-  const limits = { thresholdPercent: 99.5, fiveHourThresholdPercent: 80, weeklyThresholdPercent: 60 };
+  const limits = { fiveHourThresholdPercent: 80, weeklyThresholdPercent: 60 };
   assert.equal(atLimit(usage('claude', [['5h', 85, 1], ['7d', 10, 24]], now), limits), true);
-  assert.equal(atLimit(usage('claude', [['5h', 50, 1], ['7d', 59, 24]], now), limits), false);
-  assert.equal(atLimit(usage('claude', [['5h', 50, 1], ['7d', 61, 24]], now), limits), true);
-  // "7d Fable" uses the weekly threshold until its own is set.
+  assert.equal(atLimit(usage('claude', [['5h', 80, 1], ['7d', 10, 24]], now), limits), true);
+  assert.equal(atLimit(usage('claude', [['5h', 79.9, 1], ['7d', 59, 24]], now), limits), false);
+  assert.equal(atLimit(usage('claude', [['5h', 50, 1], ['7d', 60, 24]], now), limits), true);
+  // "7d Fable" is a weekly window too.
   assert.equal(atLimit(usage('claude', [['5h', 1, 1], ['7d', 1, 24], ['7d Fable', 65, 24]], now), limits), true);
-  assert.equal(atLimit(usage('claude', [['5h', 1, 1], ['7d', 1, 24], ['7d Fable', 65, 24]], now),
-    { ...limits, modelWeeklyThresholdPercent: 90 }), false);
-  assert.equal(atLimit(usage('claude', [['5h', 99, 1]], now), { thresholdPercent: 99.5 }), false);
+  // A candidate has to be below every threshold: exactly at one is not eligible.
+  assert.equal(eligibleAccount(usage('claude', [['5h', 80, 1], ['7d', 10, 24]], now), now, limits), false);
+  assert.equal(eligibleAccount(usage('claude', [['5h', 79, 1], ['7d', 59, 24]], now), now, limits), true);
 });
 
 test('the Fable window counts only for the configured model in auto mode', () => {
   const now = Date.now();
   const fableOut = usage('claude', [['5h', 1, 1], ['7d', 50, 24], ['7d Fable', 100, 24]], now);
-  const limits = countsWindow => ({ thresholdPercent: 99.5, countsWindow });
+  const limits = countsWindow => ({ fiveHourThresholdPercent: 99.5, weeklyThresholdPercent: 99.5, countsWindow });
   assert.equal(eligibleAccount(fableOut, now, limits(modelWindowFilter('auto', 'claude-fable-5-1'))), false);
   assert.equal(eligibleAccount(fableOut, now, limits(modelWindowFilter('auto', 'opus'))), true);
   assert.equal(eligibleAccount(fableOut, now, limits(modelWindowFilter('auto', undefined))), false);
@@ -347,7 +348,7 @@ test('least waste prefers the most allowance per hour over the soonest reset', a
 
 test('a cached window whose reset has passed ranks as fresh', () => {
   const now = Date.now();
-  const limits = { thresholdPercent: 99.5 };
+  const limits = { fiveHourThresholdPercent: 99.5, weeklyThresholdPercent: 99.5 };
   const stale = usage('claude', [['5h', 100, -1], ['7d', 95, -2]], now);
   // Rolled forward: the 7d window restarted 2 hours ago.
   const fresh = usage('claude', [['5h', 0, 4], ['7d', 0, 166]], now);
@@ -388,4 +389,48 @@ test('a sweep that cannot read the active account retries once its pause ends, n
   f.advance(2 * 60000 + 1);
   await f.service.tick();
   assert.deepEqual(f.switches, [['claude', 'b', true]]);
+});
+
+test('every strategy rotates at usage >= threshold and only to an account below every threshold', async t => {
+  for (const strategy of ['sequential', 'soonestReset', 'evenPace', 'leastWaste']) {
+    const f = fixture(t, {
+      values: { a: [10, 99], b: [10, 99], c: [94, 50] },
+      settings: { codex: { autoRotate: true, strategy, fiveHourThresholdPercent: 95, weeklyThresholdPercent: 99 } }
+    });
+    f.observeAll('codex');
+    await f.service.tick();
+    assert.deepEqual(f.switches, [['codex', 'c', true]], strategy);
+  }
+});
+
+test('a session-log reading at the threshold makes the sweep read the active account instead of its stored reading', async t => {
+  const f = fixture(t, {
+    values: { a: [10, 97], b: [10, 50] },
+    settings: { codex: { autoRotate: true, fiveHourThresholdPercent: 100, weeklyThresholdPercent: 90 } }
+  });
+  // The stored reading of the active account predates the limit.
+  f.observe('codex', [10, 40]);
+  await f.service.tick();
+  assert.deepEqual(f.switches, []);
+  f.service.hintLimit('codex', usage('codex', [10, 97], Date.now()));
+  await f.service.tick();
+  assert.deepEqual(f.switches, [['codex', 'b', true]]);
+  assert.deepEqual(f.calls[0], ['codex', 'a', false]);
+});
+
+test('rotation that finds no account below the thresholds says so once', async t => {
+  const f = fixture(t, {
+    values: { a: [10, 97], b: [10, 98], c: [10, 100] },
+    settings: { codex: { autoRotate: true, fiveHourThresholdPercent: 100, weeklyThresholdPercent: 90 } }
+  });
+  const notices = [];
+  f.service.onNoCandidate = (provider, detail) => notices.push([provider, detail]);
+  f.observeAll('codex');
+  await f.service.tick();
+  f.advance(20 * 60_000);
+  f.observe('codex', [10, 97]);
+  await f.service.tick();
+  assert.deepEqual(f.switches, []);
+  assert.equal(notices.length, 1);
+  assert.match(notices[0][1], /7d 97% ≥ 90%/);
 });
