@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
-const { CodexAccountProxy, CODEX_PROXY_SERVICE, isLoopbackHost, parseCodexLogin, probeCodexProxy, readCodexLogin } = require('../out/codexProxy');
+const { CodexAccountProxy, CODEX_PROXY_SERVICE, isLoopbackHost, parseCodexLogin, probeCodexProxy, readCodexLogin, upstreamErrorDetail, accessTokenMayHaveExpired } = require('../out/codexProxy');
 
 const AUTH = 'https://api.openai.com/auth';
 const jwt = (claims) => `h.${Buffer.from(JSON.stringify(claims)).toString('base64url')}.s`;
@@ -37,7 +37,7 @@ const sse = (record, res) => {
   setTimeout(() => res.end(SSE.slice(20)), 10);
 };
 
-async function fixture(t, { document = chatgptDocument('access-1'), refreshLogin, ...rest } = {}) {
+async function fixture(t, { document = chatgptDocument('access-1'), refreshLogin, onLoginRejected, now, ...rest } = {}) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-codex-proxy-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   if (document) {
@@ -47,7 +47,7 @@ async function fixture(t, { document = chatgptDocument('access-1'), refreshLogin
   const api = await upstream(t, rest.apiRespond ?? sse);
   const logs = [];
   const proxy = new CodexAccountProxy({
-    home, port: 0, secret: 'secret-1', log: (message) => logs.push(message), refreshLogin,
+    home, port: 0, secret: 'secret-1', log: (message) => logs.push(message), refreshLogin, onLoginRejected, now,
     chatgptBaseUrl: `${chatgpt.url}/backend-api/codex`, apiBaseUrl: `${api.url}/v1`, version: '0.0.17'
   });
   await proxy.start();
@@ -196,23 +196,102 @@ test('an upstream 401 triggers one login refresh through Codex and a retry with 
   assert.deepEqual(chatgpt.requests.map((request) => request.headers.authorization), ['Bearer access-1', 'Bearer access-fresh']);
 });
 
-test('an upstream 401 that a refresh does not resolve is passed through unchanged', async (t) => {
+test('an upstream 401 that a refresh does not resolve is answered with a message that says what to do', async (t) => {
   let refreshes = 0;
-  const { proxy, chatgpt } = await fixture(t, {
+  const rejected = [];
+  const { proxy, home, chatgpt } = await fixture(t, {
     chatgptRespond: (record, res) => {
       res.writeHead(401, { 'content-type': 'application/json', 'x-request-id': 'req-1' });
-      res.end('{"error":{"code":"token_revoked"}}');
+      res.end('{"error":{"code":"token_revoked","message":"Encountered invalidated oauth token for user"}}');
     },
     refreshLogin: async () => {
       refreshes++;
-    }
+    },
+    onLoginRejected: (message) => rejected.push(message)
   });
   const response = await send(proxy);
   assert.equal(response.status, 401);
   assert.equal(response.headers['x-request-id'], 'req-1');
-  assert.equal(response.body, '{"error":{"code":"token_revoked"}}');
+  const message = JSON.parse(response.body).error.message;
+  assert.ok(message.includes(path.join(home, 'auth.json')));
+  assert.match(message, /token_revoked: Encountered invalidated oauth token for user/);
+  assert.match(message, /codex login/);
   assert.equal(refreshes, 1);
   assert.equal(chatgpt.requests.length, 1);
+  assert.deepEqual(rejected, [message]);
+});
+
+test('a rejected token is not refreshed again until the backoff ends or auth.json holds a new one', async (t) => {
+  let refreshes = 0;
+  let clock = 0;
+  const rejected = [];
+  const { proxy, home, chatgpt } = await fixture(t, {
+    chatgptRespond: (record, res) => {
+      res.writeHead(401, { 'content-type': 'application/json' });
+      res.end('{"detail":"Unauthorized"}');
+    },
+    refreshLogin: async () => {
+      refreshes++;
+    },
+    onLoginRejected: (message) => rejected.push(message),
+    now: () => clock
+  });
+  await send(proxy);
+  await send(proxy);
+  await send(proxy);
+  assert.equal(refreshes, 1);
+  assert.equal(rejected.length, 1);
+  assert.equal(chatgpt.requests.length, 3);
+  clock += 5 * 60_000;
+  await send(proxy);
+  assert.equal(refreshes, 2);
+  assert.equal(rejected.length, 1);
+  fs.writeFileSync(path.join(home, 'auth.json'), JSON.stringify(chatgptDocument('access-2')));
+  const response = await send(proxy);
+  assert.equal(refreshes, 3);
+  assert.equal(rejected.length, 2);
+  assert.match(JSON.parse(response.body).error.message, /\(Unauthorized\)/);
+});
+
+test('a 401 for an access token that has not expired is never refreshed', async (t) => {
+  let refreshes = 0;
+  const rejected = [];
+  const valid = jwt({ exp: Math.floor(Date.now() / 1000) + 3600 });
+  const { proxy, chatgpt } = await fixture(t, {
+    document: chatgptDocument(valid),
+    chatgptRespond: (record, res) => {
+      res.writeHead(401, { 'content-type': 'application/json' });
+      res.end('{"error":{"message":"Incorrect API key provided: sk-svcac***fvMA"}}');
+    },
+    refreshLogin: async () => {
+      refreshes++;
+    },
+    onLoginRejected: (message) => rejected.push(message)
+  });
+  const response = await send(proxy);
+  assert.equal(response.status, 401);
+  assert.match(JSON.parse(response.body).error.message, /OpenAI rejected the Codex login/);
+  assert.equal(refreshes, 0);
+  assert.equal(chatgpt.requests.length, 1);
+  assert.equal(rejected.length, 1);
+});
+
+test('accessTokenMayHaveExpired reads exp and treats an unreadable token as possibly expired', () => {
+  const now = Date.parse('2026-09-25T12:00:00Z');
+  const at = (offsetSeconds) => jwt({ exp: Math.floor(now / 1000) + offsetSeconds });
+  assert.equal(accessTokenMayHaveExpired(at(3600), now), false);
+  assert.equal(accessTokenMayHaveExpired(at(30), now), true);
+  assert.equal(accessTokenMayHaveExpired(at(-10), now), true);
+  assert.equal(accessTokenMayHaveExpired(jwt({}), now), true);
+  assert.equal(accessTokenMayHaveExpired('opaque', now), true);
+});
+
+test('upstreamErrorDetail names the reason from the error shapes OpenAI returns', () => {
+  assert.equal(upstreamErrorDetail('{"error":{"code":"token_revoked","message":"gone"}}'), 'token_revoked: gone');
+  assert.equal(upstreamErrorDetail('{"error":{"message":"Incorrect API key provided","code":null}}'), 'Incorrect API key provided');
+  assert.equal(upstreamErrorDetail('{"detail":"Unauthorized"}'), 'Unauthorized');
+  assert.equal(upstreamErrorDetail('{}'), undefined);
+  assert.equal(upstreamErrorDetail('not json'), undefined);
 });
 
 test('an unreachable upstream is reported as 502 and a WebSocket upgrade is refused', async (t) => {

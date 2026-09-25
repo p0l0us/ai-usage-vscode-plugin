@@ -12,6 +12,7 @@ import {
 } from './authFiles';
 import { claudeAccountFile, CredentialIdentity, resolveCredentialIdentity } from './accountIdentity';
 import { openAiUsageSettings } from './settingsLink';
+import type { ProfileLimitState } from './accountAutomation';
 
 const STATE_KEY = 'aiUsage.authProfiles.v1';
 const AUTOMATION_STATE_KEY = 'aiUsage.accountAutomation.v1';
@@ -59,6 +60,8 @@ function automationKey(provider: AuthProvider, feature: AccountAutomationFeature
 
 type ProfileItem = vscode.QuickPickItem & {
   profile?: ProfileMetadata;
+  /** Set when the profile has nothing left in any window; selecting it is a no-op warning, not an activation. */
+  readOnly?: boolean;
   action?: 'save' | 'import' | 'rename' | 'delete' | 'keepAliveNow' | 'settings' | 'serviceSettings' | 'back';
 };
 
@@ -156,6 +159,9 @@ export class AuthProfileManager {
 
   /** Set by extension.ts: true while the Codex account proxy routes Codex chats, so a switch needs no restart. */
   codexChatsFollowSwitch: () => boolean = () => false;
+
+  /** Set by extension.ts: a profile's usage limit state, so the accounts list can block or dim exhausted ones. */
+  limitState: (provider: AuthProvider, id: string) => ProfileLimitState | undefined = () => undefined;
 
   profiles(provider: AuthProvider): ProfileMetadata[] {
     return this.state()[provider].profiles;
@@ -375,6 +381,10 @@ export class AuthProfileManager {
       }
       try {
         if (item.profile) {
+          if (item.readOnly) {
+            void vscode.window.showWarningMessage(`“${item.profile.name}” is at its usage limit and can't be activated until it resets.`);
+            continue;
+          }
           // Re-selecting the login that is already active and already written changes nothing for running processes.
           const unchanged = this.activeProfileId(provider) === item.profile.id && await this.matchesNative(provider, item.profile.id);
           await hooks?.beforeActivate?.(provider);
@@ -469,12 +479,20 @@ export class AuthProfileManager {
 
   private items(provider: AuthProvider, withBack = false): ProfileItem[] {
     const providerState = this.state()[provider];
-    const items: ProfileItem[] = providerState.profiles.map((profile) => ({
-      label: `${profile.id === providerState.activeProfileId ? '$(check)' : '$(key)'} ${profile.name}`,
-      description: profileDescription(profile, profile.id === providerState.activeProfileId, providerState.profiles),
-      detail: this.usageDetail?.(provider, profile.id) ?? `Saved ${new Date(profile.updatedAt).toLocaleString()} · Usage not checked yet`,
-      profile
-    }));
+    const items: ProfileItem[] = providerState.profiles.map((profile) => {
+      const active = profile.id === providerState.activeProfileId;
+      const limits = this.limitState(provider, profile.id);
+      const icon = active ? 'check' : 'key';
+      return {
+        label: limits?.readOnly ? `$(circle-slash) ${profile.name}` : limits?.dimmed ? profile.name : `$(${icon}) ${profile.name}`,
+        iconPath: limits?.dimmed ? new vscode.ThemeIcon(icon, new vscode.ThemeColor('disabledForeground')) : undefined,
+        description: [profileDescription(profile, active, providerState.profiles),
+          limits?.readOnly ? 'At its usage limit' : limits?.dimmed ? 'Fable limit reached' : undefined].filter(Boolean).join(' · ') || undefined,
+        detail: this.usageDetail?.(provider, profile.id) ?? `Saved ${new Date(profile.updatedAt).toLocaleString()} · Usage not checked yet`,
+        profile,
+        readOnly: limits?.readOnly
+      };
+    });
     if (!items.length) {
       items.push({ label: 'No profiles saved yet', kind: vscode.QuickPickItemKind.Separator });
     }

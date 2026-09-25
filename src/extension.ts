@@ -239,6 +239,7 @@ export function activate(context: vscode.ExtensionContext): void {
     String((context.extension.packageJSON as { version?: string }).version ?? '0'));
   context.subscriptions.push(codexProxy);
   authProfiles.codexChatsFollowSwitch = () => codexProxy.active;
+  authProfiles.limitState = (provider, id) => automation?.limitState(provider, id);
   void codexProxy.sync();
   // Writes the aiUsage.codexConfig.* values that are set into Codex's config.toml; unset ones leave the file alone.
   const syncCodexSettings = () => {

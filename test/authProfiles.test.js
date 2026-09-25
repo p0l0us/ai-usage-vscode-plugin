@@ -16,6 +16,8 @@ const load = Module._load;
 Module._load = function(id, ...args) {
   if (id === 'vscode') return {
     QuickPickItemKind: { Separator: -1 },
+    ThemeIcon: class { constructor(id, color) { this.id = id; this.color = color; } },
+    ThemeColor: class { constructor(id) { this.id = id; } },
     window: {
       showInformationMessage(message) { informationMessages.push(message); },
       showErrorMessage(message) { errorMessages.push(message); },
@@ -297,6 +299,33 @@ test('saving a login that is already saved warns about token revocation and mark
   assert.equal(items.length, 2);
   assert.equal(items[0].description, 'x@example.com · duplicate of “X copy”');
   assert.equal(items[1].description, 'x@example.com · duplicate of “X” · Active');
+});
+
+test('items() marks an exhausted profile read-only and a Fable-only cap as dimmed but selectable', async t => {
+  const f = fixture(t);
+  f.manager.limitState = (provider, id) => (provider === 'claude' && id === 'a') ? { readOnly: true, dimmed: false } : undefined;
+  const readOnlyItem = f.manager.items('claude').find(item => item.profile?.id === 'a');
+  assert.equal(readOnlyItem.readOnly, true);
+  assert.match(readOnlyItem.label, /^\$\(circle-slash\) A$/);
+  assert.equal(readOnlyItem.description, 'Active · At its usage limit');
+
+  f.manager.limitState = (provider, id) => (provider === 'claude' && id === 'a') ? { readOnly: false, dimmed: true } : undefined;
+  const dimmedItem = f.manager.items('claude').find(item => item.profile?.id === 'a');
+  assert.equal(dimmedItem.readOnly, false);
+  assert.equal(dimmedItem.label, 'A');
+  assert.equal(dimmedItem.iconPath.id, 'check');
+  assert.equal(dimmedItem.iconPath.color.id, 'disabledForeground');
+  assert.equal(dimmedItem.description, 'Active · Fable limit reached');
+});
+
+test('a read-only profile warns instead of activating', async t => {
+  const f = fixture(t);
+  f.manager.limitState = (provider, id) => (provider === 'claude' && id === 'a') ? { readOnly: true, dimmed: false } : undefined;
+  quickPickResponses.push(items => items.find(item => item.profile?.id === 'a'));
+  quickPickResponses.push(undefined); // close the menu
+  await f.manager.show('claude');
+  assert.deepEqual(warningMessages, ['“A” is at its usage limit and can\'t be activated until it resets.']);
+  assert.equal(informationMessages.length, 0);
 });
 
 test('only a real account change is reported to the activation hook', async t => {

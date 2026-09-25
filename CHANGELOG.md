@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.0.29 (2026-09-25)
+
+- The Codex account proxy no longer asks Codex to refresh a login that has not expired. An upstream 401 for a valid
+  token means the login was rejected, and refreshing it anyway rotated the refresh token under every other Codex
+  process, which can get even a fresh sign-in revoked. The proxy used to refresh on every 401, about once a second
+  while a chat retried. An expired token is still refreshed, at most once every 5 minutes.
+- A Codex login that OpenAI rejects through the proxy now reads plainly: chats show "OpenAI rejected the Codex login
+  in …/auth.json (reason). Run `codex login` or activate another AI Usage profile, then start a new chat." instead
+  of OpenAI's misleading "Incorrect API key provided: sk-svcac…", and one notification says the same per rejected
+  login instead of a log line per request.
+- The Accounts menu marks accounts at their usage limit. An account with nothing left in its 5-hour or all-models
+  weekly window shows a no-entry icon and **At its usage limit**, and selecting it only explains that it cannot be
+  activated until it resets. An account that has only used up a model's weekly window (`7d Fable`) is dimmed with
+  **Fable limit reached** and can still be activated for other models.
+- Rotation strategies and thresholds are now described in their own page,
+  [Account rotation: strategies and thresholds](docs/ROTATION.md), with worked examples; the configuration reference
+  keeps a short summary.
+
 ## 0.0.28 (2026-09-24)
 
 - Fewer rotation thresholds. Claude has `aiUsage.claude.autoRotate.fiveHourThresholdPercent` (default **95**) and

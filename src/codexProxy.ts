@@ -29,6 +29,15 @@ const MAX_BODY_BYTES = 64 * 1024 * 1024;
 /** Time to first upstream byte. Streams are not limited afterwards; long turns are normal. */
 const UPSTREAM_HEADERS_TIMEOUT_MS = 60_000;
 const PROBE_TIMEOUT_MS = 1_500;
+/**
+ * How long a ChatGPT token that a refresh could not replace is left alone. A revoked login keeps failing, and a
+ * refresh per request would start a `codex app-server` every couple of seconds for nothing.
+ */
+const REJECTED_LOGIN_BACKOFF_MS = 5 * 60_000;
+/** A token this close to its `exp` counts as expired, so a 401 for it is worth one refresh. */
+const EXPIRY_SLACK_MS = 60_000;
+/** Enough of an upstream error body to name the reason; the rest is dropped. */
+const MAX_ERROR_BODY_BYTES = 64 * 1024;
 
 /** Request headers that describe the local hop or that the proxy sets itself. */
 const DROPPED_REQUEST_HEADERS = new Set([
@@ -58,6 +67,17 @@ function accountIdFromToken(token: string): string | undefined {
   const auth = jwtClaims(token)?.['https://api.openai.com/auth'];
   const id = typeof auth === 'object' && auth !== null ? (auth as Record<string, unknown>).chatgpt_account_id : undefined;
   return typeof id === 'string' && id ? id : undefined;
+}
+
+/**
+ * Whether a 401 for this access token could be cured by a refresh: true once its `exp` has passed (or is about to),
+ * and when the token carries no readable `exp`. A 401 for a token that is still valid means the login itself was
+ * rejected (revoked, or the account refused). Refreshing then rotates the refresh token under every other Codex process
+ * that still holds the old one, and OpenAI answers that reuse by revoking the new login as well.
+ */
+export function accessTokenMayHaveExpired(token: string, now = Date.now()): boolean {
+  const exp = jwtClaims(token)?.exp;
+  return typeof exp !== 'number' || !Number.isFinite(exp) || exp * 1000 - EXPIRY_SLACK_MS <= now;
 }
 
 /** Reads a Codex `auth.json` document the way Codex does: a ChatGPT login wins unless `auth_mode` says API key. */
@@ -107,6 +127,10 @@ export type CodexProxyOptions = {
   apiBaseUrl?: string;
   /** Reported by the health endpoint so another window can recognise the proxy. */
   version?: string;
+  /** Called once per token OpenAI rejects and a refresh does not replace, with the message chats receive. */
+  onLoginRejected?: (message: string) => void;
+  /** Clock for the refresh backoff (tests). */
+  now?: () => number;
 };
 
 type ProxyError = { error: { message: string; type: string } };
@@ -175,6 +199,34 @@ export function upstreamHeaders(incoming: http.IncomingHttpHeaders, login: Codex
   return headers;
 }
 
+/** `error.code`, `error.message` or `detail` from an OpenAI error body; undefined when the body says nothing usable. */
+export function upstreamErrorDetail(body: string): string | undefined {
+  try {
+    const parsed: unknown = JSON.parse(body);
+    const record = typeof parsed === 'object' && parsed !== null ? parsed as Record<string, unknown> : {};
+    const error = typeof record.error === 'object' && record.error !== null ? record.error as Record<string, unknown> : {};
+    const parts = [error.code, error.message, record.detail].filter((part): part is string => typeof part === 'string' && part !== '');
+    return parts.length ? parts.join(': ').slice(0, 300) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function readUpstreamText(response: http.IncomingMessage): Promise<string> {
+  return new Promise((resolve) => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    response.on('data', (chunk: Buffer) => {
+      if (size < MAX_ERROR_BODY_BYTES) {
+        chunks.push(chunk);
+        size += chunk.length;
+      }
+    });
+    response.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+    response.on('error', () => resolve(Buffer.concat(chunks).toString('utf8')));
+  });
+}
+
 function responseHeaders(incoming: http.IncomingHttpHeaders): http.OutgoingHttpHeaders {
   const headers: http.OutgoingHttpHeaders = {};
   for (const [name, value] of Object.entries(incoming)) {
@@ -189,6 +241,8 @@ export class CodexAccountProxy {
   private server: http.Server | undefined;
   private refreshing: Promise<void> | undefined;
   private requests = 0;
+  /** The last token OpenAI rejected after a refresh could not replace it, and until when it is left alone. */
+  private rejected: { token: string; until: number } | undefined;
 
   constructor(private readonly options: CodexProxyOptions) {}
 
@@ -286,7 +340,8 @@ export class CodexAccountProxy {
     });
     try {
       let upstream = await this.forward(req, url, body, login, aborted.signal);
-      if (upstream.statusCode === 401 && login.kind === 'chatgpt' && this.options.refreshLogin) {
+      if (upstream.statusCode === 401 && login.kind === 'chatgpt' && this.options.refreshLogin && !this.isRejected(login.accessToken)
+        && accessTokenMayHaveExpired(login.accessToken, this.now())) {
         this.options.log(`codex proxy #${id}: upstream answered 401; asking Codex to refresh the login`);
         await this.refresh();
         const refreshed = readCodexLogin(this.options.home);
@@ -298,6 +353,10 @@ export class CodexAccountProxy {
       }
       if (upstream.statusCode && upstream.statusCode >= 400) {
         this.options.log(`codex proxy #${id}: ${req.method} ${url.pathname} → ${upstream.statusCode} (${login.kind} login)`);
+      }
+      if (upstream.statusCode === 401) {
+        await this.rejectLogin(res, upstream, login);
+        return;
       }
       res.writeHead(upstream.statusCode ?? 502, responseHeaders(upstream.headers));
       upstream.pipe(res);
@@ -328,6 +387,42 @@ export class CodexAccountProxy {
       request.on('error', reject);
       request.end(body);
     });
+  }
+
+  private now(): number {
+    return this.options.now?.() ?? Date.now();
+  }
+
+  private isRejected(token: string): boolean {
+    return this.rejected?.token === token && this.now() < this.rejected.until;
+  }
+
+  /**
+   * Answers a 401 the refresh did not cure with a message that says what to do, instead of OpenAI's wording (a
+   * revoked ChatGPT login comes back as "Incorrect API key provided: sk-svcac…"). Codex shows `error.message`.
+   */
+  private async rejectLogin(res: http.ServerResponse, upstream: http.IncomingMessage, login: CodexLogin): Promise<void> {
+    const encoded = upstream.headers['content-encoding'] !== undefined && upstream.headers['content-encoding'] !== 'identity';
+    const detail = encoded ? undefined : upstreamErrorDetail(await readUpstreamText(upstream));
+    if (encoded) {
+      upstream.resume();
+    }
+    const message = `OpenAI rejected the Codex login in ${codexAuthPath(this.options.home)}${detail ? ` (${detail})` : ''}. `
+      + 'Run `codex login` or activate another AI Usage profile, then start a new chat.';
+    const token = login.kind === 'chatgpt' ? login.accessToken : login.apiKey;
+    const fresh = this.rejected?.token !== token;
+    this.rejected = { token, until: this.now() + REJECTED_LOGIN_BACKOFF_MS };
+    if (fresh) {
+      this.options.log(`codex proxy: ${message}`);
+      this.options.onLoginRejected?.(message);
+    }
+    const headers = responseHeaders(upstream.headers);
+    delete headers['content-encoding'];
+    delete headers['content-length'];
+    delete headers['content-type'];
+    const text = JSON.stringify(errorBody(message));
+    res.writeHead(401, { ...headers, 'content-type': 'application/json', 'content-length': Buffer.byteLength(text) });
+    res.end(text);
   }
 
   /** One refresh at a time: concurrent 401s share it, so the refresh token is never used twice. */

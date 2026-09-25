@@ -2,7 +2,7 @@
   "name": "ai-usage-vscode-plugin",
   "displayName": "AI subscription management and usage",
   "description": "Manage your Claude Code, Codex and GitHub Copilot subscriptions and see what is left of them: switch between saved accounts without signing in again, keep them warm, rotate on exhaustion, and read live 5h/7d windows, premium requests and org billing in the status bar and chat input. Open source, contributions welcome.",
-  "version": "0.0.28",
+  "version": "0.0.29",
   "publisher": "p0l0us",
   "license": "GPL-3.0-only",
   "repository": {
@@ -7131,7 +7131,7 @@
             "default": "soonestReset",
             "enumDescriptions": [
               "Soonest reset first: use the account whose weekly window resets soonest, so allowance about to expire is spent first. An account far ahead of an even spend with more than half its week left goes to the back of the queue.",
-              "Even pace: use the account furthest below a straight line from 0% at the start of its week to 100% at its reset. No account runs out early; switches more often.",
+              "Even pace: use the account furthest below a straight line from 0% at the start of its week to 100% at its reset. No account runs out early; best combined with the proactive trigger.",
               "Least waste: use the account with the highest weekly allowance left per hour until reset, with a small bonus for a 5h window about to reset unused.",
               "Sequential: the next saved profile in list order (the behaviour before 0.0.23)."
             ],

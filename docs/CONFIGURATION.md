@@ -291,92 +291,22 @@ provider check interval and any longer `Retry-After`.
 
 ### Rotation strategies and thresholds
 
-#### Thresholds
+Full description with worked examples: **[Account rotation: strategies and thresholds](ROTATION.md)**.
 
-Every usage window of an account has a threshold, set by the kind of window:
-
-| Window | Claude | Codex |
-| --- | --- | --- |
-| 5-hour (`5h`) | `autoRotate.fiveHourThresholdPercent`, default **95** | fixed at **100** (only a used-up window) |
-| Weekly, all models (`7d`) | `autoRotate.weeklyThresholdPercent`, default **99.5** | `autoRotate.weeklyThresholdPercent`, default **99** |
-| Weekly, one model (`7d Fable`) | the weekly threshold, when `autoRotate.modelLimits` counts the window | — |
-
-The thresholds are used in two ways:
-
-- **When to rotate.** The active account is *at its limit* as soon as any counted window's usage is **at or above**
-  its threshold (`usage ≥ threshold`). With the Claude defaults, 95% in the 5-hour window or 99.5% in a weekly window
-  starts a rotation. With the Codex default, 99% weekly does.
-- **Where to rotate to.** An account can only be switched to while **every** counted window is **below** its
-  threshold. An account at exactly the threshold is not a candidate, so it is never switched to only to be rotated
-  away again. It also has to report every window the active account reports, and none of its windows may have a
-  reset time that has already passed (such a reading is out of date and is read again first).
-
-A threshold therefore also limits how far the other accounts can be used. With a weekly threshold of 90, an account
-at 92% weekly is neither kept nor switched to. When every saved account is at or above a threshold, no account
-qualifies: the active login is kept, the AI Usage log names the window that reached its threshold, and a
-notification says once that no account is available. It is repeated after a switch, or once the active account has
-been below its thresholds again. Another sweep runs after `aiUsage.<provider>.checkIntervalMinutes`, so accounts
-qualify again as their windows reset.
-
-`autoRotate.modelLimits` (Claude) decides whether `7d Fable` counts at all: `auto` counts it when Claude Code's
-`model` setting is Fable or unset, `always` counts it, `never` ignores it. A window that does not count neither
-starts a rotation nor blocks a candidate.
-
-#### What starts a rotation
-
-- A reading of the active account that reaches a threshold starts a sweep at once instead of waiting for the
-  one-minute scheduler. A reading at most 2 minutes old is used as the active account's current reading, so the
-  rate-limited usage endpoint is not asked again.
-- Codex's status bar usually reads the session logs, which do not name an account, so their figures are never stored
-  as a profile's reading. When they show a threshold reached, the next sweep reads the active account itself instead
-  of trusting its stored reading, which may be hours old.
-- Without such a reading, the one-minute scheduler looks at the stored reading of the active account; keep-alives
-  (when enabled) keep those readings current.
-- When the active account cannot be read (its checks are paused after a provider error), the sweep is retried as
-  soon as that pause ends rather than a full check interval later.
-
-Every sweep first needs a successful current reading of the active account. If that reading turns out to be below
-every threshold, nothing is switched.
-
-#### Choosing the next account (strategies)
-
-Candidates are visited in the order the strategy ranks them, and the first one that passes is switched to. At most
-one switch is made per sweep. Before switching, the candidate is read again (it must still be below every threshold)
-and sent a keep-alive, because a usage reading alone does not prove the login works. A candidate that fails either
-check is reported and skipped.
-
-Codex always uses `sequential`. Claude's `autoRotate.strategy`:
-
-- `sequential`: the saved profiles after the active one, in list order, wrapping once.
-- `soonestReset` (default): the account whose weekly window resets soonest first, so allowance about to expire is
-  spent before it is lost. An account more than 10 points ahead of an even spend, with more than half its week left,
-  goes to the back of the queue.
-- `evenPace`: the account furthest below a straight line from 0% at the start of its week to 100% at its reset. No
-  account runs out early, at the cost of more switches.
-- `leastWaste`: the highest weekly allowance left per hour until reset, with a 10% bonus when unused 5-hour allowance
-  resets within the hour.
-
-The strategies other than `sequential` rank candidates from the readings already stored for each account, so ranking
-costs no endpoint calls. They measure headroom up to the thresholds: "allowance left" is the weekly threshold minus
-the usage, not 100 minus the usage. A window whose reset has passed since its reading counts as fresh (0% used).
-Accounts that look usable come first, then those that look exhausted, then accounts never read. The 5-hour window
-does not change the ranking except for `leastWaste`'s bonus; it acts as a gate through its threshold.
-
-#### Proactive switching
-
-With `autoRotate.trigger` set to `proactive` (Claude, not with `sequential`), a working account is also left when a
-candidate scores clearly better: a weekly reset at least 3 hours sooner (`soonestReset`), at least 5 points further
-behind an even pace (`evenPace`), or at least 0.1 %/hour more allowance (`leastWaste`). The candidate has to score
-better both on its stored reading and on a fresh one, and a proactive switch never happens within
-`autoRotate.minStayMinutes` of an account becoming active, automatically or by hand. Endpoint calls are only made
-once the stored readings show such a candidate. Reaching a threshold still rotates at once.
-
-#### Safety
-
-Missing, failed, incomplete or expired candidate readings never authorize a switch.
-The selected account must still match the native login immediately before activation. As with manual switching,
-Claude picks the new login up on its next request; open Codex chats follow it on their next turn when the Codex
-account proxy is on and otherwise need the extension restart described above.
+- **When.** The active account rotates as soon as any counted window reaches its threshold (`usage ≥ threshold`):
+  Claude 95% in `5h` or 99.5% weekly, Codex 99% weekly or a used-up `5h`. See [Thresholds](ROTATION.md#thresholds).
+- **Where.** Only to an account below its threshold in **every** counted window, read again and sent a keep-alive
+  just before the switch. This holds for every strategy and trigger. When no account qualifies, the active one is
+  kept and a notification says so.
+- **Which first** (`aiUsage.claude.autoRotate.strategy`; Codex is always `sequential`):
+  - [`soonestReset`](ROTATION.md#soonestreset-default) (default): the weekly window that resets soonest, so expiring
+    allowance is spent first.
+  - [`evenPace`](ROTATION.md#evenpace): the account furthest behind an even spend from 0% to 100% over its week.
+  - [`leastWaste`](ROTATION.md#leastwaste): the most weekly allowance left per hour until reset.
+  - [`sequential`](ROTATION.md#sequential): the next saved profile in list order.
+- **Proactive.** `aiUsage.claude.autoRotate.trigger: proactive` also leaves a working account for a clearly better
+  one, after `autoRotate.minStayMinutes`. Thresholds still apply. See
+  [Proactive switching](ROTATION.md#proactive-switching) and [Which setup to choose](ROTATION.md#which-setup-to-choose).
 
 CLI behavior references: [OpenAI Docs: noninteractive Codex](https://learn.chatgpt.com/docs/non-interactive-mode)
 and [Claude CLI reference](https://code.claude.com/docs/en/cli-reference).

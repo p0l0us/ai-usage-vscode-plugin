@@ -42,6 +42,10 @@ export type KeepAliveNowResult = {
   usageError?: string;
 };
 
+/** `readOnly`: nothing left in any counted window, so activating would do nothing. `dimmed`: only a model-scoped
+ *  weekly window is exhausted; the account still works for other models. */
+export type ProfileLimitState = { readOnly: boolean; dimmed: boolean };
+
 type Profile = { id: string; name: string };
 export interface AutomationProfiles {
   profiles(provider: AuthProvider): Profile[];
@@ -235,6 +239,20 @@ export class AccountAutomation {
     }
     parts.push(...[...problems].map((problem) => `$(warning) ${problem}`));
     return parts.join(' · ') || undefined;
+  }
+
+  /**
+   * 100% in the 5h window or the all-models 7d window leaves nothing to use at all: `readOnly`. 100% in a
+   * model-scoped weekly window (7d Fable) only blocks that model; other models may still work, so it just `dimmed`.
+   */
+  limitState(provider: AuthProvider, id: string): ProfileLimitState {
+    const usage = deserializeUsage(this.read(provider, id));
+    let readOnly = false, dimmed = false;
+    for (const window of usage?.windows ?? []) {
+      if (!Number.isFinite(window.usedPercent) || window.usedPercent < 100) { continue; }
+      if (windowKind(window.label) === 'modelWeekly') { dimmed = true; } else { readOnly = true; }
+    }
+    return { readOnly, dimmed };
   }
 
   /** Live reads belong to the profile captured before the request, never to a newly selected one. */

@@ -97,7 +97,10 @@ export class CodexProxyRuntime implements vscode.Disposable {
     }
     if (!this.proxy) {
       const secret = await this.secret(file);
-      const proxy = new CodexAccountProxy({ home, port, secret, log: this.log, refreshLogin: this.refreshLogin, version: this.version });
+      const proxy = new CodexAccountProxy({
+        home, port, secret, log: this.log, refreshLogin: this.refreshLogin, version: this.version,
+        onLoginRejected: (message) => void vscode.window.showWarningMessage(`AI Usage: ${message}`)
+      });
       try {
         await proxy.start();
       } catch (error) {
