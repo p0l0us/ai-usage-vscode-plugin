@@ -181,7 +181,7 @@ test('account menu offers an immediate keep-alive action when profiles exist', t
   const f = fixture(t);
   const action = f.manager.items('claude').find(item => item.action === 'keepAliveNow');
   assert.match(action.label, /Send keep-alive now/);
-  assert.match(action.detail, /refresh its usage statistics/);
+  assert.match(action.detail, /refresh usage statistics/);
 });
 
 test('save current login can replace an existing profile', async t => {

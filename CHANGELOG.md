@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.0.30 (2026-09-29)
+
+- **Send keep-alive now…** can target every saved account at once. With more than one account saved, the picker
+  offers **All accounts** at the top. It sends the keep-alive to each account in turn, 3 seconds apart so the usage
+  endpoint is not hit in a burst, and shows progress that you can cancel. One summary at the end names any account
+  whose keep-alive or usage refresh failed.
+
 ## 0.0.29 (2026-09-25)
 
 - The Codex account proxy no longer asks Codex to refresh a login that has not expired. An upstream 401 for a valid

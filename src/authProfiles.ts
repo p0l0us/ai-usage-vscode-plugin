@@ -74,7 +74,8 @@ export type ActivationChange = { kind: 'activated' | 'saved'; accountChanged: bo
 type ProfileHooks = {
   beforeActivate?: (provider: AuthProvider) => Promise<void>;
   afterActivate?: (provider: AuthProvider, change: ActivationChange) => Promise<void>;
-  sendKeepAlive?: (provider: AuthProvider, profile: ProfileMetadata) => Promise<void>;
+  /** One chosen account, or every saved account in order when "All accounts" was picked. */
+  sendKeepAlive?: (provider: AuthProvider, profiles: ProfileMetadata[]) => Promise<void>;
   /** Where the menu's Back item leads, the AI Usage menu of every service; no Back item without it. */
   back?: (provider: AuthProvider) => Promise<void>;
 };
@@ -398,8 +399,8 @@ export class AuthProfileManager {
           return;
         }
         if (item.action === 'keepAliveNow') {
-          const profile = await this.pickSaved(provider, `Send a ${TITLES[provider]} keep-alive now`);
-          if (profile) { await hooks?.sendKeepAlive?.(provider, profile); }
+          const profiles = await this.pickKeepAliveTargets(provider);
+          if (profiles.length) { await hooks?.sendKeepAlive?.(provider, profiles); }
         } else if (item.action === 'settings' || item.action === 'serviceSettings') {
           await openAiUsageSettings(`aiUsage.${provider}`);
           return;
@@ -523,7 +524,7 @@ export class AuthProfileManager {
     if (providerState.profiles.length) {
       items.push({
         label: '$(play) Send keep-alive now…',
-        detail: 'Choose a saved account, send its configured keep-alive prompt immediately, and refresh its usage statistics.',
+        detail: 'Choose a saved account, or all of them, send the configured keep-alive prompt immediately, and refresh usage statistics.',
         action: 'keepAliveNow'
       });
     }
@@ -801,6 +802,25 @@ export class AuthProfileManager {
     items.push({ label: '$(arrow-left) Back', description: `${TITLES[provider]} accounts` });
     const picked = await vscode.window.showQuickPick(items, { title });
     return picked?.profile;
+  }
+
+  /** Like `pickSaved`, with an extra "All accounts" entry on top; empty when nothing was picked. */
+  private async pickKeepAliveTargets(provider: AuthProvider): Promise<ProfileMetadata[]> {
+    const profiles = this.state()[provider].profiles;
+    const items: Array<vscode.QuickPickItem & { profiles?: ProfileMetadata[] }> = [];
+    if (profiles.length > 1) {
+      items.push({ label: '$(run-all) All accounts', description: `${profiles.length} saved accounts, one by one`, profiles });
+      items.push({ label: '', kind: vscode.QuickPickItemKind.Separator });
+    }
+    items.push(...profiles.map((profile) => ({
+      label: profile.name,
+      description: profileDescription(profile, profile.id === this.activeProfileId(provider)),
+      profiles: [profile]
+    })));
+    items.push({ label: '', kind: vscode.QuickPickItemKind.Separator });
+    items.push({ label: '$(arrow-left) Back', description: `${TITLES[provider]} accounts` });
+    const picked = await vscode.window.showQuickPick(items, { title: `Send a ${TITLES[provider]} keep-alive now` });
+    return picked?.profiles ?? [];
   }
 
   private async rename(provider: AuthProvider): Promise<void> {

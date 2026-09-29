@@ -186,6 +186,8 @@ function formatInterval(ms: number): string {
 
 /** After this long, a reading shown in place of a failed refresh is greyed out. */
 const STALE_AFTER_MS = 15 * 60_000;
+/** Pause between accounts when a keep-alive is sent to all of them at once. */
+const KEEP_ALIVE_ALL_SPACING_MS = 3_000;
 const GITHUB_ACCESS_REQUESTED_KEY = 'aiUsage.githubAccessRequested';
 /** Last Codex profile switch, shared by every window so each can check its own Codex process (non-secret). */
 const CODEX_SWITCH_KEY = 'aiUsage.codexSwitch.v1';
@@ -688,21 +690,55 @@ export function activate(context: vscode.ExtensionContext): void {
       },
       afterActivate: afterProfileActivated,
       back: async () => { await vscode.commands.executeCommand('aiUsage.showDetails'); },
-      sendKeepAlive: async (provider, profile) => {
+      sendKeepAlive: async (provider, profiles) => {
         const title = provider === 'claude' ? 'Claude' : 'Codex';
+        if (profiles.length === 1) {
+          const [profile] = profiles;
+          await vscode.window.withProgress({
+            location: vscode.ProgressLocation.Notification,
+            title: `AI Usage: sending ${title} keep-alive for “${profile.name}”…`,
+            cancellable: false
+          }, async () => {
+            const result = await automation.sendKeepAliveNow(provider, profile.id);
+            if (result.keepAliveError) {
+              const suffix = result.usage ? ' Usage statistics were still updated.' : '';
+              void vscode.window.showWarningMessage(`AI Usage: ${title} keep-alive failed for “${profile.name}”: ${readableProblem(result.keepAliveError)}${suffix}`);
+            } else if (result.usage) {
+              void vscode.window.showInformationMessage(`AI Usage: ${title} keep-alive completed for “${profile.name}”. Usage statistics updated.`);
+            } else {
+              void vscode.window.showWarningMessage(`AI Usage: ${title} keep-alive completed for “${profile.name}”, but usage statistics could not be updated${result.usageError ? `: ${readableProblem(result.usageError)}` : '.'}`);
+            }
+          });
+          return;
+        }
         await vscode.window.withProgress({
           location: vscode.ProgressLocation.Notification,
-          title: `AI Usage: sending ${title} keep-alive for “${profile.name}”…`,
-          cancellable: false
-        }, async () => {
-          const result = await automation.sendKeepAliveNow(provider, profile.id);
-          if (result.keepAliveError) {
-            const suffix = result.usage ? ' Usage statistics were still updated.' : '';
-            void vscode.window.showWarningMessage(`AI Usage: ${title} keep-alive failed for “${profile.name}”: ${readableProblem(result.keepAliveError)}${suffix}`);
-          } else if (result.usage) {
-            void vscode.window.showInformationMessage(`AI Usage: ${title} keep-alive completed for “${profile.name}”. Usage statistics updated.`);
+          title: `AI Usage: sending ${title} keep-alives`,
+          cancellable: true
+        }, async (progress, token) => {
+          const failed: string[] = [];
+          let done = 0;
+          for (const [index, profile] of profiles.entries()) {
+            if (token.isCancellationRequested) { break; }
+            // Space the calls so a sweep of every account does not burst the provider's usage endpoint.
+            if (index > 0) { await new Promise((resolve) => setTimeout(resolve, KEEP_ALIVE_ALL_SPACING_MS)); }
+            if (token.isCancellationRequested) { break; }
+            progress.report({ message: `${index + 1}/${profiles.length}: “${profile.name}”…`, increment: index ? 100 / profiles.length : 0 });
+            try {
+              const result = await automation.sendKeepAliveNow(provider, profile.id);
+              const problem = result.keepAliveError ?? (result.usage ? undefined : result.usageError ?? 'usage statistics could not be updated');
+              if (problem) { failed.push(`“${profile.name}”: ${readableProblem(problem)}`); }
+            } catch (error) {
+              failed.push(`“${profile.name}”: ${readableProblem(error instanceof Error ? error.message : String(error))}`);
+            }
+            done++;
+          }
+          const skipped = profiles.length - done;
+          const summary = `AI Usage: ${title} keep-alive sent to ${done - failed.length} of ${profiles.length} accounts${skipped ? ` (${skipped} cancelled)` : ''}.`;
+          if (failed.length) {
+            void vscode.window.showWarningMessage(`${summary} Problems: ${failed.join('; ')}`);
           } else {
-            void vscode.window.showWarningMessage(`AI Usage: ${title} keep-alive completed for “${profile.name}”, but usage statistics could not be updated${result.usageError ? `: ${readableProblem(result.usageError)}` : '.'}`);
+            void vscode.window.showInformationMessage(`${summary} Usage statistics updated.`);
           }
         });
       }
