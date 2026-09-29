@@ -1,8 +1,9 @@
 # AI subscription management and usage for VS Code
 
 The extension also bundles an experimental [CLI BYOK bridge](bridge/README.md) that offers your existing
-Codex/Claude subscription logins as models in the Copilot model picker. Its settings are tagged **Experimental**
-in the Settings editor, and the bridge can also run standalone as a local model endpoint.
+Codex/Claude subscription logins as models in the Copilot model picker. The bridge is still in development and not
+fully working yet. Its settings are tagged **Experimental** in the Settings editor, and it can also run standalone
+as a local model endpoint.
 
 Run several AI subscriptions without losing track of them. **AI Usage** switches Claude Code and Codex between saved
 accounts without signing in again, and shows live rate-limit and quota usage for **Claude Code**, **Codex** and
@@ -34,29 +35,40 @@ Labels are configurable; `iconAndName` adds provider names without changing the 
 
 ![Status bar with provider names and reset countdowns](images/screenshots/status-bar-labels.png)
 
+With several saved accounts, the active profile's number in the Accounts list precedes the figures
+(`aiUsage.<claude|codex>.statusBar.accountNumber`); here Claude runs on profile 3 and Codex on profile 4:
+
+![Status bar with the active account number before each service's figures](images/screenshots/status-bar-account-numbers.png)
+
 High usage is deliberately visible: an item turns yellow at 80% and red at 95%. Here Claude's 92% window resets
 in 3 hours while Codex remains neutral at 77%. Countdown labels always use one largest unit (`42m`, `3h`, or
 `4d`):
 
 ![Claude high usage highlighted yellow beside neutral Codex usage](images/screenshots/status-bar-high-usage.png)
 
-Hover a status item for its named limit windows, plan and reset times. Copilot also identifies the account and,
-for organization-billed seats, the organization and its premium-request usage:
+Hover a status item for its named limit windows, plan and reset times, the source of the reading and the active
+authentication profile. Copilot also identifies the account and, for organization-billed seats, the organization
+and its premium-request usage:
 
 | Claude | Codex | Copilot |
 |---|---|---|
 | ![Claude usage tooltip](images/screenshots/tooltip-claude.png) | ![Codex usage tooltip](images/screenshots/tooltip-codex.png) | ![Copilot usage tooltip](images/screenshots/tooltip-copilot.png) |
 
-Click a status item or chat chip to open the complete provider breakdown and its profile, refresh, log and settings
-actions in one picker:
+Click a chat chip or the Copilot status bar item, or choose **Back** in an Accounts menu, to open the AI Usage menu
+of all services: each provider's windows with their reset countdowns, the source of every reading, and the refresh,
+log and settings actions in one picker. A service's **Accounts** row opens its Accounts menu:
 
-![AI Usage details picker with Claude and Codex limits and actions](images/screenshots/details-panel.png)
+![AI Usage menu of all services with the Claude and Codex accounts, usage, sources and actions](images/screenshots/details-panel.png)
 
 ## Authentication profiles
 
-Run **AI Usage: Manage Claude/Codex Authentication Profiles** from the Command Palette, or open a Claude/Codex
-usage item and choose **Accounts**. You can save and name the current login, import a credential JSON
-file, and switch among up to 20 profiles per service.
+Run **AI Usage: Manage Claude/Codex Authentication Profiles** from the Command Palette, click the Claude or Codex
+status bar item, or choose a service's **Accounts** row in the AI Usage menu, to open that service's **Accounts**
+menu. You can save and name the current login, import a credential JSON file, and switch among up to 20 profiles
+per service. Every saved profile is listed with its login email, its last usage reading and check time, and the
+active one is marked:
+
+![Claude Accounts menu with five saved profiles, their usage and the manage and account feature actions](images/screenshots/accounts-claude.png)
 
 Saved copies live in VS Code `SecretStorage`, not in project files, workspace settings, or the extension's ordinary
 global storage. Activating a profile atomically updates the native file already shared by the CLI and vendor
@@ -75,6 +87,11 @@ proxy** (`aiUsage.codex.proxy.enabled`), which routes their requests through AI 
 per request; without it, AI Usage offers an extension-host restart. In remote development, profiles belong to the
 extension host (local, SSH, WSL, or container) where the command is run.
 
+**Save current login…** offers to create a new profile or to replace one that is already saved, which is also how
+a profile whose token has expired is repaired after signing in with that account again:
+
+![Save current login picker with Create a new profile… and an existing profile to update](images/screenshots/save-current-login.png)
+
 ### Account keep-alives and automatic rotation
 
 Click the Claude or Codex status bar item to open that service's **Accounts** menu (or choose **Accounts** in the
@@ -83,6 +100,9 @@ you switch accounts manually, save the current login to a new or existing profil
 demand. **Account keep-alive and usage collection** (`aiUsage.<service>.keepAlive.enabled`) and **automatic
 account rotation** (`aiUsage.<service>.autoRotate.enabled`) are turned on in Settings, independently per service;
 the menu shows what each one is set to.
+
+![Send keep-alive now… item under Account features in the Accounts menu](images/screenshots/accounts-keep-alive-now.png)
+![Keep-alive and rotation settings… item showing keep-alive on and rotation on with the leastWaste strategy](images/screenshots/accounts-keep-alive-settings-claude.png)
 
 - Claude sends `what is date today` using `haiku` every **2 hours** per saved account, in `~/.claude-tmp`.
 - Codex sends the same small request every **6 hours** per saved account, using `gpt-5.6-luna` in `~/.codex-tmp`, then
@@ -99,6 +119,16 @@ the menu shows what each one is set to.
   clearly better account (`aiUsage.claude.autoRotate.trigger`). Details:
   [Rotation strategies and thresholds](docs/CONFIGURATION.md#rotation-strategies-and-thresholds).
 
+Each profile row carries the outcome of its last check: usage per window with the reset countdown, the check time,
+and a warning when the keep-alive or the usage check failed. An account whose login failed (expired or revoked) is
+marked **Login problem**; choosing it sends a keep-alive instead of activating it, which refreshes an expired token,
+and when the login cannot be refreshed the failure notification offers **Sign in again**. The same sign-in is
+available for any profile as **Sign in again…** under Manage: it runs the CLI login in a terminal with a separate
+home and stores the new login in the profile, replacing the active login only when that profile is the active one.
+
+![Active Claude profile row with its 5h, 7d and 7d Fable usage and reset countdowns](images/screenshots/accounts-row-active.png)
+![Claude profile row whose last keep-alive failed, marked with a warning](images/screenshots/accounts-row-warning.png)
+
 Models, keep-alive periods, rotation thresholds, CLI paths, dedicated homes and usage sources are configurable
 under `aiUsage.claude.*` and `aiUsage.codex.*`; see
 [account automation settings](docs/CONFIGURATION.md#account-automation).
@@ -109,14 +139,19 @@ checks are coordinated between windows on the same extension host.
 
 ### Authentication profile examples
 
-The profile manager marks the current account as **Active** and keeps save, import, rename, and delete actions in
-the same quick-pick menu:
+The Codex Accounts menu has the same layout. It marks the current account as **Active** and keeps the save, import,
+rename and delete actions, the account features and their settings in the same picker:
 
-![Codex authentication profile manager with two saved accounts](images/screenshots/auth-profiles-codex.png)
+![Codex Accounts menu with six saved profiles and the manage and account feature actions](images/screenshots/accounts-codex.png)
 
-After activation, the usage details identify the selected profile and its detected plan:
+After activation, the AI Usage menu names the selected profile beside **Accounts**, shows its detected plan on the
+right, and follows with its usage and the source of the reading:
 
-![Codex account 2 shown as the active authentication profile](images/screenshots/auth-profile-active.png)
+![Codex account 4 shown as the active profile with its plan, usage and source](images/screenshots/details-codex-rows.png)
+
+**Back** at the end of an Accounts menu returns to the AI Usage menu of all services:
+
+![Back item of the Accounts menu](images/screenshots/accounts-back.png)
 
 ## Installation
 
@@ -170,12 +205,19 @@ backoff work and how the chat chip is built: [docs/INTERNALS.md](docs/INTERNALS.
 ## Troubleshooting
 
 - **A service is missing**: it is not signed in on the machine the extension runs on (see the remote note above).
-  **Output → AI Usage** shows what was found.
+  **Output → AI Usage** shows what was found; **Open log** in the AI Usage menu opens it:
+
+  ![Refresh now, Open log and Settings actions of the AI Usage menu](images/screenshots/details-actions.png)
+
 - **A chat chip shows `n/a`**: the chat's agent is not signed in where the extension runs. In
   the Agents window that is your local computer even for remote sessions; sign in there with the same account
   (`claude` once, or `codex login`) and the figures appear. Do not use `aiUsage.chatChips.debug` for this: it shows
   every service's chip, including Copilot's in a Claude chat.
-- **Copilot shows “connect”**: click it and allow access to your GitHub account.
+- **Copilot shows “connect”**: click it and allow access to your GitHub account. The AI Usage menu offers the same
+  action:
+
+  ![Connect GitHub account item of the AI Usage menu](images/screenshots/details-copilot-connect.png)
+
 - **Numbers are grey**: the last refresh failed; the tooltip says why. Rate limits clear on their own.
 
 ## Contributing

@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.0.31 (2026-09-29)
+
+- **Sign in again…** in the Claude and Codex Accounts menus replaces a saved profile's login by running the CLI
+  login in a terminal with a separate home; the active login is replaced only when that profile is the active one.
+  A profile whose last keep-alive or usage check failed to authenticate is marked **Login problem**, and choosing it
+  sends a keep-alive instead of activating it. When the keep-alive fails because the login expired and could not be
+  refreshed, or was revoked, the failure notification offers **Sign in again**. Claude's "OAuth session expired and
+  could not be refreshed" is now recognized as **Login expired** and announced once, like a revoked login, instead of
+  being shown as an unknown keep-alive failure.
+- README and docs show the current Accounts menus, tooltips, status bar account numbers and the Copilot model
+  picker, cropped and with example addresses.
+
 ## 0.0.30 (2026-09-29)
 
 - **Send keep-alive now…** can target every saved account at once. With more than one account saved, the picker

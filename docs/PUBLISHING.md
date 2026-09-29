@@ -75,7 +75,9 @@ Manual equivalent: `npm run bump`, `npm run compile`, `npx @vscode/vsce package 
 `--no-dependencies` is required: the extension has no runtime npm dependencies and the flag stops `vsce` from
 inspecting `node_modules`.
 
-README screenshots live in `images/screenshots/` and are bundled in the VSIX. `dev:install` packages with
+README screenshots live in `images/screenshots/` and are bundled in the VSIX. Screenshots must not show real
+email addresses, account names or home directories: the ones in the repository use `userN@example.com` and `~`,
+and are cropped to the widget they show. `dev:install` packages with
 `--no-rewrite-relative-links`, so the extension page of a local install renders them from the bundle. A release
 package lets `vsce` rewrite the links to `https://github.com/p0l0us/ai-usage-vscode-plugin/raw/HEAD/...` (the
 Marketplace needs absolute URLs), so new or changed screenshots must be pushed to `main` before publishing. Do **not** add `enabledApiProposals` to the manifest: the Marketplace rejects extensions

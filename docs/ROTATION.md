@@ -10,6 +10,13 @@ The settings themselves are listed in [Account automation](CONFIGURATION.md#acco
 use the Claude defaults (5-hour threshold **95**, weekly threshold **99.5**, trigger `limit`) unless they say
 otherwise. A week is 168 hours.
 
+The **Keep-alive and rotation settings…** item of each Accounts menu shows what is in effect. Here Claude has
+keep-alives on and rotation on with `leastWaste`, `proactive` and custom thresholds, and Codex has keep-alives off
+and rotation at the 99% weekly threshold:
+
+![Claude Keep-alive and rotation settings… item](../images/screenshots/accounts-keep-alive-settings-claude.png)
+![Codex Keep-alive and rotation settings… item](../images/screenshots/accounts-keep-alive-settings-codex.png)
+
 - [Thresholds](#thresholds)
 - [What starts a rotation](#what-starts-a-rotation)
 - [Choosing the next account](#choosing-the-next-account)
@@ -99,6 +106,11 @@ login is reported.
 
 The strategy only decides the **order**. With the default `limit` trigger, every strategy switches exactly once per
 threshold reached; only [proactive switching](#proactive-switching) makes the strategy start switches of its own.
+
+The readings the ranking works from are the ones the Accounts menu shows under each profile, with the time until
+each window resets and when the account was last checked:
+
+![Claude profiles in the Accounts menu with their 5h, 7d and 7d Fable usage, reset countdowns and check times](../images/screenshots/accounts-claude-profiles.png)
 
 ### `sequential`
 

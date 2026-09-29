@@ -2,11 +2,22 @@
 
 A Node.js local API that uses your **existing Codex or Claude Code subscription login**. The AI Usage extension bundles the bridge and contributes signed-in models directly to Copilot under **AI Usage CLI Bridge**. It can also run standalone as a Custom Endpoint. Copilot executes tools; the CLI waits for their results. No separately billed provider API keys, extracted OAuth tokens, or modified vendor binaries are needed.
 
+> **Status: experimental, still in development.** The bridge is not fully working yet. Model discovery and the
+> basic chat and tool round trips are covered by tests, but not every Copilot feature works through it, and its
+> behaviour and settings can change between releases. Every bridge setting is tagged **Experimental** in the
+> Settings editor.
+
 Requires Node.js 22 or newer and a native CLI on the same host. Requires at least Codex CLI 0.151.0 or Claude Code 2.1.273; revalidated with Codex 0.154.0 and Claude 2.1.273. Both protocols can change; earlier releases are not supported. The extension starts both backends and contributes only authenticated catalogs. Standalone startup defaults to Codex; pass `--backends codex,claude` for both. Claude initial history is serialized (see limitations).
 
 ## Automatic Copilot models
 
-Install this branch's AI Usage extension, reload VS Code, and open the Copilot model picker. **AI Usage CLI Bridge** lists the models from your signed-in Codex and Claude CLIs on the extension host. Discovery checks subscription login without sending a prompt. The picker waits for both backend checks (bounded to 15 seconds each, running concurrently) and refreshes every 30 seconds. If one backend fails, the other backend's models remain available and the failed check is reported in the bridge Output channel.
+Install the AI Usage extension, reload VS Code, and open the Copilot model picker. **AI Usage CLI Bridge** lists the models from your signed-in Codex and Claude CLIs on the extension host. Discovery checks subscription login without sending a prompt. The picker waits for both backend checks (bounded to 15 seconds each, running concurrently) and refreshes every 30 seconds. If one backend fails, the other backend's models remain available and the failed check is reported in the bridge Output channel.
+
+![Copilot chat input with its model picker open on the AI Usage CLI Bridge group, listing Claude CLI and Codex CLI models](../images/screenshots/bridge-model-picker.png)
+
+**Chat: Manage Language Models** lists the same catalog under **AI Usage CLI Bridge**, with tool calling and vision enabled for every entry:
+
+![Manage Language Models list with the AI Usage CLI Bridge models](../images/screenshots/bridge-manage-models.png)
 
 These settings are available under **AI Usage → Copilot CLI bridge (experimental)**. Every bridge setting carries the **Experimental** tag in the Settings editor. Feature switches appear in User and
 Remote settings; machine-specific executable paths appear in the Remote tab in SSH/WSL/container windows:

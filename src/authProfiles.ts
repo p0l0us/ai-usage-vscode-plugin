@@ -62,7 +62,9 @@ type ProfileItem = vscode.QuickPickItem & {
   profile?: ProfileMetadata;
   /** Set when the profile has nothing left in any window; selecting it is a no-op warning, not an activation. */
   readOnly?: boolean;
-  action?: 'save' | 'import' | 'rename' | 'delete' | 'keepAliveNow' | 'settings' | 'serviceSettings' | 'back';
+  /** The login error of the profile's last check; selecting it sends a keep-alive instead of activating. */
+  loginProblem?: string;
+  action?: 'save' | 'import' | 'signIn' | 'rename' | 'delete' | 'keepAliveNow' | 'settings' | 'serviceSettings' | 'back';
 };
 
 /**
@@ -76,6 +78,8 @@ type ProfileHooks = {
   afterActivate?: (provider: AuthProvider, change: ActivationChange) => Promise<void>;
   /** One chosen account, or every saved account in order when "All accounts" was picked. */
   sendKeepAlive?: (provider: AuthProvider, profiles: ProfileMetadata[]) => Promise<void>;
+  /** Signs in again for a saved profile with the vendor CLI and stores the new login in it. */
+  signIn?: (provider: AuthProvider, profile: ProfileMetadata) => Promise<void>;
   /** Where the menu's Back item leads, the AI Usage menu of every service; no Back item without it. */
   back?: (provider: AuthProvider) => Promise<void>;
 };
@@ -163,6 +167,9 @@ export class AuthProfileManager {
 
   /** Set by extension.ts: a profile's usage limit state, so the accounts list can block or dim exhausted ones. */
   limitState: (provider: AuthProvider, id: string) => ProfileLimitState | undefined = () => undefined;
+
+  /** Set by extension.ts: the login error of a profile's last check, so the list marks it and re-checks it on click. */
+  loginProblem: (provider: AuthProvider, id: string) => string | undefined = () => undefined;
 
   profiles(provider: AuthProvider): ProfileMetadata[] {
     return this.state()[provider].profiles;
@@ -386,6 +393,12 @@ export class AuthProfileManager {
             void vscode.window.showWarningMessage(`“${item.profile.name}” is at its usage limit and can't be activated until it resets.`);
             continue;
           }
+          if (item.loginProblem) {
+            // A login whose last check failed to authenticate is checked again rather than activated: the keep-alive
+            // refreshes an expired token, and when the login is dead the hook offers a new sign-in instead.
+            await hooks?.sendKeepAlive?.(provider, [item.profile]);
+            continue;
+          }
           // Re-selecting the login that is already active and already written changes nothing for running processes.
           const unchanged = this.activeProfileId(provider) === item.profile.id && await this.matchesNative(provider, item.profile.id);
           await hooks?.beforeActivate?.(provider);
@@ -411,6 +424,9 @@ export class AuthProfileManager {
           }
         } else if (item.action === 'import') {
           await this.importFile(provider);
+        } else if (item.action === 'signIn') {
+          const profile = await this.pickSaved(provider, `Sign in again for a ${TITLES[provider]} profile`);
+          if (profile) { await hooks?.signIn?.(provider, profile); }
         } else if (item.action === 'rename') {
           await this.rename(provider);
         } else if (item.action === 'delete') {
@@ -483,15 +499,20 @@ export class AuthProfileManager {
     const items: ProfileItem[] = providerState.profiles.map((profile) => {
       const active = profile.id === providerState.activeProfileId;
       const limits = this.limitState(provider, profile.id);
+      // An exhausted account cannot be activated anyway, so its login trouble waits until the window resets.
+      const loginProblem = limits?.readOnly ? undefined : this.loginProblem(provider, profile.id);
       const icon = active ? 'check' : 'key';
       return {
-        label: limits?.readOnly ? `$(circle-slash) ${profile.name}` : limits?.dimmed ? profile.name : `$(${icon}) ${profile.name}`,
-        iconPath: limits?.dimmed ? new vscode.ThemeIcon(icon, new vscode.ThemeColor('disabledForeground')) : undefined,
+        label: limits?.readOnly ? `$(circle-slash) ${profile.name}` : limits?.dimmed || loginProblem ? profile.name : `$(${icon}) ${profile.name}`,
+        iconPath: loginProblem ? new vscode.ThemeIcon('warning', new vscode.ThemeColor('editorWarning.foreground'))
+          : limits?.dimmed ? new vscode.ThemeIcon(icon, new vscode.ThemeColor('disabledForeground')) : undefined,
         description: [profileDescription(profile, active, providerState.profiles),
-          limits?.readOnly ? 'At its usage limit' : limits?.dimmed ? 'Fable limit reached' : undefined].filter(Boolean).join(' · ') || undefined,
+          limits?.readOnly ? 'At its usage limit' : limits?.dimmed ? 'Fable limit reached' : undefined,
+          loginProblem ? 'Login problem' : undefined].filter(Boolean).join(' · ') || undefined,
         detail: this.usageDetail?.(provider, profile.id) ?? `Saved ${new Date(profile.updatedAt).toLocaleString()} · Usage not checked yet`,
         profile,
-        readOnly: limits?.readOnly
+        readOnly: limits?.readOnly,
+        loginProblem
       };
     });
     if (!items.length) {
@@ -509,6 +530,11 @@ export class AuthProfileManager {
       action: 'import'
     });
     if (providerState.profiles.length) {
+      items.push({
+        label: '$(sign-in) Sign in again…',
+        detail: `Runs the ${TITLES[provider]} CLI login in a terminal with a separate home and stores the new login in a saved profile. The active login is replaced only when that profile is the active one.`,
+        action: 'signIn'
+      });
       items.push({ label: '$(edit) Rename a profile…', action: 'rename' });
       items.push({ label: '$(trash) Delete a saved profile…', action: 'delete' });
     }
@@ -795,7 +821,8 @@ export class AuthProfileManager {
   private async pickSaved(provider: AuthProvider, title: string): Promise<ProfileMetadata | undefined> {
     const items: Array<vscode.QuickPickItem & { profile?: ProfileMetadata }> = this.state()[provider].profiles.map((profile) => ({
       label: profile.name,
-      description: profileDescription(profile, profile.id === this.activeProfileId(provider)),
+      description: [profileDescription(profile, profile.id === this.activeProfileId(provider)),
+        this.loginProblem(provider, profile.id) ? 'Login problem' : undefined].filter(Boolean).join(' · ') || undefined,
       profile
     }));
     items.push({ label: '', kind: vscode.QuickPickItemKind.Separator });

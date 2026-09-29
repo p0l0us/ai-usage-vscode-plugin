@@ -208,6 +208,25 @@ test('revoked logins are told apart from limits and transient failures', () => {
   ]) assert.equal(isRevokedCredentialError(message), false, message);
 });
 
+test('an expired login the CLI could not refresh needs a new sign-in; a merely expired one is a login problem to check again', () => {
+  const { needsSignIn, isLoginProblem, explainAccountProblem } = require('../out/accountProbe');
+  const unrefreshable = 'Keep-alive CLI exited with code 1: Failed to authenticate: OAuth session expired and could not be refreshed';
+  assert.equal(needsSignIn(unrefreshable), true);
+  assert.equal(isLoginProblem(unrefreshable), true);
+  assert.equal(explainAccountProblem(unrefreshable).label, 'Login expired');
+  assert.match(explainAccountProblem(unrefreshable).advice, /could not be refreshed\. Sign in again/);
+  const expired = 'Login token expired. Run `claude` once to refresh it.';
+  assert.equal(needsSignIn(expired), false);
+  assert.equal(isLoginProblem(expired), true);
+  assert.equal(explainAccountProblem(expired).label, 'Login expired');
+  assert.match(explainAccountProblem(expired).advice, /keep-alive refreshes it/);
+  assert.equal(needsSignIn('Keep-alive CLI exited with code 1: OAuth token revoked · Please run /login'), true);
+  assert.equal(explainAccountProblem('Keep-alive CLI exited with code 1: Your access token could not be refreshed because your refresh token was revoked. Please log out and sign in again.').label, 'Invalid token');
+  for (const message of [undefined, 'Keep-alive timed out after 90 seconds.', "Keep-alive CLI exited with code 1: You've hit your usage limit.", 'Request failed: fetch failed']) {
+    assert.equal(isLoginProblem(message), false, message);
+  }
+});
+
 test('sign-in runs the vendor login and keeps a Codex login in its file', () => {
   assert.deepEqual(loginArgs('claude'), ['auth', 'login']);
   assert.deepEqual(loginArgs('codex'), ['-c', 'cli_auth_credentials_store="file"', 'login']);

@@ -90,6 +90,24 @@ export function isRevokedCredentialError(message: string | undefined): boolean {
   return Boolean(message) && /token_revoked|refresh_token_reused|invalid_grant|refresh token (?:was|has been) (?:revoked|already used)|refresh token has expired|invalidated oauth token|oauth token (?:has been )?revoked|sign in again|log out and sign in|please run \/login|\b401 unauthorized\b/i.test(message!);
 }
 
+/** A login that expired and the CLI could not refresh: Claude's "OAuth session expired and could not be refreshed". */
+const UNREFRESHABLE_LOGIN = /expired and could not be refreshed|failed to authenticate/i;
+/** An expired login, before anything tried to refresh it: the extension's own "Login token expired". */
+const EXPIRED_LOGIN = /oauth session expired|oauth token has expired|login token expired/i;
+
+/** True when only a new sign-in can make the saved login work again: it was revoked, or expired and could not be refreshed. */
+export function needsSignIn(message: string | undefined): boolean {
+  return isRevokedCredentialError(message) || (Boolean(message) && UNREFRESHABLE_LOGIN.test(message!));
+}
+
+/**
+ * True for any login trouble, including a token that merely expired and a keep-alive can still refresh. Such an
+ * account is worth checking again before it is used; `needsSignIn` tells whether the check can still succeed.
+ */
+export function isLoginProblem(message: string | undefined): boolean {
+  return needsSignIn(message) || (Boolean(message) && (EXPIRED_LOGIN.test(message!) || /not authorized|not logged in|not signed in/i.test(message!)));
+}
+
 export type AccountProblem = {
   /** A few words for a list, such as "Insufficient credits"; the vendor's own text when it is not recognized. */
   label: string;
@@ -100,9 +118,11 @@ export type AccountProblem = {
 
 /** Known vendor and extension errors, most specific first; the first match names the problem. */
 const KNOWN_PROBLEMS: Array<{ test: (raw: string) => boolean; label: string; advice: (raw: string) => string }> = [
-  { test: (raw) => /oauth token has expired|login token expired/i.test(raw), label: 'Login expired',
-    advice: () => 'The saved login has expired. Sign in again for this profile.' },
   { test: isRevokedCredentialError, label: 'Invalid token', advice: () => 'The saved login no longer works. Sign in again for this profile.' },
+  { test: (raw) => EXPIRED_LOGIN.test(raw) || UNREFRESHABLE_LOGIN.test(raw), label: 'Login expired',
+    advice: (raw) => UNREFRESHABLE_LOGIN.test(raw)
+      ? 'The saved login has expired and could not be refreshed. Sign in again for this profile.'
+      : 'The saved login has expired. A keep-alive refreshes it; otherwise sign in again for this profile.' },
   { test: (raw) => /out of credits|credit balance is too low|insufficient (?:credits|balance|funds|quota)|add credits|refill/i.test(raw),
     label: 'Insufficient credits', advice: (raw) => /workspace owner/i.test(raw)
       ? 'The workspace has no credits left. Ask the workspace owner to add credits, or wait for the usage limit to reset.'

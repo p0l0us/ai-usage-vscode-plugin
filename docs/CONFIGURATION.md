@@ -5,6 +5,11 @@ with `aiUsage.` in `settings.json`. In a Remote-SSH, WSL or container window, **
 lets you override options for that host. Machine-specific paths and connection settings appear only in the
 Remote tab there; feature switches also appear in the User tab.
 
+The Claude and Codex Accounts menus end with a **Claude settings…** / **Codex settings…** item that opens Settings
+filtered to that service, including its config section:
+
+![Claude settings… item of the Accounts menu](../images/screenshots/accounts-claude-settings.png)
+
 ## Sources
 
 Each service has a `source` setting that selects where its usage is read from:
@@ -23,8 +28,10 @@ session is running.
 
 ## Copilot CLI sessions
 
-Open **Settings → Extensions → AI Usage → Copilot CLI bridge (experimental)** for the CLI bridge options, including
-separate **Codex** and **Claude** controls for persistent sessions, opening in the CLI, and plugin links.
+The Copilot CLI bridge is experimental and still in development: it is not fully working yet, and its behaviour can
+change between releases. Open **Settings → Extensions → AI Usage → Copilot CLI bridge (experimental)** for the CLI
+bridge options, including separate **Codex** and **Claude** controls for persistent sessions, opening in the CLI,
+and plugin links.
 You can also search Settings for `@ext:p0l0us.ai-usage-vscode-plugin aiUsage.bridge`.
 
 | Setting (`<provider>` is `codex` or `claude`) | Default | Purpose |
@@ -58,6 +65,11 @@ for details.
   called and the result stored in the shared on-disk cache. One call serves every open window.
 - `aiUsage.updateIntervalMinutes` (1): how often every window re-reads the cache and redraws the status bar and
   chat chip details. Applies to all sources.
+
+  The AI Usage menu shows both intervals under a service's usage row, and the source of its current reading beneath:
+
+  ![Claude rows of the AI Usage menu with the check and display intervals and the source](../images/screenshots/details-claude-rows.png)
+
 - Manual **AI Usage: Refresh**, and clicking a service's usage row in the details panel, bypass the check interval
   but still honour a shared backoff after a rate-limit or server error (`Retry-After` when sent, otherwise 1 to
   30 minutes doubling) and, for Claude, the call budget below.
@@ -78,6 +90,9 @@ for details.
 - `aiUsage.claude.statusBar.accountNumber` / `aiUsage.codex.statusBar.accountNumber` (default `true`): put the
   active saved profile's position in the Accounts list between the icon and the figures, e.g. `#2 17% (3h)` after the Claude icon.
   Shown only when the service has at least two saved profiles and the active login is one of them.
+
+  ![Status bar with #3 before the Claude figures and #4 before the Codex figures](../images/screenshots/status-bar-account-numbers.png)
+
 - `aiUsage.chatChips.labels`: `name` (default) prefixes the first chip with the service name, `Claude 4%`;
   `none` shows figures only. Chips cannot carry the vendor icon: VS Code drops the text of a toolbar item that has
   an icon.
@@ -116,21 +131,36 @@ OAuth profile endpoint (or the local Claude Code account file when offline) when
 refreshed, and once for older profiles when the menu opens. The email is stored with the profile name as non-secret
 metadata.
 
-The profile manager shows the active account alongside the available management actions:
+The Accounts menu lists the saved profiles with their email, last usage reading and check time, marks the active
+one, and follows with the management actions:
 
-![Codex authentication profile manager with two saved accounts](../images/screenshots/auth-profiles-codex.png)
+![Codex Accounts menu with the saved profiles and their usage](../images/screenshots/accounts-codex-profiles.png)
 
-The details view confirms which profile is active and shows its detected plan:
+![Save current login… item](../images/screenshots/accounts-save-login.png)
+![Import credential JSON… item](../images/screenshots/accounts-import.png)
+![Rename a profile… and Delete a saved profile… items](../images/screenshots/accounts-rename-delete.png)
 
-![Codex account 2 shown as the active authentication profile](../images/screenshots/auth-profile-active.png)
+The AI Usage menu of all services confirms which profile is active and shows its detected plan:
+
+![Codex account 4 shown as the active profile with its plan, usage and source](../images/screenshots/details-codex-rows.png)
 
 Switching updates the same provider-native credential file used by its CLI and VS Code extension. The write uses
 an atomic replacement; its temporary and resulting file use mode `0600` on Linux/macOS and the containing
 user-profile directory's ACL on Windows. For Claude only the `claudeAiOauth` object is replaced, so `mcpOAuth.*`
 entries remain untouched. Codex `auth.json` is replaced as a unit. When the native active login can be matched
 safely to its saved profile (Codex account id, Claude organization, or an identical refresh token), refreshed token data
-is captured before switching away. If a saved profile stops working with "Login token expired", log in with that
-account natively and use **Save current login** to replace the profile.
+is captured before switching away. If a saved profile stops working with "Login expired" or "Invalid token", use
+**Sign in again…** in its Accounts menu, or choose the profile itself: an account marked **Login problem** is sent a
+keep-alive instead of being activated, and when the login cannot be refreshed the failure notification offers
+**Sign in again**. The sign-in runs the vendor CLI's login in a terminal whose home is a folder inside the keep-alive
+home, so the active login is not touched; the new login is stored in the profile, and written to the native file
+only when that profile is the active one. A keep-alive or usage check that finds a login revoked, or expired and not
+refreshable, says so once in a notification with the same **Sign in again** action. Signing in natively and using
+**Save current login** to replace the profile still works too.
+
+**Save current login…** offers to create a new profile or to replace an existing one with the native login:
+
+![Save current login picker with Create a new profile… and an existing profile to update](../images/screenshots/save-current-login.png)
 
 ### What happens to running Codex sessions
 
@@ -252,6 +282,10 @@ AI Usage log.
 Save or import each subscription login in **AI Usage: Manage Claude/Codex Authentication Profiles**. Under each
 provider's **Accounts** menu you can switch accounts manually and send a keep-alive on demand; both features are
 turned on in Settings, per provider, and default to off. The menu shows their current state and links to Settings.
+
+![Send keep-alive now… item under Account features](../images/screenshots/accounts-keep-alive-now.png)
+![Claude Keep-alive and rotation settings… item: keep-alive on, rotation on with leastWaste and proactive](../images/screenshots/accounts-keep-alive-settings-claude.png)
+![Codex Keep-alive and rotation settings… item: keep-alive off, rotation on at 7d ≥ 99%](../images/screenshots/accounts-keep-alive-settings-codex.png)
 
 | Setting suffix (`aiUsage.claude.` / `aiUsage.codex.`) | Claude default | Codex default | Purpose |
 | --- | --- | --- | --- |

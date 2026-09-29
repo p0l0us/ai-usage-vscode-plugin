@@ -4,7 +4,7 @@ import { createHash } from 'crypto';
 import { AuthProvider, StoredCredential, writeJsonAtomically } from './authFiles';
 import { CacheEntry, deserializeUsage } from './cache';
 import { formatResetRemaining, LiveUsage, UsageWindow } from './live';
-import { ProbeSettings, ProbeResult, acquireAccountLock, explainAccountProblem, isRevokedCredentialError, probeAccount } from './accountProbe';
+import { ProbeSettings, ProbeResult, acquireAccountLock, explainAccountProblem, isLoginProblem, needsSignIn, probeAccount } from './accountProbe';
 import type { ActivationChange } from './authProfiles';
 
 /** How rotation picks the next account; `sequential` is saved-profile order. */
@@ -186,7 +186,8 @@ export class AccountAutomation {
 
   /**
    * Set by extension.ts: told once per credential and problem when a saved login is broken — `revoked` when only a
-   * new sign-in can fix it (from any check), otherwise when rotation's keep-alive refused a switch candidate.
+   * new sign-in can fix it (revoked, or expired and not refreshable, from any check), otherwise when rotation's
+   * keep-alive refused a switch candidate.
    */
   onAccountProblem?: (provider: AuthProvider, id: string, reason: string, revoked: boolean) => void;
 
@@ -253,6 +254,15 @@ export class AccountAutomation {
       if (windowKind(window.label) === 'modelWeekly') { dimmed = true; } else { readOnly = true; }
     }
     return { readOnly, dimmed };
+  }
+
+  /**
+   * The last keep-alive or usage-check error when it was a login problem: an expired token a keep-alive may still
+   * refresh, or a dead login that needs a new sign-in. The Accounts menu checks such an account again on click.
+   */
+  loginProblem(provider: AuthProvider, id: string): string | undefined {
+    const state = this.read(provider, id);
+    return [state.keepAliveError, state.lastError].find(isLoginProblem);
   }
 
   /** Live reads belong to the profile captured before the request, never to a newly selected one. */
@@ -378,7 +388,8 @@ export class AccountAutomation {
         ? this.now() + Math.max(settings.checkIntervalMs, result.retryAfterMs ?? 0) : undefined,
       lastError: usageError,
       keepAliveError: keepAlive ? outcome.keepAliveError : state.keepAliveError });
-    const revoked = [outcome.keepAliveError, usageError].find(isRevokedCredentialError);
+    // Revoked, or expired and not refreshable: either way only a new sign-in helps, so it is announced once.
+    const revoked = [outcome.keepAliveError, usageError].find(needsSignIn);
     const problem = revoked ?? (verifying ? outcome.keepAliveError : undefined);
     if (problem && credential) {
       // Fingerprint the login as it was sent: a refresh written back afterwards must not re-announce it.

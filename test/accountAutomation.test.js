@@ -143,6 +143,29 @@ test('a revoked login found by a usage check is announced, and a new sign-in cle
   assert.doesNotMatch(f.service.usageDetail('codex', 'b'), /token_revoked/);
 });
 
+test('an expired login the CLI could not refresh is announced for a new sign-in and marks the account', async t => {
+  const expired = 'Keep-alive CLI exited with code 1: Failed to authenticate: OAuth session expired and could not be refreshed';
+  const f = fixture(t, { values: { b: undefined }, keepAliveErrors: { b: expired }, usageErrors: { b: 'Login token expired. Run `claude` once to refresh it.' } });
+  await f.service.sendKeepAliveNow('claude', 'b');
+  await f.service.sendKeepAliveNow('claude', 'b');
+  assert.deepEqual(f.problems, [['claude', 'b', expired, true]]);
+  assert.equal(f.service.loginProblem('claude', 'b'), expired);
+  assert.equal(f.service.loginProblem('claude', 'a'), undefined);
+  assert.match(f.service.usageDetail('claude', 'b'), /\$\(warning\) Login expired/);
+});
+
+test('a merely expired token is a login problem to check again, not one to announce', async t => {
+  const expired = 'Login token expired. Run `codex` once to refresh it.';
+  const f = fixture(t, { values: { c: undefined }, usageErrors: { c: expired } });
+  await f.service.sendKeepAliveNow('codex', 'c');
+  assert.deepEqual(f.problems, []);
+  assert.equal(f.service.loginProblem('codex', 'c'), expired);
+  // Once the keep-alive refreshed the token, the reading returns and the mark goes away.
+  f.values.c = [5, 5];
+  await f.service.sendKeepAliveNow('codex', 'c');
+  assert.equal(f.service.loginProblem('codex', 'c'), undefined);
+});
+
 test('all exhausted accounts leave the active login unchanged and throttle repeated sweeps', async t => {
   const f = fixture(t, { values: { b: [99.5, 5], c: [5, 100] }, settings: { codex: { autoRotate: true } } });
   f.observe('codex', [99.5, 10]);

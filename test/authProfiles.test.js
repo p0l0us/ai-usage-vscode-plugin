@@ -328,6 +328,46 @@ test('a read-only profile warns instead of activating', async t => {
   assert.equal(informationMessages.length, 0);
 });
 
+test('a profile with a login problem is marked and checked again instead of activated', async t => {
+  const f = fixture(t);
+  const problem = 'Keep-alive CLI exited with code 1: Failed to authenticate: OAuth session expired and could not be refreshed';
+  f.manager.loginProblem = (provider, id) => (provider === 'claude' && id === 'a') ? problem : undefined;
+  const item = f.manager.items('claude').find(item => item.profile?.id === 'a');
+  assert.equal(item.label, 'A');
+  assert.equal(item.iconPath.id, 'warning');
+  assert.equal(item.iconPath.color.id, 'editorWarning.foreground');
+  assert.equal(item.description, 'Active · Login problem');
+  assert.equal(item.loginProblem, problem);
+  const checked = [], changes = [];
+  quickPickResponses.push(items => items.find(item => item.profile?.id === 'a'));
+  quickPickResponses.push(undefined); // close the menu that reopens after the check
+  await f.manager.show('claude', {
+    sendKeepAlive: async (provider, profiles) => { checked.push([provider, profiles.map(profile => profile.id)]); },
+    afterActivate: async (provider, change) => { changes.push(change); }
+  });
+  assert.deepEqual(checked, [['claude', ['a']]]);
+  assert.deepEqual(changes, []);
+  assert.equal(warningMessages.length, 0);
+
+  // An exhausted account is blocked as before; its login trouble is not what stops it.
+  f.manager.limitState = (provider, id) => (provider === 'claude' && id === 'a') ? { readOnly: true, dimmed: false } : undefined;
+  const blocked = f.manager.items('claude').find(item => item.profile?.id === 'a');
+  assert.equal(blocked.loginProblem, undefined);
+  assert.match(blocked.description, /Active · At its usage limit$/);
+});
+
+test('Sign in again… picks a saved profile and hands it to the sign-in hook', async t => {
+  const f = fixture(t);
+  const signedIn = [];
+  const action = f.manager.items('claude').find(item => item.action === 'signIn');
+  assert.match(action.label, /Sign in again/);
+  quickPickResponses.push(items => items.find(item => item.action === 'signIn'));
+  quickPickResponses.push(items => items.find(item => item.profile?.id === 'a'));
+  quickPickResponses.push(undefined);
+  await f.manager.show('claude', { signIn: async (provider, profile) => { signedIn.push([provider, profile.id]); } });
+  assert.deepEqual(signedIn, [['claude', 'a']]);
+});
+
 test('only a real account change is reported to the activation hook', async t => {
   const f = fixture(t);
   const changes = [];

@@ -9,7 +9,7 @@ import { ActivationChange, AuthProfileManager } from './authProfiles';
 import { activateClaudeAccountMetadata, claudeAccountFileConfirms } from './accountIdentity';
 import { AccountAutomation, AutomationSettings, modelWindowFilter, RotationStrategy, RotationTrigger } from './accountAutomation';
 import { signInIsolated } from './accountLogin';
-import { explainAccountProblem, probeAccount } from './accountProbe';
+import { explainAccountProblem, needsSignIn, probeAccount } from './accountProbe';
 import { SharedCache, deserializeUsage } from './cache';
 import { codexConfigPath } from './codexConfig';
 import { findStaleCodexProcesses } from './codexProcesses';
@@ -242,6 +242,7 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(codexProxy);
   authProfiles.codexChatsFollowSwitch = () => codexProxy.active;
   authProfiles.limitState = (provider, id) => automation?.limitState(provider, id);
+  authProfiles.loginProblem = (provider, id) => automation?.loginProblem(provider, id);
   void codexProxy.sync();
   // Writes the aiUsage.codexConfig.* values that are set into Codex's config.toml; unset ones leave the file alone.
   const syncCodexSettings = () => {
@@ -619,7 +620,51 @@ export function activate(context: vscode.ExtensionContext): void {
       return probeAccount(provider, credential, settings, keepAlive, signal, provider === 'claude' ? claudeBudget : undefined);
     });
   context.subscriptions.push(automation);
-  /** A broken saved login is reported by name and email; a revoked one can be signed in again in the keep-alive home. */
+  /**
+   * Runs the vendor's login in a terminal with an isolated home and stores the result in the saved profile, replacing
+   * the native login too when that profile is active. Resolves to whether the profile's login was replaced; every
+   * outcome is reported to the user here.
+   */
+  const signInAgain = async (provider: AuthProvider, id: string): Promise<boolean> => {
+    const profile = authProfiles.profile(provider, id);
+    if (!profile) { return false; }
+    const title = provider === 'claude' ? 'Claude' : 'Codex';
+    const who = `“${profile.name}”${profile.email ? ` (${profile.email})` : ''}`;
+    try {
+      const credential = await signInIsolated(provider, automationSettings(provider, authProfiles), `${title} ${who}`);
+      if (!credential) {
+        void vscode.window.showWarningMessage(`AI Usage: sign-in for the ${title} account ${who} was not completed; the profile is unchanged.`);
+        return false;
+      }
+      const identity = await authProfiles.identity(provider, credential);
+      const current = authProfiles.profile(provider, id);
+      if (!current) { return false; }
+      const otherAccount = (current.accountId && identity.accountId && current.accountId !== identity.accountId) ||
+        (current.email && identity.email && current.email.toLowerCase() !== identity.email.toLowerCase());
+      if (otherAccount) {
+        const replace = await vscode.window.showWarningMessage(
+          `You signed in as ${identity.email ?? identity.accountId}, but the profile “${current.name}” holds ${current.email ?? current.accountId}. Replace its login anyway?`,
+          { modal: true }, 'Replace');
+        if (replace !== 'Replace') { return false; }
+      }
+      const active = await automation.withPaused(() => authProfiles.replaceCredential(provider, id, credential));
+      if (active) { await afterProfileActivated(provider, { kind: 'saved', accountChanged: false }); }
+      // The login is saved either way; a busy check elsewhere only delays the usage reading.
+      const result = await automation.credentialReplaced(provider, id).catch((error: unknown) =>
+        ({ usage: undefined, usageError: error instanceof Error ? error.message : String(error) }));
+      const signedInAs = identity.email ? ` as ${identity.email}` : '';
+      void vscode.window.showInformationMessage(`AI Usage: ${title} profile “${current.name}” signed in again${signedInAs}.${result.usage
+        ? ' Usage statistics updated.' : result.usageError ? ` Usage could not be read yet: ${readableProblem(result.usageError)}` : ''}`);
+      void automation.tick();
+      return true;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      log(`${provider}: signing in again for "${profile.name}" failed: ${message}`);
+      void vscode.window.showErrorMessage(`AI Usage: could not sign in again for the ${title} account ${who}: ${message}`);
+      return false;
+    }
+  };
+  /** A broken saved login is reported by name and email; one that needs a new sign-in is offered it right away. */
   const reportAccountProblem = async (provider: AuthProvider, id: string, reason: string, revoked: boolean) => {
     const profile = authProfiles.profile(provider, id);
     if (!profile) { return; }
@@ -631,40 +676,9 @@ export function activate(context: vscode.ExtensionContext): void {
       return;
     }
     const choice = await vscode.window.showWarningMessage(
-      `AI Usage: the saved ${title} login for ${who} was revoked and no longer works, so it cannot be used or rotated to. Sign in again to keep using it.`,
+      `AI Usage: the saved ${title} login for ${who} no longer works and cannot be used or rotated to: ${readableProblem(reason)}`,
       'Sign in again', 'Skip');
-    if (choice !== 'Sign in again') { return; }
-    try {
-      const credential = await signInIsolated(provider, automationSettings(provider, authProfiles), `${title} ${who}`);
-      if (!credential) {
-        void vscode.window.showWarningMessage(`AI Usage: sign-in for the ${title} account ${who} was not completed; the profile is unchanged.`);
-        return;
-      }
-      const identity = await authProfiles.identity(provider, credential);
-      const current = authProfiles.profile(provider, id);
-      if (!current) { return; }
-      const otherAccount = (current.accountId && identity.accountId && current.accountId !== identity.accountId) ||
-        (current.email && identity.email && current.email.toLowerCase() !== identity.email.toLowerCase());
-      if (otherAccount) {
-        const replace = await vscode.window.showWarningMessage(
-          `You signed in as ${identity.email ?? identity.accountId}, but the profile “${current.name}” holds ${current.email ?? current.accountId}. Replace its login anyway?`,
-          { modal: true }, 'Replace');
-        if (replace !== 'Replace') { return; }
-      }
-      const active = await automation.withPaused(() => authProfiles.replaceCredential(provider, id, credential));
-      if (active) { await afterProfileActivated(provider, { kind: 'saved', accountChanged: false }); }
-      // The login is saved either way; a busy check elsewhere only delays the usage reading.
-      const result = await automation.credentialReplaced(provider, id).catch((error: unknown) =>
-        ({ usage: undefined, usageError: error instanceof Error ? error.message : String(error) }));
-      const signedInAs = identity.email ? ` as ${identity.email}` : '';
-      void vscode.window.showInformationMessage(`AI Usage: ${title} profile “${current.name}” signed in again${signedInAs}.${result.usage
-        ? ' Usage statistics updated.' : result.usageError ? ` Usage could not be read yet: ${readableProblem(result.usageError)}` : ''}`);
-      void automation.tick();
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      log(`${provider}: signing in again for "${profile.name}" failed: ${message}`);
-      void vscode.window.showErrorMessage(`AI Usage: could not sign in again for the ${title} account ${who}: ${message}`);
-    }
+    if (choice === 'Sign in again') { await signInAgain(provider, id); }
   };
   automation.onAccountProblem = (provider, id, reason, revoked) => { void reportAccountProblem(provider, id, reason, revoked); };
   automation.onNoCandidate = (provider, detail) => {
@@ -690,25 +704,31 @@ export function activate(context: vscode.ExtensionContext): void {
       },
       afterActivate: afterProfileActivated,
       back: async () => { await vscode.commands.executeCommand('aiUsage.showDetails'); },
+      signIn: async (provider, profile) => { await signInAgain(provider, profile.id); },
       sendKeepAlive: async (provider, profiles) => {
         const title = provider === 'claude' ? 'Claude' : 'Codex';
         if (profiles.length === 1) {
           const [profile] = profiles;
-          await vscode.window.withProgress({
+          const result = await vscode.window.withProgress({
             location: vscode.ProgressLocation.Notification,
             title: `AI Usage: sending ${title} keep-alive for “${profile.name}”…`,
             cancellable: false
-          }, async () => {
-            const result = await automation.sendKeepAliveNow(provider, profile.id);
-            if (result.keepAliveError) {
-              const suffix = result.usage ? ' Usage statistics were still updated.' : '';
-              void vscode.window.showWarningMessage(`AI Usage: ${title} keep-alive failed for “${profile.name}”: ${readableProblem(result.keepAliveError)}${suffix}`);
-            } else if (result.usage) {
-              void vscode.window.showInformationMessage(`AI Usage: ${title} keep-alive completed for “${profile.name}”. Usage statistics updated.`);
+          }, () => automation.sendKeepAliveNow(provider, profile.id));
+          if (result.keepAliveError) {
+            const suffix = result.usage ? ' Usage statistics were still updated.' : '';
+            const message = `AI Usage: ${title} keep-alive failed for “${profile.name}”: ${readableProblem(result.keepAliveError)}${suffix}`;
+            if (needsSignIn(result.keepAliveError)) {
+              // The CLI tried to refresh the login and could not, so only a new sign-in helps; offer it here.
+              const choice = await vscode.window.showWarningMessage(message, 'Sign in again', 'Skip');
+              if (choice === 'Sign in again') { await signInAgain(provider, profile.id); }
             } else {
-              void vscode.window.showWarningMessage(`AI Usage: ${title} keep-alive completed for “${profile.name}”, but usage statistics could not be updated${result.usageError ? `: ${readableProblem(result.usageError)}` : '.'}`);
+              void vscode.window.showWarningMessage(message);
             }
-          });
+          } else if (result.usage) {
+            void vscode.window.showInformationMessage(`AI Usage: ${title} keep-alive completed for “${profile.name}”. Usage statistics updated.`);
+          } else {
+            void vscode.window.showWarningMessage(`AI Usage: ${title} keep-alive completed for “${profile.name}”, but usage statistics could not be updated${result.usageError ? `: ${readableProblem(result.usageError)}` : '.'}`);
+          }
           return;
         }
         await vscode.window.withProgress({
