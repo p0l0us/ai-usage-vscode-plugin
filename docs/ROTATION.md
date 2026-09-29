@@ -37,7 +37,7 @@ Every usage window of an account has a threshold, set by the kind of window:
 
 | Window | Claude | Codex |
 | --- | --- | --- |
-| 5-hour (`5h`) | `autoRotate.fiveHourThresholdPercent`, default **95** | fixed at **100** (only a used-up window) |
+| 5-hour (`5h`) | `autoRotate.fiveHourThresholdPercent`, default **95** | `autoRotate.fiveHourThresholdPercent`, default **100** (only a used-up window) |
 | Weekly, all models (`7d`) | `autoRotate.weeklyThresholdPercent`, default **99.5** | `autoRotate.weeklyThresholdPercent`, default **99** |
 | Weekly, one model (`7d Fable`) | the weekly threshold, when `autoRotate.modelLimits` counts the window | — |
 
@@ -313,9 +313,10 @@ turn when the Codex account proxy is on, and otherwise need the extension restar
 ## Codex
 
 Codex always rotates `sequential` and only at a threshold: `strategy`, `trigger`, `minStayMinutes` and `modelLimits`
-do not apply. Its weekly threshold is `aiUsage.codex.autoRotate.weeklyThresholdPercent` (default **99**), and a Codex
-5-hour window, when reported, blocks an account or starts a rotation only once it is used up (100%). API-key-only
-Codex profiles report no subscription windows and are never rotation targets.
+do not apply. Its weekly threshold is `aiUsage.codex.autoRotate.weeklyThresholdPercent` (default **99**), and its
+5-hour threshold is `aiUsage.codex.autoRotate.fiveHourThresholdPercent` (default **100**, so a reported 5-hour window
+blocks an account or starts a rotation only once it is used up; lower it to leave earlier). API-key-only Codex
+profiles report no subscription windows and are never rotation targets.
 
 **Example.** Codex profiles are saved as W, X, Y, and W is active. W reaches `7d` 99%. X is at `7d` 99.2% and is
 skipped, so Y (`7d` 40%, `5h` 100%) is checked next. Its 5-hour window is used up, so Y is skipped too, and W is kept

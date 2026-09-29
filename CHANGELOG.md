@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.0.33 (2026-09-29)
+
+- **Export or import saved profiles…** in the Claude and Codex Accounts menus opens a picker with **Export saved
+  profiles…** and **Import saved profiles…**, also available as **AI Usage: Export/Import Claude/Codex
+  Authentication Profiles…** in the Command Palette; they move the saved profiles of both services to another
+  computer. The export lists every profile, preselected, and writes the chosen ones with
+  their logins to a JSON file (mode `0600` on Linux and macOS) and opens it in the editor. The import shows what each entry would do before
+  anything is written: a profile not saved here is added with its name, email and account id; one saved here without
+  a login gets it restored; one whose login differs is replaced only when chosen; one already saved with the same
+  login is skipped. Nothing is activated. The notification after an export says that the file holds login tokens in
+  plain text, and the docs explain that a copied login is one session, which two computers must not both refresh.
+- The docs now say where profiles live: VS Code keeps the profile list and its logins with the VS Code client, also
+  in remote windows, so another computer starts empty even when it connects to the same remote host.
+- Rotation no longer waits behind a window that stopped responding. Account checks are serialized across windows by
+  a lock file, and a window whose VS Code client had disconnected kept it forever (its extension host hangs in any
+  call that needs the client), so no window rotated or sent keep-alives any more. A lock whose owner shows no
+  progress for 10 minutes is now taken over; a live sweep renews it with every account it checks. A keep-alive sweep
+  also re-checks the active account's limit before each account instead of once at its end, so a limit reached
+  during a sweep of many accounts switches within one account check, not minutes later.
+- `aiUsage.codex.autoRotate.fiveHourThresholdPercent` sets the Codex 5-hour threshold; its default 100 keeps the
+  previous behavior of rotating only on a used-up window.
+
 ## 0.0.32 (2026-09-29)
 
 - Choosing a profile marked **Login problem** in the Accounts menu, or sending it a keep-alive, no longer shows two

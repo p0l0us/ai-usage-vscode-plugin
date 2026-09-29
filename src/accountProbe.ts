@@ -12,24 +12,44 @@ export type ProbeResult = { result: LiveResult; credential: StoredCredential; ke
 /** A sweep reads several accounts in a row; waiting out the shared spacing beats being rate-limited. */
 const BUDGET_WAIT_MS = 2 * 60_000;
 
-/** Exclusive across extension hosts; only reclaim locks whose owning process has exited. */
-export function acquireAccountLock(file: string): (() => void) | undefined {
+/**
+ * A lock whose owner has shown no progress for this long is abandoned even while its process lives on: an extension
+ * host whose VS Code client disconnected keeps running, but hangs forever in any call that needs the client, and
+ * would otherwise keep every other window from checking or rotating accounts.
+ */
+export const ACCOUNT_LOCK_STALE_MS = 10 * 60_000;
+
+export type AccountLock = {
+  /** Removes the lock, unless another process took it over meanwhile. */
+  release(): void;
+  /** Marks progress, so a long but live sweep is not taken over; a lock that was taken over is left alone. */
+  touch(): void;
+};
+
+/** Exclusive across extension hosts; reclaims a lock whose owner has exited or stopped making progress. */
+export function acquireAccountLock(file: string, staleMs = ACCOUNT_LOCK_STALE_MS): AccountLock | undefined {
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+  const owned = () => { try { return fs.readFileSync(file, 'utf8') === String(process.pid); } catch { return false; } };
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       const fd = fs.openSync(file, 'wx', 0o600);
       fs.writeFileSync(fd, String(process.pid));
       fs.closeSync(fd);
-      return () => { try { fs.unlinkSync(file); } catch { /* Already removed. */ } };
+      return {
+        release: () => { try { if (owned()) { fs.unlinkSync(file); } } catch { /* Already removed. */ } },
+        touch: () => { try { if (owned()) { const now = new Date(); fs.utimesSync(file, now, now); } } catch { /* Taken over meanwhile. */ } }
+      };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') { throw error; }
       try {
-        const pid = Number(fs.readFileSync(file, 'utf8'));
-        // An empty lock can be another process between open and write.
-        if (!Number.isInteger(pid) || pid <= 0) { return undefined; }
-        try { process.kill(pid, 0); return undefined; }
-        catch (probeError) {
-          if ((probeError as NodeJS.ErrnoException).code !== 'ESRCH') { return undefined; }
+        if (Date.now() - fs.statSync(file).mtimeMs <= staleMs) {
+          const pid = Number(fs.readFileSync(file, 'utf8'));
+          // An empty lock can be another process between open and write.
+          if (!Number.isInteger(pid) || pid <= 0) { return undefined; }
+          try { process.kill(pid, 0); return undefined; }
+          catch (probeError) {
+            if ((probeError as NodeJS.ErrnoException).code !== 'ESRCH') { return undefined; }
+          }
         }
         fs.unlinkSync(file);
       } catch { return undefined; }
@@ -234,8 +254,8 @@ async function claudeUsage(home: string, signal: AbortSignal, budget?: ApiCallBu
 export async function probeAccount(provider: AuthProvider, credential: StoredCredential, settings: ProbeSettings,
   keepAlive: boolean, signal: AbortSignal, budget?: ApiCallBudget): Promise<ProbeResult> {
   const home = isolatedHome(provider, settings.home);
-  const unlock = acquireAccountLock(path.join(home, '.ai-usage.lock'));
-  if (!unlock) { throw new Error('Another account check is using the keep-alive home.'); }
+  const lock = acquireAccountLock(path.join(home, '.ai-usage.lock'));
+  if (!lock) { throw new Error('Another account check is using the keep-alive home.'); }
   const file = stagedCredentialPath(provider, home);
   let staged = false;
   try {
@@ -274,6 +294,6 @@ export async function probeAccount(provider: AuthProvider, credential: StoredCre
     }
     return { result, credential: updatedCredential, keepAliveError };
   } finally {
-    try { if (staged) { fs.unlinkSync(file); } } finally { unlock(); }
+    try { if (staged) { fs.unlinkSync(file); } } finally { lock.release(); }
   }
 }

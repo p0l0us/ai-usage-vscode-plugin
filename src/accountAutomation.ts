@@ -199,6 +199,8 @@ export class AccountAutomation {
 
   /** A reading that belongs to no known profile (Codex session logs) showed the limit; the next sweep reads the active account. */
   private readonly limitHint = new Set<AuthProvider>();
+  /** Renews the account lock this process holds; every account check reports progress through it. */
+  private heartbeat?: () => void;
 
   dispose(): void { this.disposed = true; this.abort.abort(); }
 
@@ -311,12 +313,13 @@ export class AccountAutomation {
     if (!this.profiles.profiles(provider).some((profile) => profile.id === id)) {
       throw new Error('The selected account no longer exists.');
     }
-    const unlock = acquireAccountLock(path.join(this.directory, `${provider}.lock`));
-    if (!unlock) { throw new Error(`Another ${provider} account check is already running.`); }
+    const lock = acquireAccountLock(path.join(this.directory, `${provider}.lock`));
+    if (!lock) { throw new Error(`Another ${provider} account check is already running.`); }
+    this.heartbeat = lock.touch;
     try {
       this.write(provider, id, prepare(this.read(provider, id)));
       return await this.checkAccount(provider, id, this.settings(provider), keepAlive, { ignoreBackoff: true, announce });
-    } finally { unlock(); }
+    } finally { this.heartbeat = undefined; lock.release(); }
   }
 
   private file(provider: AuthProvider, id: string): string {
@@ -341,23 +344,32 @@ export class AccountAutomation {
   private async checkProvider(provider: AuthProvider): Promise<void> {
     const settings = this.settings(provider);
     if (!settings.enabled && !settings.autoRotate) { return; }
-    const unlock = acquireAccountLock(path.join(this.directory, `${provider}.lock`));
-    if (!unlock) { return; }
+    const lock = acquireAccountLock(path.join(this.directory, `${provider}.lock`));
+    if (!lock) { return; }
+    this.heartbeat = lock.touch;
     try {
       // Rotate first so a long keep-alive sweep does not delay an exhausted active account.
       if (settings.autoRotate) { await this.rotate(provider, settings); }
       if (settings.enabled) {
         for (const profile of this.profiles.profiles(provider)) {
           if (this.disposed || this.paused || !this.settings(provider).enabled) { break; }
-          const state = this.read(provider, profile.id);
-          if (state.lastKeepAliveAt !== undefined && this.now() - state.lastKeepAliveAt < settings.intervalMs) { continue; }
+          const due = () => {
+            const state = this.read(provider, profile.id);
+            return state.lastKeepAliveAt === undefined || this.now() - state.lastKeepAliveAt >= settings.intervalMs ? state : undefined;
+          };
+          if (!due()) { continue; }
+          // A sweep takes minutes per account, so an active account that reaches its limit meanwhile is rotated
+          // away now, not once the sweep ends. The rotation may verify this very account, which then needs no keep-alive.
+          if (settings.autoRotate) { await this.rotate(provider, settings); }
+          const state = due();
+          if (!state) { continue; }
           // Persist before starting so a failed call or window restart cannot create a retry storm.
           this.write(provider, profile.id, { ...state, lastKeepAliveAt: this.now() });
           await this.checkAccount(provider, profile.id, settings, true);
         }
       }
       if (settings.autoRotate && !this.disposed && !this.paused) { await this.rotate(provider, settings); }
-    } finally { unlock(); }
+    } finally { this.heartbeat = undefined; lock.release(); }
   }
 
   /**
@@ -372,6 +384,7 @@ export class AccountAutomation {
     if (!ignoreBackoff && previous.nextAllowedAt && previous.nextAllowedAt > this.now()) {
       return { usageError: 'Account usage check is temporarily paused after a provider error.' };
     }
+    this.heartbeat?.();
     let outcome: ProbeResult;
     let credential: StoredCredential | undefined;
     const active = this.profiles.activeProfileId(provider) === id;

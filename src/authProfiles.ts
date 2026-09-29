@@ -1,4 +1,6 @@
 import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import * as vscode from 'vscode';
 import { randomUUID } from 'crypto';
 import {
@@ -12,12 +14,14 @@ import {
 } from './authFiles';
 import { claudeAccountFile, CredentialIdentity, resolveCredentialIdentity } from './accountIdentity';
 import { openAiUsageSettings } from './settingsLink';
+import { ExportedProfile, ImportKind, ImportPlan, parseProfileExport, planImport, serializeProfileExport, uniqueName } from './profileTransfer';
 import type { ProfileLimitState } from './accountAutomation';
 
 const STATE_KEY = 'aiUsage.authProfiles.v1';
 const AUTOMATION_STATE_KEY = 'aiUsage.accountAutomation.v1';
 const SECRET_PREFIX = 'aiUsage.authProfile.v1';
 const MAX_PROFILES = 20;
+const PROVIDERS: AuthProvider[] = ['claude', 'codex'];
 
 export type ProfileMetadata = {
   id: string;
@@ -64,7 +68,7 @@ type ProfileItem = vscode.QuickPickItem & {
   readOnly?: boolean;
   /** The login error of the profile's last check; selecting it sends a keep-alive instead of activating. */
   loginProblem?: string;
-  action?: 'save' | 'import' | 'signIn' | 'rename' | 'delete' | 'keepAliveNow' | 'settings' | 'serviceSettings' | 'back';
+  action?: 'save' | 'import' | 'transfer' | 'signIn' | 'rename' | 'delete' | 'keepAliveNow' | 'settings' | 'serviceSettings' | 'back';
 };
 
 /**
@@ -120,6 +124,21 @@ function emptyState(): ProfileState {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function plural(count: number, noun: string): string {
+  return `${count} ${count === 1 ? noun : `${noun}s`}`;
+}
+
+/** What importing an entry would do, for its row in the import picker. */
+function importOutcome(plan: ImportPlan<ProfileMetadata>): string {
+  const renamed = plan.target && plan.target.name !== plan.entry.name;
+  switch (plan.kind) {
+    case 'new': return 'new profile';
+    case 'restore': return `restores the missing login${renamed ? ` of “${plan.target!.name}”` : ''}`;
+    case 'replace': return `replaces the saved login${renamed ? ` of “${plan.target!.name}”` : ''}`;
+    case 'same': return `already saved${renamed ? ` as “${plan.target!.name}”` : ''}`;
+  }
 }
 
 function validName(value: string): string | undefined {
@@ -424,6 +443,8 @@ export class AuthProfileManager {
           }
         } else if (item.action === 'import') {
           await this.importFile(provider);
+        } else if (item.action === 'transfer') {
+          await this.transferMenu(provider);
         } else if (item.action === 'signIn') {
           const profile = await this.pickSaved(provider, `Sign in again for a ${TITLES[provider]} profile`);
           if (profile) { await hooks?.signIn?.(provider, profile); }
@@ -528,6 +549,11 @@ export class AuthProfileManager {
       label: '$(file-code) Import credential JSON…',
       detail: 'Imports a credential file into VS Code SecretStorage without activating it.',
       action: 'import'
+    });
+    items.push({
+      label: '$(arrow-swap) Export or import saved profiles…',
+      detail: 'Moves the saved Claude and Codex profiles, logins included, to or from another computer through a JSON file.',
+      action: 'transfer'
     });
     if (providerState.profiles.length) {
       items.push({
@@ -712,6 +738,193 @@ export class AuthProfileManager {
     }
     await this.saveProfile(provider, name, credential, false);
     void vscode.window.showInformationMessage(`${TITLES[provider]} credential imported as “${name}”. Choose it from the profile menu to activate it.`);
+  }
+
+  /** The export and the import behind one Accounts menu item; Back and cancel return to the accounts list. */
+  private async transferMenu(provider: AuthProvider): Promise<void> {
+    const items: Array<vscode.QuickPickItem & { action?: 'export' | 'import' }> = [];
+    if (PROVIDERS.some((candidate) => this.state()[candidate].profiles.length)) {
+      items.push({
+        label: '$(export) Export saved profiles…',
+        detail: 'Writes the saved Claude and Codex profiles, logins included, to a JSON file for AI Usage on another computer.',
+        action: 'export'
+      });
+    }
+    items.push({
+      label: '$(cloud-download) Import saved profiles…',
+      detail: 'Adds the profiles from a file exported by AI Usage elsewhere, and restores the logins of profiles saved here that have none.',
+      action: 'import'
+    });
+    items.push({ label: '', kind: vscode.QuickPickItemKind.Separator });
+    items.push({ label: '$(arrow-left) Back', description: `${TITLES[provider]} accounts` });
+    const picked = await vscode.window.showQuickPick(items, { title: 'AI Usage · Export or import saved profiles', matchOnDetail: true });
+    if (picked?.action === 'export') { await this.exportProfiles(); }
+    if (picked?.action === 'import') { await this.importProfiles(); }
+  }
+
+  /**
+   * Writes the chosen saved profiles of both services, logins included, to a JSON file for AI Usage on another
+   * computer. Profiles whose login is not in this VS Code client's SecretStorage cannot be exported and are named.
+   */
+  async exportProfiles(): Promise<boolean> {
+    const state = this.state();
+    const items: Array<vscode.QuickPickItem & { entry?: ExportedProfile }> = [];
+    const missing: string[] = [];
+    for (const provider of PROVIDERS) {
+      const profiles = state[provider].profiles;
+      if (!profiles.length) { continue; }
+      items.push({ label: TITLES[provider], kind: vscode.QuickPickItemKind.Separator });
+      for (const profile of profiles) {
+        const credential = await this.readSecret(provider, profile.id);
+        if (!credential) {
+          missing.push(`${TITLES[provider]} “${profile.name}”`);
+          continue;
+        }
+        items.push({
+          label: profile.name,
+          description: profileDescription(profile, profile.id === state[provider].activeProfileId, profiles),
+          picked: true,
+          entry: { provider, id: profile.id, name: profile.name, email: profile.email, accountId: profile.accountId,
+            createdAt: profile.createdAt, updatedAt: profile.updatedAt, credential }
+        });
+      }
+    }
+    if (!items.some((item) => item.entry)) {
+      void vscode.window.showInformationMessage(missing.length
+        ? `AI Usage: no saved profile has its login on this computer, so there is nothing to export: ${missing.join(', ')}.`
+        : 'AI Usage: no Claude or Codex profiles are saved yet, so there is nothing to export.');
+      return false;
+    }
+    const picked = await vscode.window.showQuickPick(items, {
+      title: 'AI Usage · Export saved profiles',
+      placeHolder: 'The chosen profiles are written with their logins; deselect any to leave out',
+      canPickMany: true,
+      matchOnDescription: true
+    });
+    const entries = picked?.flatMap((item) => item.entry ? [item.entry] : []) ?? [];
+    if (!entries.length) { return false; }
+    const target = await vscode.window.showSaveDialog({
+      title: 'Export saved AI Usage profiles',
+      defaultUri: vscode.Uri.file(path.join(os.homedir(), 'ai-usage-profiles.json')),
+      filters: { JSON: ['json'] },
+      saveLabel: 'Export'
+    });
+    if (!target) { return false; }
+    await vscode.workspace.fs.writeFile(target, Buffer.from(serializeProfileExport(entries), 'utf8'));
+    if (target.scheme === 'file' && process.platform !== 'win32') {
+      try { fs.chmodSync(target.fsPath, 0o600); } catch { /* A file system without modes, such as some mounts. */ }
+    }
+    this.log(`exported ${entries.length} authentication profiles to ${target.toString()}`);
+    // Opened right away, so the content can be checked or copied to the other computer from the editor.
+    try { await vscode.window.showTextDocument(target, { preview: false }); } catch (error) { this.log(`could not open the export: ${errorMessage(error)}`); }
+    void vscode.window.showWarningMessage(
+      `AI Usage: exported ${plural(entries.length, 'profile')} to ${target.fsPath}. The file holds their login tokens in plain text: import it on the other computer, then delete it.` +
+      (missing.length ? ` Skipped, no login on this computer: ${missing.join(', ')}.` : ''));
+    return true;
+  }
+
+  /**
+   * Reads an export made elsewhere and shows what each entry would do before anything is written: a profile not
+   * saved here is added with its id, name and identity; one saved here without a login (its SecretStorage was
+   * cleared) gets it restored; one whose login differs is replaced only when chosen. Nothing is activated.
+   */
+  async importProfiles(): Promise<boolean> {
+    const selected = await vscode.window.showOpenDialog({
+      title: 'Import saved AI Usage profiles',
+      canSelectFiles: true,
+      canSelectFolders: false,
+      canSelectMany: false,
+      filters: { JSON: ['json'] },
+      openLabel: 'Import'
+    });
+    if (!selected?.[0]) { return false; }
+    let entries: ExportedProfile[];
+    try {
+      const bytes = await vscode.workspace.fs.readFile(selected[0]);
+      entries = parseProfileExport(Buffer.from(bytes).toString('utf8'));
+    } catch (error) {
+      void vscode.window.showErrorMessage(`AI Usage: could not import the profiles: ${errorMessage(error)}`);
+      return false;
+    }
+    if (!entries.length) {
+      void vscode.window.showInformationMessage('AI Usage: the export holds no profiles.');
+      return false;
+    }
+    const state = this.state();
+    const logins = new Map<string, StoredCredential | undefined>();
+    for (const provider of PROVIDERS) {
+      for (const profile of state[provider].profiles) {
+        logins.set(`${provider}:${profile.id}`, await this.readSecret(provider, profile.id));
+      }
+    }
+    const plans = planImport(entries, (provider) => state[provider].profiles, (provider, id) => logins.get(`${provider}:${id}`));
+    const items: Array<vscode.QuickPickItem & { plan?: ImportPlan<ProfileMetadata> }> = [];
+    for (const provider of PROVIDERS) {
+      const own = plans.filter((plan) => plan.entry.provider === provider);
+      if (!own.length) { continue; }
+      items.push({ label: TITLES[provider], kind: vscode.QuickPickItemKind.Separator });
+      items.push(...own.map((plan) => ({
+        label: plan.entry.name,
+        description: [plan.entry.email, importOutcome(plan)].filter(Boolean).join(' · '),
+        picked: plan.kind === 'new' || plan.kind === 'restore',
+        plan
+      })));
+    }
+    const picked = await vscode.window.showQuickPick(items, {
+      title: 'AI Usage · Import saved profiles',
+      placeHolder: 'Choose the profiles to add or restore; nothing is activated',
+      canPickMany: true,
+      matchOnDescription: true
+    });
+    const chosen = picked?.flatMap((item) => item.plan ? [item.plan] : []) ?? [];
+    if (!chosen.length) { return false; }
+    for (const provider of PROVIDERS) {
+      const added = chosen.filter((plan) => plan.entry.provider === provider && plan.kind === 'new').length;
+      const room = MAX_PROFILES - state[provider].profiles.length;
+      if (added > room) {
+        void vscode.window.showWarningMessage(
+          `AI Usage: ${TITLES[provider]} has room for ${plural(room, 'more profile')} (${MAX_PROFILES} at most), but ${added} new ones were chosen. Deselect some and import again.`);
+        return false;
+      }
+    }
+    const counts: Record<ImportKind, number> = { new: 0, restore: 0, replace: 0, same: 0 };
+    const identify: Array<[AuthProvider, string, StoredCredential]> = [];
+    const now = new Date().toISOString();
+    for (const plan of chosen) {
+      const { entry, target } = plan;
+      let profile: ProfileMetadata;
+      if (target) {
+        // `target` is the object inside `state`, so the change below lands in the one write at the end.
+        profile = target;
+        if (plan.kind !== 'same') {
+          await this.storeSecret(entry.provider, profile.id, entry.credential);
+          profile.updatedAt = now;
+        }
+        profile.email ??= entry.email;
+        profile.accountId ??= entry.accountId;
+      } else {
+        const profiles = state[entry.provider].profiles;
+        profile = { id: entry.id, name: uniqueName(entry.name, profiles.map((saved) => saved.name)), createdAt: entry.createdAt, updatedAt: now,
+          email: entry.email, accountId: entry.accountId };
+        await this.storeSecret(entry.provider, profile.id, entry.credential);
+        profiles.push(profile);
+      }
+      if (!profile.email || !profile.accountId) { identify.push([entry.provider, profile.id, entry.credential]); }
+      counts[plan.kind]++;
+      this.log(`${entry.provider}: imported profile "${profile.name}" (${plan.kind})`);
+    }
+    await this.updateState(state);
+    // Exported metadata already names most logins; only the rest are asked about, one vendor call each.
+    for (const [provider, id, credential] of identify) { await this.recordIdentity(provider, id, credential); }
+    const summary = [
+      counts.new ? `${counts.new} added` : '',
+      counts.restore ? `${plural(counts.restore, 'login')} restored` : '',
+      counts.replace ? `${plural(counts.replace, 'login')} replaced` : '',
+      counts.same ? `${counts.same} already saved` : ''
+    ].filter(Boolean).join(', ');
+    void vscode.window.showInformationMessage(
+      `AI Usage: imported ${plural(chosen.length, 'profile')}: ${summary}. Nothing was activated; choose a profile from its Accounts menu to use it.`);
+    return true;
   }
 
   private async activate(provider: AuthProvider, profile: ProfileMetadata, automatic = false): Promise<boolean> {
