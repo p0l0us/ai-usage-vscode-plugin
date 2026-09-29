@@ -52,11 +52,34 @@ fetch lock and shows the cached reading with the wait in its detail line; a back
 minutes for a slot and otherwise reports a transient error, which the automation retries at the next check interval.
 Nothing is derived from the endpoint's undocumented limit itself: absent headers, only the configured spacing applies.
 
+## The account service
+
+Everything about saved accounts runs in `service/`, a Node package without `vscode` imports that the extension
+bundles and installs under `~/.ai-usage/service/<version>` (`service/src/installer.ts`; `current.json` and
+`launch.js` point the autostart and the `ai-usage` launcher at the current version). `daemon.ts` runs one
+`AccountService` (`accountService.ts`) per home, with the profile store, the automation, activation verification
+and the Claude metadata retry that `src/extension.ts` used to hold, and serves it over newline-delimited JSON on
+a Unix socket or Windows named pipe (`rpc.ts`; a home whose path is too long for a socket gets one in
+`XDG_RUNTIME_DIR` or the temp directory). Every client sends `hello` with the token from `service.token` first;
+requests are `{ id, method, params }`, answers `{ id, result | error }`, and subscribed clients receive
+`{ event, … }` messages: `activated`, `accountProblem`, `noCandidate`, `notice`, `stateChanged`,
+`configChanged` and `log`. `client.ts` is the typed client both `cli.ts` and the extension use; `protocol.ts`
+the wire types. The service ticks every minute: it follows a native login switched outside it, runs the
+automation, retries the Claude identity sync and reloads a hand-edited `config.json`.
+
+The extension's `src/serviceManager.ts` installs, upgrades (when the bundled version is newer), starts and
+connects, and turns events into notifications and status bar updates; `src/accountsMenu.ts` is the Accounts
+menu UI over the client; `src/legacyProfiles.ts` moves the profiles of earlier versions out of `globalState`
+and `SecretStorage` once; `src/configSync.ts` mirrors `config.json` and `aiUsage.<provider>.*`. The status bar
+hands every reading of the active account to the service (`usage.observe`), which keeps it only while the
+profile still owns the native login. The Claude endpoint call ledger lives in the service home, so the status
+bar's calls and the service's probes are spaced together.
+
 ## Authentication profile storage and switching
 
-`src/authProfiles.ts` keeps profile names, timestamps, stable account ids, emails, and the active id in extension `globalState`.
-Each credential body has its own namespaced `SecretStorage` entry, with a hard limit of 20 per provider.
-`src/authFiles.ts` validates native/imported JSON and performs the filesystem update. Claude profiles contain the
+`service/src/profileStore.ts` keeps profile names, timestamps, stable account ids, emails, logins and the active
+id in `~/.ai-usage/profiles.json`, written atomically with mode 0600, with a hard limit of 20 per provider.
+`service/src/authFiles.ts` validates native/imported JSON and performs the filesystem update. Claude profiles contain the
 `claudeAiOauth` object plus its root-level `organizationUuid` when present; activation replaces those account fields
 in the current `.credentials.json` while preserving MCP OAuth entries. Codex profiles contain the complete
 `auth.json` document.
@@ -70,14 +93,14 @@ chmodded to `0600` on POSIX. Windows uses the destination directory's inherited 
 implementation does not support POSIX ownership modes.
 
 Claude Code keeps display identity and account caches in `~/.claude.json`, separately from its OAuth credential.
-After activating a Claude token, `src/accountIdentity.ts` resolves that token through `/api/oauth/profile`, replaces
+After activating a Claude token, `service/src/accountIdentity.ts` resolves that token through `/api/oauth/profile`, replaces
 only `oauthAccount`, and removes known account-bound usage/model caches while preserving all unrelated settings.
 
 That lookup can fail — most often because the endpoint is rate-limiting the account — and the previous account's
 identity must not survive it, or Claude keeps reporting the login the user just switched away from. When the profile
 cannot be fetched, the identity the saved profile is known to hold replaces `oauthAccount` (without
 `profileFetchedAt`, so Claude Code refreshes the rest itself), the account-bound caches are still dropped, and the
-switch is reported to the user as unconfirmed with the reason. `src/extension.ts` then retries on the minute tick,
+switch is reported to the user as unconfirmed with the reason. The service then retries on its minute tick,
 re-reading the native credential each time so a token refreshed in the meantime is used, backing off to at least any
 `Retry-After` and giving up after ten attempts.
 
@@ -95,8 +118,8 @@ when the file now holds another account, fails the turn with "signed in to anoth
 `account/rateLimits/read` keep answering from memory). Processes started after the write use the new login, and no
 thread, rollout or sqlite row is bound to an account, so chats resume under the new login after an extension host
 restart. After writing the file for a Codex
-profile, `AuthProfileManager.activate()` calls the verifier passed by `extension.ts`
-(`verifyCodexNativeAccount` in `src/live.ts`), which runs a fresh `codex app-server` on the native home and compares
+profile, `ProfileStore.activateProfile()` calls the verifier the service set
+(`verifyCodexNativeAccount` in `service/src/live.ts`), which runs a fresh `codex app-server` on the native home and compares
 the `chatgpt_account_id` claim of the token returned by `getAuthStatus { includeToken: true, refreshToken: false }`
 with the stored `tokens.account_id`; `account/read` (email, plan type, `apiKey`) is the fallback because its
 answer carries no account id. API-key-only profiles are matched by auth method alone. A mismatch replaces the

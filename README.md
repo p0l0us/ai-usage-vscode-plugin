@@ -84,9 +84,10 @@ and save again. An imported profile is saved but not activated until you choose 
 per turn, so open Claude chats and CLI sessions use a switched login from their next turn, with no restart. Codex
 keeps its login in memory, so open Codex chats follow a switch only through the optional **Codex account
 proxy** (`aiUsage.codex.proxy.enabled`), which routes their requests through AI Usage and attaches the active login
-per request; without it, AI Usage offers an extension-host restart. VS Code keeps the saved profiles and their
-logins with the VS Code client, the computer in front of you, also in a Remote-SSH, WSL or container window;
-activating a profile writes the native credential file of the host that window is connected to.
+per request; without it, AI Usage offers an extension-host restart. The saved profiles and their logins are kept
+by the [account service](#the-account-service-and-the-ai-usage-command) on the host the extension runs on (the
+remote in a Remote-SSH, WSL or container window), so every window connected to that host and the `ai-usage`
+command there share them.
 
 **Save current login…** offers to create a new profile or to replace one that is already saved, which is also how
 a profile whose token has expired is repaired after signing in with that account again:
@@ -98,6 +99,23 @@ Claude and Codex profiles, logins included, to a JSON file and opens it in the e
 profiles…** reads it on another computer: profiles not saved there are added, and a saved profile whose login is missing gets it back. Nothing is activated. The file holds live login tokens in plain text, so delete
 it once imported, and mind that a copied login is the same session on both computers; see
 [Moving profiles to another computer](docs/CONFIGURATION.md#moving-profiles-to-another-computer).
+
+### The account service and the `ai-usage` command
+
+Account management runs in a small background service, not in the extension host, so keep-alives and rotation
+keep going while VS Code is closed and a terminal can drive them. On first use the extension asks once to install
+it (**Install**, **Not now** or **Don't ask again**; `aiUsage.accountService.enabled` is the switch): the service
+goes to `~/.ai-usage`, is registered to start when you sign in (a systemd user unit, a launchd agent or a Run
+registry value), and receives the profiles the extension had saved before. Each extension update upgrades it.
+**AI Usage: Account Service…** shows its status and log and starts, stops, reinstalls or uninstalls it; the
+service needs Node.js 20 or newer, and uses VS Code's own runtime when no other is found.
+
+The service comes with the `ai-usage` command, on the PATH of every VS Code terminal (add `~/.ai-usage/bin` to
+your own PATH for other terminals). `ai-usage` alone opens a live view of both services with keys to switch,
+send keep-alives, run a rotation sweep and toggle keep-alive or rotation; `ai-usage status`, `list`, `use`,
+`save`, `login`, `keepalive`, `rotate`, `export`, `import-profiles`, `config`, `service` and `log` do the same
+from arguments, with `--json` where it helps. Settings changed with `ai-usage config` show up in VS Code's
+settings and the other way round. Details: [Account service](docs/CONFIGURATION.md#account-service).
 
 ### Account keep-alives and automatic rotation
 
@@ -139,11 +157,10 @@ home and stores the new login in the profile, replacing the active login only wh
 Models, keep-alive periods, rotation thresholds, CLI paths, dedicated homes and usage sources are configurable
 under `aiUsage.claude.*` and `aiUsage.codex.*`; see
 [account automation settings](docs/CONFIGURATION.md#account-automation).
-Background checks swap credentials only inside the dedicated home, save refreshed tokens back to SecretStorage,
-and remove the staged credential file afterward. For a checked active account, refreshed tokens are also written
-back to its native login when that login has not changed during the check. Schedules persist across restarts and
-checks are coordinated between the windows connected to the same host; a check left behind by a window that stopped
-responding is taken over after 10 minutes.
+Background checks swap credentials only inside the dedicated home, save refreshed tokens back to the profile, and
+remove the staged credential file afterward. For a checked active account, refreshed tokens are also written back
+to its native login when that login has not changed during the check. The account service runs the schedule,
+whether VS Code is open or not, and persists it across restarts.
 
 ### Authentication profile examples
 

@@ -1,5 +1,5 @@
 import { readCodexConfigText } from './codexConfig';
-import { writeTextAtomically } from './authFiles';
+import { writeTextAtomically } from '../service/out';
 
 /**
  * Codex `config.toml` keys that AI Usage exposes as `aiUsage.codexConfig.*` settings.

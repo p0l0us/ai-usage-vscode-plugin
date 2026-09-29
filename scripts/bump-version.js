@@ -29,6 +29,14 @@ if (/^\d+\.\d+\.\d+$/.test(arg)) {
 pkg.version = next;
 fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n');
 
+// The bundled account service carries the same version, so the extension can tell an outdated install.
+const servicePkgPath = path.join(root, 'service', 'package.json');
+if (fs.existsSync(servicePkgPath)) {
+  const servicePkg = JSON.parse(fs.readFileSync(servicePkgPath, 'utf8'));
+  servicePkg.version = next;
+  fs.writeFileSync(servicePkgPath, JSON.stringify(servicePkg, null, 2) + '\n');
+}
+
 const lockPath = path.join(root, 'package-lock.json');
 if (fs.existsSync(lockPath)) {
   const lock = JSON.parse(fs.readFileSync(lockPath, 'utf8'));

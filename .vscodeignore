@@ -11,3 +11,7 @@ images/icon.svg
 docs/**
 bridge/test/**
 bridge/scripts/**
+service/src/**
+service/test/**
+service/tsconfig.json
+service/node_modules/**

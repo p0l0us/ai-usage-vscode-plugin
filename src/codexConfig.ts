@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { randomUUID } from 'crypto';
-import { writeTextAtomically } from './authFiles';
+import { writeTextAtomically } from '../service/out';
 
 /**
  * The `[model_providers.ai-usage]` entry AI Usage manages in Codex's `config.toml`.

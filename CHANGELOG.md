@@ -2,6 +2,25 @@
 
 ## 0.0.33 (unreleased)
 
+- **Account service.** Saved Claude and Codex profiles, keep-alives and automatic rotation moved out of the extension
+  host into a background service, so they keep running while VS Code is closed. The extension installs the service
+  under `~/.ai-usage` with your permission (one notification with **Install**, **Not now** and **Don't ask again**;
+  `aiUsage.accountService.enabled` is the switch), registers it to start when you sign in (a systemd user unit on
+  Linux, a launchd agent on macOS, a Run registry value on Windows), upgrades it when the extension is updated, and
+  moves the profiles it had saved in VS Code's SecretStorage into it once. The Accounts menus, the status bar
+  account number and every notification work as before, now through the service, and every window connected to the
+  same host shares its profiles. **AI Usage: Account Service…** shows its status and log and starts, stops,
+  reinstalls or uninstalls it. Without the service the Accounts menus offer to install it and nothing rotates.
+- **`ai-usage` command.** Everything the Accounts menus can do, from a terminal: `status`, `list`, `use`,
+  `save`, `import`, `rename`, `delete`, `login`, `keepalive`, `rotate`, `export`, `import-profiles`,
+  `config`, `service …` and `log`, with `--json` where it applies. `ai-usage top` (or `ai-usage` alone in a
+  terminal) is a small live view: arrows select, Enter switches, `k`/`K` send keep-alives, `r` runs a sweep, `e`
+  and `o` toggle keep-alive and rotation. VS Code terminals have the command on their PATH once the service is
+  installed; elsewhere add `~/.ai-usage/bin`. A setting changed with `ai-usage config` shows up in VS Code's
+  settings, and a change in Settings reaches the service; the service's `config.json` is the source of truth.
+- Profiles now live with the host the extension runs on (the remote in a Remote-SSH, WSL or container window), in
+  `~/.ai-usage/profiles.json` (mode 0600), no longer with the VS Code client. Export and import are unchanged.
+- The extension package now carries the service under `service/`; the account modules moved there from `src/`.
 - **Export or import saved profiles…** in the Claude and Codex Accounts menus opens a picker with **Export saved
   profiles…** and **Import saved profiles…**, also available as **AI Usage: Export/Import Claude/Codex
   Authentication Profiles…** in the Command Palette; they move the saved profiles of both services to another

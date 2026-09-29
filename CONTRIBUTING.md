@@ -19,8 +19,9 @@ can be read from (CLI command, local file, or API) and how the tool stores its l
 ## Sending a pull request
 
 1. Fork the repository and create a branch from `main`.
-2. Make your change. Keep `src/live.ts` and `src/cache.ts` free of `vscode` imports so they stay testable with Node.
-3. Run `npm run compile`. It regenerates the chat-chip commands in `package.json` and type-checks the code.
+2. Make your change. Everything under `service/` is the account service and the `ai-usage` command, a plain Node
+   package without `vscode` imports; the extension in `src/` is one of its clients.
+3. Run `npm run compile`. It regenerates the chat-chip commands in `package.json` and type-checks the service and the extension; `npm test` runs both test suites.
 4. Test in VS Code: package with `npx @vscode/vsce package --no-dependencies` and install the VSIX.
 5. Update `docs/CONFIGURATION.md` (and the README table if it is a common setting) when you add or change a setting, and add a line to `CHANGELOG.md`.
 6. Open the pull request with a short description of what changed and why. Link the issue if there is one.

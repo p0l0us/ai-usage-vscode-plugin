@@ -174,11 +174,11 @@ login differs is left unselected and replaces the login only when chosen, and on
 is skipped. Nothing is activated, and the 20-profile limit per service applies. The export file holds the login
 tokens in plain text: import it, then delete it.
 
-VS Code keeps an extension's global state and its SecretStorage with the VS Code client, the computer that runs
-VS Code, also for a Remote-SSH, WSL or container window. The saved profiles are therefore those of the computer in
-front of you, whichever host the window is connected to, and activating one writes the native credential file of
-that host. Another computer, even one that connects to the same remote host, starts with an empty profile list;
-export and import carry the profiles across.
+The saved profiles belong to the [account service](#account-service) of the host the extension runs on: your
+computer in an ordinary window, the remote host in a Remote-SSH, WSL or container window. Every window connected
+to that host, and the `ai-usage` command there, see the same profiles, and activating one writes that host's
+native credential file. Another computer starts with an empty profile list; export and import carry the profiles
+across.
 
 An exported login is a copy of the same session, not a new sign-in. Both vendors rotate the refresh token whenever
 a login is refreshed, after which a copy that still holds the old refresh token fails its next refresh with
@@ -248,12 +248,14 @@ for reading usage and for its profile commands, so the two windows stay independ
 
 The extension is workspace-first. In Remote-SSH, WSL, and dev-container windows it runs remotely and manages that
 host's native credential files; in an ordinary Windows/macOS/Linux window it runs locally. The saved profiles and
-their logins are kept by the VS Code client either way, so they never reach a remote host's disk, and a profile list
-only moves to another computer through **Export saved profiles…** and **Import saved profiles…** (see
-[Moving profiles to another computer](#moving-profiles-to-another-computer)).
+their logins are kept by the account service of that same host, in `~/.ai-usage/profiles.json` (mode 0600 inside
+a mode 0700 directory), and a profile list only moves to another computer through **Export saved profiles…** and
+**Import saved profiles…** (see [Moving profiles to another computer](#moving-profiles-to-another-computer)).
 
 The active native credential is necessarily still plaintext and readable by processes running as your OS user.
-SecretStorage protects the inactive saved copies from project files and ordinary extension storage; it does not
+The saved copies are in the same class: a mode-0600 file of the same user, like the vendors' own credential files.
+Earlier versions kept them in VS Code's SecretStorage, which protected them from project files and ordinary
+extension storage but not from processes running as you; the service's file does not
 change the security model of the vendor CLI. Credential files selected with **Import** are not deleted by the
 extension.
 
@@ -303,6 +305,53 @@ starts while the setting is set. Invalid values and an `agents = { … }` inline
 AI Usage log.
 
 
+## Account service
+
+Saved profiles, keep-alives and automatic rotation run in a background service, one per host, that the extension
+installs and manages and that the `ai-usage` command controls. It runs whether VS Code is open or not.
+
+**Installation.** On activation, with no service installed, the extension asks once per session: **Install**,
+**Not now** or **Don't ask again** (which turns `aiUsage.accountService.enabled` off; turn it on again to be
+asked again, or run **AI Usage: Install Account Service**). The extension copies the service package it carries to
+`~/.ai-usage/service/<version>`, writes the `ai-usage` launcher to `~/.ai-usage/bin`, registers the service to
+start at sign-in and starts it. It looks for Node.js 20 or newer on the PATH and in the usual install locations
+(`nvm`, `volta`, `/usr/local/bin`, …), and falls back to VS Code's own runtime (`ELECTRON_RUN_AS_NODE`) or, in a
+remote window, the VS Code server's. `AI_USAGE_NODE` names one explicitly. When the extension is updated and
+carries a newer service, the installed one is replaced and restarted without asking. The profiles the extension
+kept in VS Code's SecretStorage before are moved into the service once and removed there.
+
+**Autostart.** Linux: a systemd user unit `ai-usage.service` in `~/.config/systemd/user`, enabled, with
+`loginctl enable-linger` attempted so the service also runs while you are logged out (when that needs a password,
+the log says so and the service runs while you are logged in). macOS: a launchd agent
+`~/Library/LaunchAgents/com.p0l0us.ai-usage.plist`, restarted after a crash but not after a deliberate stop.
+Windows: a value under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` that starts the service hidden.
+Without a systemd user manager (some containers) nothing is registered; the extension and the `ai-usage` command
+start the service when they need it.
+
+**The `ai-usage` command.** `ai-usage --help` lists everything. `ai-usage` alone in a terminal opens the live
+view; `status` and `list` print the same information, `use <service> <profile>` switches (by name, number or
+id), `save`, `import`, `rename`, `delete`, `login`, `keepalive`, `rotate`, `export` and `import-profiles`
+do what the Accounts menus do, `config` shows or changes the settings, `service status|install|uninstall|start|
+stop|restart|run` manages the service and `log` shows its log. VS Code terminals see the command through the
+extension's terminal environment; elsewhere add `~/.ai-usage/bin` to your PATH.
+
+**Settings.** The service keeps its settings in `~/.ai-usage/config.json`; `ai-usage config` reads and writes
+them and the extension keeps them equal to `aiUsage.claude.*` and `aiUsage.codex.*`: the first connection seeds
+the service from the user settings, after that a change in Settings is pushed to the service and a change made
+with `ai-usage config` is written to the user settings. The usage sources of the status bar
+(`aiUsage.<service>.source`) stay with the extension.
+
+**What is where.** Everything is under `~/.ai-usage` (`AI_USAGE_HOME` moves it): `profiles.json` (the saved
+profiles with their logins, mode 0600), `config.json`, `state/` (per-account readings, sweep records, lock files
+and the Claude endpoint call ledger, shared with the extension's status bar reads), `service.log`, `service.sock`
+(a named pipe on Windows) and `service.token`, which clients present first. **AI Usage: Account Service…** shows
+the status, opens the log and starts, stops, restarts, reinstalls or uninstalls the service; uninstalling keeps the
+data files.
+
+| Setting | Default | Purpose |
+| --- | --- | --- |
+| `aiUsage.accountService.enabled` | `true` | Install, start and use the account service. Off: no Accounts menus, keep-alives or rotation. |
+
 ## Account automation
 
 Save or import each subscription login in **AI Usage: Manage Claude/Codex Authentication Profiles**. Under each
@@ -343,10 +392,10 @@ expanded. Credentials are staged using an atomic write with mode 0600 on POSIX a
 The CLI may retain its own diagnostic/configuration files there. Refreshed credentials are saved back only if the
 saved profile has not changed in the meantime; an unchanged active native login receives refreshed tokens too.
 
-Per-account readings and attempt timestamps persist in the extension's global storage without credentials.
-A one-minute scheduler checks due accounts; closing all windows pauses it. Reopening runs each overdue account
-once, without replaying missed intervals. Each provider checks its accounts sequentially and uses an exclusive
-lock across windows. Failed keep-alive attempts wait the configured interval; transient usage errors honor the
+Per-account readings and attempt timestamps persist in the service's `state` directory without credentials.
+The service's one-minute scheduler checks due accounts whether VS Code is open or not; after the service was
+stopped, each overdue account is checked once, without replaying missed intervals. Each provider checks its
+accounts sequentially. Failed keep-alive attempts wait the configured interval; transient usage errors honor the
 provider check interval and any longer `Retry-After`.
 
 ### Rotation strategies and thresholds

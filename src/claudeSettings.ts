@@ -1,5 +1,5 @@
 import * as fs from 'fs';
-import { writeTextAtomically } from './authFiles';
+import { writeTextAtomically } from '../service/out';
 
 /**
  * Claude Code environment variables that AI Usage exposes as `aiUsage.claudeConfig.*` settings.
