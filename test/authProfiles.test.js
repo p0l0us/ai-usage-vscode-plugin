@@ -10,6 +10,10 @@ const warningMessages = [];
 const warningResponses = [];
 const inputBoxResponses = [];
 const quickPickResponses = [];
+const saveDialogResponses = [];
+const openDialogResponses = [];
+const openedDocuments = [];
+const uri = (fsPath) => ({ scheme: 'file', fsPath, toString: () => `file://${fsPath}` });
 const settings = new Map();
 // This suite exercises SecretStorage/native-file behavior without a running VS Code host.
 const load = Module._load;
@@ -26,11 +30,19 @@ Module._load = function(id, ...args) {
       showQuickPick(items) {
         const response = quickPickResponses.shift();
         return typeof response === 'function' ? response(items) : response;
-      }
+      },
+      showSaveDialog: async () => saveDialogResponses.shift(),
+      showOpenDialog: async () => openDialogResponses.shift(),
+      showTextDocument: async (target) => { openedDocuments.push(target.fsPath); }
     },
+    Uri: { file: uri },
     ConfigurationTarget: { Global: 1, Workspace: 2, WorkspaceFolder: 3 },
     commands: { executeCommand: async () => undefined },
     workspace: {
+      fs: {
+        readFile: async (target) => fs.readFileSync(target.fsPath),
+        writeFile: async (target, bytes) => fs.writeFileSync(target.fsPath, bytes)
+      },
       getConfiguration: () => ({
         get: (key, fallback) => (settings.has(key) ? settings.get(key) : fallback),
         inspect: (key) => ({ globalValue: settings.get(key) }),
@@ -50,6 +62,9 @@ function fixture(t, verify) {
   warningResponses.length = 0;
   inputBoxResponses.length = 0;
   quickPickResponses.length = 0;
+  saveDialogResponses.length = 0;
+  openDialogResponses.length = 0;
+  openedDocuments.length = 0;
   settings.clear();
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-profile-'));
   const previous = process.env.CLAUDE_CONFIG_DIR;
@@ -423,4 +438,92 @@ test('a native login switched outside this window makes its saved profile active
   await f.manager.followNative('claude');
   assert.equal(f.manager.activeProfileId('claude'), 'a');
   assert.equal(f.manager.activeProfileNumber('claude'), undefined);
+});
+
+test('export writes the chosen profiles with their logins and names one whose login is missing here', async t => {
+  const f = fixture(t);
+  f.globalValues.set('aiUsage.authProfiles.v1', { claude: { profiles: [{ id: 'a', name: 'A', email: 'a@example.com' }, { id: 'b', name: 'B' }], activeProfileId: 'a' },
+    codex: { profiles: [{ id: 'x', name: 'X' }] } });
+  const target = path.join(path.dirname(f.file), 'export.json');
+  quickPickResponses.push(items => {
+    assert.deepEqual(items.filter(item => item.entry).map(item => [item.label, item.picked]), [['A', true], ['X', true]]);
+    return items.filter(item => item.picked);
+  });
+  saveDialogResponses.push(uri(target));
+  assert.equal(await f.manager.exportProfiles(), true);
+  const document = JSON.parse(fs.readFileSync(target, 'utf8'));
+  assert.equal(document.aiUsageProfiles, 1);
+  assert.deepEqual(document.profiles.map(p => [p.provider, p.id, p.name, p.email]), [['claude', 'a', 'A', 'a@example.com'], ['codex', 'x', 'X', undefined]]);
+  assert.deepEqual(document.profiles[0].credential, f.before);
+  assert.deepEqual(document.profiles[1].credential, f.codex);
+  assert.match(warningMessages.at(-1), /exported 2 profiles to .*export\.json\. The file holds their login tokens in plain text.* Skipped, no login on this computer: Claude “B”\./);
+  if (process.platform !== 'win32') assert.equal(fs.statSync(target).mode & 0o777, 0o600);
+  // The saved file opens in the editor right away.
+  assert.deepEqual(openedDocuments, [target]);
+});
+
+test('import adds new profiles with their ids, restores a missing login into the same profile, and activates nothing', async t => {
+  const f = fixture(t);
+  f.globalValues.set('aiUsage.authProfiles.v1', { claude: { profiles: [
+    { id: 'a', name: 'A', email: 'a@example.com', accountId: 'account-a' }, { id: 'b', name: 'B', email: 'b@example.com', accountId: 'account-b' }], activeProfileId: 'a' },
+    codex: { profiles: [{ id: 'x', name: 'X' }] } });
+  const fresh = { claudeAiOauth: { accessToken: 'external', refreshToken: 'r-ext' } };
+  const bLogin = { claudeAiOauth: { accessToken: 'b', refreshToken: 'r-b' } };
+  const file = path.join(path.dirname(f.file), 'import.json');
+  fs.writeFileSync(file, JSON.stringify({ aiUsageProfiles: 1, profiles: [
+    { provider: 'claude', id: 'a', name: 'A', email: 'a@example.com', accountId: 'account-a', credential: f.before },
+    { provider: 'claude', id: 'b', name: 'B on the server', email: 'b@example.com', accountId: 'account-b', credential: bLogin },
+    { provider: 'claude', id: 'n', name: 'A', email: 'other@example.com', accountId: 'account-other', credential: fresh },
+    { provider: 'codex', id: 'y', name: 'Y', credential: { ...f.codex, tokens: { ...f.codex.tokens, account_id: 'acc-y' } } }
+  ] }));
+  openDialogResponses.push([uri(file)]);
+  quickPickResponses.push(items => {
+    assert.deepEqual(items.filter(item => item.plan).map(item => [item.label, item.description, item.picked]), [
+      ['A', 'a@example.com · already saved', false],
+      ['B on the server', 'b@example.com · restores the missing login of “B”', true],
+      ['A', 'other@example.com · new profile', true],
+      ['Y', 'new profile', true]
+    ]);
+    return items.filter(item => item.picked);
+  });
+  assert.equal(await f.manager.importProfiles(), true);
+  const state = f.globalValues.get('aiUsage.authProfiles.v1');
+  assert.deepEqual(state.claude.profiles.map(p => [p.id, p.name]), [['a', 'A'], ['b', 'B'], ['n', 'A (2)']]);
+  assert.equal(state.claude.activeProfileId, 'a');
+  assert.deepEqual(state.codex.profiles.map(p => [p.id, p.name, p.accountId]), [['x', 'X', undefined], ['y', 'Y', 'acc-y']]);
+  assert.deepEqual(JSON.parse(f.secrets.get('aiUsage.authProfile.v1.claude.b')), bLogin);
+  assert.deepEqual(JSON.parse(f.secrets.get('aiUsage.authProfile.v1.claude.n')), fresh);
+  assert.equal(JSON.parse(f.secrets.get('aiUsage.authProfile.v1.codex.y')).tokens.account_id, 'acc-y');
+  assert.match(informationMessages.at(-1), /imported 3 profiles: 2 added, 1 login restored\. Nothing was activated/);
+  // The native login is not touched: nothing is activated by an import.
+  assert.deepEqual(JSON.parse(fs.readFileSync(f.file, 'utf8')).claudeAiOauth, f.before.claudeAiOauth);
+});
+
+test('a file that is not a profile export is refused with the reason', async t => {
+  const f = fixture(t);
+  const file = path.join(path.dirname(f.file), 'credential.json');
+  fs.writeFileSync(file, JSON.stringify(f.before));
+  openDialogResponses.push([uri(file)]);
+  assert.equal(await f.manager.importProfiles(), false);
+  assert.match(errorMessages.at(-1), /could not import the profiles: The selected file is not an AI Usage profile export/);
+});
+
+test('export and import share one Accounts menu item that opens a picker of the two', async t => {
+  const f = fixture(t);
+  const labels = f.manager.items('claude').map(item => item.label);
+  assert.equal(labels.filter(label => label === '$(arrow-swap) Export or import saved profiles…').length, 1);
+  assert.ok(!labels.some(label => label.endsWith('Export saved profiles…') || label.endsWith('Import saved profiles…')));
+  const target = path.join(path.dirname(f.file), 'export.json');
+  quickPickResponses.push(items => items.find(item => item.action === 'transfer'));
+  quickPickResponses.push(items => {
+    assert.deepEqual(items.map(item => item.label), ['$(export) Export saved profiles…', '$(cloud-download) Import saved profiles…', '', '$(arrow-left) Back']);
+    return items[0];
+  });
+  quickPickResponses.push(items => items.filter(item => item.picked));
+  saveDialogResponses.push(uri(target));
+  // Back in the accounts list afterwards; closing it ends the menu.
+  quickPickResponses.push(undefined);
+  await f.manager.show('claude');
+  assert.deepEqual(JSON.parse(fs.readFileSync(target, 'utf8')).profiles.map(p => [p.provider, p.id]), [['claude', 'a'], ['codex', 'x']]);
+  assert.equal(quickPickResponses.length, 0);
 });

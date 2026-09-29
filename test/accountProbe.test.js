@@ -52,13 +52,38 @@ test('isolated environment removes inherited account and routing overrides witho
 
 test('home lock cannot be stolen while its owner is alive', t => {
   const file = path.join(temporary(t), 'lock');
-  const unlock = acquireAccountLock(file);
-  assert.equal(typeof unlock, 'function');
+  const lock = acquireAccountLock(file);
+  assert.equal(typeof lock?.release, 'function');
   assert.equal(acquireAccountLock(file), undefined);
-  unlock();
+  lock.release();
   const next = acquireAccountLock(file);
-  assert.equal(typeof next, 'function');
-  next();
+  assert.equal(typeof next?.release, 'function');
+  next.release();
+});
+
+test('a lock whose owner shows no progress for too long is taken over, and the old owner then leaves it alone', t => {
+  const file = path.join(temporary(t), 'lock');
+  const lock = acquireAccountLock(file, 60_000);
+  const old = new Date(Date.now() - 61_000);
+  fs.utimesSync(file, old, old);
+  // Progress renews the lock, so a live sweep of many accounts keeps it.
+  lock.touch();
+  assert.equal(acquireAccountLock(file, 60_000), undefined);
+  fs.utimesSync(file, old, old);
+  const next = acquireAccountLock(file, 60_000);
+  assert.equal(typeof next?.release, 'function');
+  // The stalled owner (here: another process, as far as the file says) must neither renew nor remove the lock it lost.
+  fs.writeFileSync(file, '424242');
+  fs.utimesSync(file, old, old);
+  lock.touch();
+  assert.ok(Date.now() - fs.statSync(file).mtimeMs > 60_000, 'the lost lock was renewed');
+  lock.release();
+  assert.ok(fs.existsSync(file));
+  // An empty lock left by a crash between open and write is reclaimed too, once it is old.
+  fs.writeFileSync(file, '');
+  assert.equal(acquireAccountLock(file, 60_000), undefined);
+  fs.utimesSync(file, old, old);
+  assert.equal(typeof acquireAccountLock(file, 60_000)?.release, 'function');
 });
 
 test('keep-alives use the configured model and exact small prompt', () => {

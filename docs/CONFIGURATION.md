@@ -162,6 +162,30 @@ refreshable, says so once in a notification with the same **Sign in again** acti
 
 ![Save current login picker with Create a new profile… and an existing profile to update](../images/screenshots/save-current-login.png)
 
+### Moving profiles to another computer
+
+**Export or import saved profiles…** under Manage in either Accounts menu opens a picker with both actions; the
+Command Palette has them as **AI Usage: Export Claude/Codex Authentication Profiles…** and **AI Usage: Import
+Claude/Codex Authentication Profiles…**. **Export saved profiles…** lists every saved Claude and Codex profile,
+preselected, and writes the chosen ones with their logins to a JSON file, which then opens in the editor; on Linux
+and macOS the file gets mode `0600`. **Import saved profiles…** reads that file and shows what each entry would do before anything is written. A profile not saved here is added with its name (numbered when the name is taken), email and
+account id. A profile that is saved here but has no login in SecretStorage gets the login restored. One whose saved
+login differs is left unselected and replaces the login only when chosen, and one already saved with the same login
+is skipped. Nothing is activated, and the 20-profile limit per service applies. The export file holds the login
+tokens in plain text: import it, then delete it.
+
+VS Code keeps an extension's global state and its SecretStorage with the VS Code client, the computer that runs
+VS Code, also for a Remote-SSH, WSL or container window. The saved profiles are therefore those of the computer in
+front of you, whichever host the window is connected to, and activating one writes the native credential file of
+that host. Another computer, even one that connects to the same remote host, starts with an empty profile list;
+export and import carry the profiles across.
+
+An exported login is a copy of the same session, not a new sign-in. Both vendors rotate the refresh token whenever
+a login is refreshed, after which a copy that still holds the old refresh token fails its next refresh with
+**Login expired** or **Invalid token**, and the login can get revoked. Do not let two computers refresh the same
+profile: keep keep-alive and automatic rotation on for one of them only, or use **Sign in again…** on the second
+computer to give each profile a session of its own there.
+
 ### What happens to running Codex sessions
 
 A switch replaces `auth.json`, and every Codex process started afterwards, such as `codex` in a new terminal, uses
@@ -223,8 +247,10 @@ If you would rather keep two accounts side by side than switch one home, start a
 for reading usage and for its profile commands, so the two windows stay independent.
 
 The extension is workspace-first. In Remote-SSH, WSL, and dev-container windows it runs remotely and manages that
-host's native credential files and SecretStorage. In an ordinary Windows/macOS/Linux window it runs locally. These
-stores are intentionally separate; remote profiles do not leak into the local workstation or vice versa.
+host's native credential files; in an ordinary Windows/macOS/Linux window it runs locally. The saved profiles and
+their logins are kept by the VS Code client either way, so they never reach a remote host's disk, and a profile list
+only moves to another computer through **Export saved profiles…** and **Import saved profiles…** (see
+[Moving profiles to another computer](#moving-profiles-to-another-computer)).
 
 The active native credential is necessarily still plaintext and readable by processes running as your OS user.
 SecretStorage protects the inactive saved copies from project files and ordinary extension storage; it does not
@@ -292,7 +318,7 @@ turned on in Settings, per provider, and default to off. The menu shows their cu
 | `keepAlive.enabled` | `false` | `false` | Periodically check every saved account, including inactive ones. |
 | `autoRotate.enabled` | `false` | `false` | Switch accounts automatically once the active one reaches a threshold. |
 | `keepAlive.periodHours` | `2` | `6` | Per-account keep-alive period, minimum 0.25 hours. |
-| `autoRotate.fiveHourThresholdPercent` | `95` | — (fixed at 100) | Threshold for the 5h window. |
+| `autoRotate.fiveHourThresholdPercent` | `95` | `100` | Threshold for the 5h window; Codex's default rotates only on a used-up window. |
 | `autoRotate.weeklyThresholdPercent` | `99.5` | `99` | Threshold for the weekly windows (`7d`, and `7d Fable` when it counts). |
 | `autoRotate.modelLimits` | `auto` | — | Whether `7d Fable` counts: `auto` (when Claude Code's `model` is Fable or unset), `always`, `never`. |
 | `autoRotate.strategy` | `soonestReset` | — | How the next account is chosen: `soonestReset`, `evenPace`, `leastWaste` or `sequential`. |

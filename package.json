@@ -2,7 +2,7 @@
   "name": "ai-usage-vscode-plugin",
   "displayName": "AI subscription management and usage",
   "description": "Manage your Claude Code, Codex and GitHub Copilot subscriptions and see what is left of them: switch between saved accounts without signing in again, keep them warm, rotate on exhaustion, and read live 5h/7d windows, premium requests and org billing in the status bar and chat input. Open source, contributions welcome.",
-  "version": "0.0.32",
+  "version": "0.0.33",
   "publisher": "p0l0us",
   "license": "GPL-3.0-only",
   "repository": {
@@ -73,6 +73,14 @@
       {
         "command": "aiUsage.manageAuthProfiles",
         "title": "AI Usage: Manage Claude/Codex Authentication Profiles"
+      },
+      {
+        "command": "aiUsage.exportAuthProfiles",
+        "title": "AI Usage: Export Claude/Codex Authentication Profiles…"
+      },
+      {
+        "command": "aiUsage.importAuthProfiles",
+        "title": "AI Usage: Import Claude/Codex Authentication Profiles…"
       },
       {
         "command": "aiUsage.checkCopilotIntegration",
@@ -7260,7 +7268,7 @@
             "type": "boolean",
             "default": false,
             "order": 6,
-            "markdownDescription": "**Automatic Codex account rotation.** When the active account reaches `#aiUsage.codex.autoRotate.weeklyThresholdPercent#` in its weekly window, or uses up its 5-hour window, switch to the next saved account that is below both. Requires at least two saved profiles. See [Rotation strategies and thresholds](https://github.com/p0l0us/ai-usage-vscode-plugin/blob/main/docs/CONFIGURATION.md#rotation-strategies-and-thresholds)."
+            "markdownDescription": "**Automatic Codex account rotation.** When the active account reaches `#aiUsage.codex.autoRotate.weeklyThresholdPercent#` in its weekly window, or `#aiUsage.codex.autoRotate.fiveHourThresholdPercent#` in its 5-hour window, switch to the next saved account that is below both. Requires at least two saved profiles. See [Rotation strategies and thresholds](https://github.com/p0l0us/ai-usage-vscode-plugin/blob/main/docs/CONFIGURATION.md#rotation-strategies-and-thresholds)."
           },
           "aiUsage.codex.keepAlive.periodHours": {
             "type": "number",
@@ -7275,13 +7283,21 @@
             "description": "Subscription model used for the small keep-alive request (default: gpt-5.6-luna). Empty uses the Codex CLI default.",
             "order": 9
           },
+          "aiUsage.codex.autoRotate.fiveHourThresholdPercent": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 100,
+            "markdownDescription": "**Codex 5-hour rotation threshold.** Rotate when the 5-hour window, if Codex reports one, reaches this percentage (usage ≥ threshold). An account can only be switched to while its 5-hour usage is below it. The default 100 rotates only once the window is used up; lower it to leave the account before that.",
+            "order": 10
+          },
           "aiUsage.codex.autoRotate.weeklyThresholdPercent": {
             "type": "number",
             "minimum": 1,
             "maximum": 100,
             "default": 99,
-            "markdownDescription": "**Codex weekly rotation threshold.** Rotate when the weekly (7d) window reaches this percentage (usage ≥ threshold). An account can only be switched to while its weekly usage is below it. A 5-hour window, when Codex reports one, rotates only once it is used up (100%).",
-            "order": 10
+            "markdownDescription": "**Codex weekly rotation threshold.** Rotate when the weekly (7d) window reaches this percentage (usage ≥ threshold). An account can only be switched to while its weekly usage is below it.",
+            "order": 11
           },
           "aiUsage.codex.switchRestartHint": {
             "type": "boolean",

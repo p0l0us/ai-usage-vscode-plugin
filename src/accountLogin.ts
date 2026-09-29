@@ -70,6 +70,6 @@ export async function signInIsolated(provider: AuthProvider, settings: ProbeSett
       const cancelled = token.onCancellationRequested(() => finish(undefined));
     }));
   } finally {
-    try { fs.rmSync(file, { force: true }); } finally { unlock(); }
+    try { fs.rmSync(file, { force: true }); } finally { unlock.release(); }
   }
 }

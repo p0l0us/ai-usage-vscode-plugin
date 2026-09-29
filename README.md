@@ -64,8 +64,8 @@ log and settings actions in one picker. A service's **Accounts** row opens its A
 
 Run **AI Usage: Manage Claude/Codex Authentication Profiles** from the Command Palette, click the Claude or Codex
 status bar item, or choose a service's **Accounts** row in the AI Usage menu, to open that service's **Accounts**
-menu. You can save and name the current login, import a credential JSON file, and switch among up to 20 profiles
-per service. Every saved profile is listed with its login email, its last usage reading and check time, and the
+menu. You can save and name the current login, import a credential JSON file, export every saved profile to a file
+and import it on another computer, and switch among up to 20 profiles per service. Every saved profile is listed with its login email, its last usage reading and check time, and the
 active one is marked:
 
 ![Claude Accounts menu with five saved profiles, their usage and the manage and account feature actions](images/screenshots/accounts-claude.png)
@@ -84,13 +84,20 @@ and save again. An imported profile is saved but not activated until you choose 
 per turn, so open Claude chats and CLI sessions use a switched login from their next turn, with no restart. Codex
 keeps its login in memory, so open Codex chats follow a switch only through the optional **Codex account
 proxy** (`aiUsage.codex.proxy.enabled`), which routes their requests through AI Usage and attaches the active login
-per request; without it, AI Usage offers an extension-host restart. In remote development, profiles belong to the
-extension host (local, SSH, WSL, or container) where the command is run.
+per request; without it, AI Usage offers an extension-host restart. VS Code keeps the saved profiles and their
+logins with the VS Code client, the computer in front of you, also in a Remote-SSH, WSL or container window;
+activating a profile writes the native credential file of the host that window is connected to.
 
 **Save current login…** offers to create a new profile or to replace one that is already saved, which is also how
 a profile whose token has expired is repaired after signing in with that account again:
 
 ![Save current login picker with Create a new profile… and an existing profile to update](images/screenshots/save-current-login.png)
+
+**Export or import saved profiles…** under Manage leads to both. **Export saved profiles…** writes the saved
+Claude and Codex profiles, logins included, to a JSON file and opens it in the editor, and **Import saved
+profiles…** reads it on another computer: profiles not saved there are added, and a saved profile whose login is missing gets it back. Nothing is activated. The file holds live login tokens in plain text, so delete
+it once imported, and mind that a copied login is the same session on both computers; see
+[Moving profiles to another computer](docs/CONFIGURATION.md#moving-profiles-to-another-computer).
 
 ### Account keep-alives and automatic rotation
 
@@ -135,7 +142,8 @@ under `aiUsage.claude.*` and `aiUsage.codex.*`; see
 Background checks swap credentials only inside the dedicated home, save refreshed tokens back to SecretStorage,
 and remove the staged credential file afterward. For a checked active account, refreshed tokens are also written
 back to its native login when that login has not changed during the check. Schedules persist across restarts and
-checks are coordinated between windows on the same extension host.
+checks are coordinated between the windows connected to the same host; a check left behind by a window that stopped
+responding is taken over after 10 minutes.
 
 ### Authentication profile examples
 

@@ -774,6 +774,11 @@ export function activate(context: vscode.ExtensionContext): void {
     }));
     void automation.tick();
   }));
+  context.subscriptions.push(vscode.commands.registerCommand('aiUsage.exportAuthProfiles', () => authProfiles.exportProfiles()));
+  context.subscriptions.push(vscode.commands.registerCommand('aiUsage.importAuthProfiles', async () => {
+    // Paused like the Accounts menu, so a sweep does not read a profile while its login is being written.
+    if (await automation.withPaused(() => authProfiles.importProfiles())) { void automation.tick(); }
+  }));
   context.subscriptions.push(vscode.commands.registerCommand('aiUsage.openLog', () => output?.show(true)));
   context.subscriptions.push(vscode.commands.registerCommand('aiUsage.openAgentsWindowSetup', () =>
     vscode.commands.executeCommand('workbench.action.openWalkthrough', `${context.extension.id}#${AGENTS_WINDOW_WALKTHROUGH}`, false)
@@ -1624,8 +1629,8 @@ function automationSettings(provider: AuthProvider, authProfiles: AuthProfileMan
   return {
     enabled: authProfiles.automationEnabled(provider, 'keepAlive'),
     autoRotate: authProfiles.automationEnabled(provider, 'autoRotate'),
-    // Codex has no 5-hour setting: when it reports that window, only a used-up one (100%) rotates.
-    fiveHourThresholdPercent: provider === 'claude' ? threshold('fiveHourThresholdPercent', 95) : 100,
+    // Codex defaults to rotating on a used-up 5-hour window only; lower it to leave before the window runs out.
+    fiveHourThresholdPercent: threshold('fiveHourThresholdPercent', provider === 'claude' ? 95 : 100),
     weeklyThresholdPercent: threshold('weeklyThresholdPercent', provider === 'claude' ? 99.5 : 99),
     countsWindow: modelWindowFilter(config.get<string>(`${prefix}.autoRotate.modelLimits`, 'auto'),
       provider === 'claude' ? claudeCodeModel() : undefined),

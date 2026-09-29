@@ -473,3 +473,16 @@ test('rotation that finds no account below the thresholds says so once', async t
   assert.equal(notices.length, 1);
   assert.match(notices[0][1], /7d 97% ≥ 90%/);
 });
+
+test('a keep-alive sweep rotates as soon as the active account reaches its limit, not after the last account', async t => {
+  const f = fixture(t, { values: { a: [10, 10], b: [10, 10], c: [10, 10] }, settings: { codex: { enabled: true, autoRotate: true } },
+    beforeProbe: (provider, credential, keepAlive) => {
+      // While b's keep-alive runs, the status bar reads the active account a at its limit.
+      if (credential.id === 'b' && keepAlive) { f.values.a = [99.5, 10]; f.observe('codex', [99.5, 10], 'a'); }
+    } });
+  await f.service.tick();
+  assert.deepEqual(f.switches, [['codex', 'b', true]]);
+  const order = f.calls.map(call => `${call[1]}:${call[2] ? 'ka' : 'usage'}`);
+  // b was read and verified for the switch before c's keep-alive; a sweep that only rotated at its end would do c first.
+  assert.ok(order.indexOf('c:ka') > order.lastIndexOf('b:ka'), order.join(' '));
+});
