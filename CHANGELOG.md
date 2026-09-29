@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.0.32 (2026-09-29)
+
+- Choosing a profile marked **Login problem** in the Accounts menu, or sending it a keep-alive, no longer shows two
+  **Sign in again** notifications when the login turns out to be dead. The keep-alive's own failure notification
+  reports it and offers the sign-in; the automation's once-per-login announcement is recorded as given instead of
+  being shown as well. That notification now also offers **Sign in again** when the keep-alive itself went through
+  but the usage read found the login revoked.
+
 ## 0.0.31 (2026-09-29)
 
 - **Sign in again…** in the Claude and Codex Accounts menus replaces a saved profile's login by running the CLI

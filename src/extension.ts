@@ -709,25 +709,34 @@ export function activate(context: vscode.ExtensionContext): void {
         const title = provider === 'claude' ? 'Claude' : 'Codex';
         if (profiles.length === 1) {
           const [profile] = profiles;
+          // This one notification reports the outcome, a dead login included, so the automation must not announce
+          // the same failure a second time; it only records the login as reported.
           const result = await vscode.window.withProgress({
             location: vscode.ProgressLocation.Notification,
             title: `AI Usage: sending ${title} keep-alive for “${profile.name}”…`,
             cancellable: false
-          }, () => automation.sendKeepAliveNow(provider, profile.id));
+          }, () => automation.sendKeepAliveNow(provider, profile.id, { callerReports: true }));
+          // Revoked, or expired and not refreshable, found by the keep-alive or by the usage read: only a new sign-in helps.
+          const dead = [result.keepAliveError, result.usageError].find(needsSignIn);
+          let message: string;
+          let succeeded = false;
           if (result.keepAliveError) {
-            const suffix = result.usage ? ' Usage statistics were still updated.' : '';
-            const message = `AI Usage: ${title} keep-alive failed for “${profile.name}”: ${readableProblem(result.keepAliveError)}${suffix}`;
-            if (needsSignIn(result.keepAliveError)) {
-              // The CLI tried to refresh the login and could not, so only a new sign-in helps; offer it here.
-              const choice = await vscode.window.showWarningMessage(message, 'Sign in again', 'Skip');
-              if (choice === 'Sign in again') { await signInAgain(provider, profile.id); }
-            } else {
-              void vscode.window.showWarningMessage(message);
-            }
+            const suffix = result.usage ? ' Usage statistics were still updated.'
+              : dead && dead !== result.keepAliveError ? ` Usage statistics could not be updated either: ${readableProblem(dead)}` : '';
+            message = `AI Usage: ${title} keep-alive failed for “${profile.name}”: ${readableProblem(result.keepAliveError)}${suffix}`;
           } else if (result.usage) {
-            void vscode.window.showInformationMessage(`AI Usage: ${title} keep-alive completed for “${profile.name}”. Usage statistics updated.`);
+            succeeded = true;
+            message = `AI Usage: ${title} keep-alive completed for “${profile.name}”. Usage statistics updated.`;
           } else {
-            void vscode.window.showWarningMessage(`AI Usage: ${title} keep-alive completed for “${profile.name}”, but usage statistics could not be updated${result.usageError ? `: ${readableProblem(result.usageError)}` : '.'}`);
+            message = `AI Usage: ${title} keep-alive completed for “${profile.name}”, but usage statistics could not be updated${result.usageError ? `: ${readableProblem(result.usageError)}` : '.'}`;
+          }
+          if (dead) {
+            const choice = await vscode.window.showWarningMessage(message, 'Sign in again', 'Skip');
+            if (choice === 'Sign in again') { await signInAgain(provider, profile.id); }
+          } else if (succeeded) {
+            void vscode.window.showInformationMessage(message);
+          } else {
+            void vscode.window.showWarningMessage(message);
           }
           return;
         }

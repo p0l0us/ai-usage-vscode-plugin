@@ -154,6 +154,22 @@ test('an expired login the CLI could not refresh is announced for a new sign-in 
   assert.match(f.service.usageDetail('claude', 'b'), /\$\(warning\) Login expired/);
 });
 
+test('a keep-alive whose caller reports a dead login records it as announced without telling onAccountProblem', async t => {
+  const expired = 'Keep-alive CLI exited with code 1: Failed to authenticate: OAuth session expired and could not be refreshed';
+  const f = fixture(t, { values: { b: undefined }, keepAliveErrors: { b: expired }, usageErrors: { b: 'Login token expired. Run `claude` once to refresh it.' } });
+  const result = await f.service.sendKeepAliveNow('claude', 'b', { callerReports: true });
+  assert.equal(result.keepAliveError, expired);
+  assert.deepEqual(f.problems, []);
+  assert.equal(f.service.loginProblem('claude', 'b'), expired);
+  // The same dead login is not announced later either, by a plain manual keep-alive or by the periodic sweep.
+  await f.service.sendKeepAliveNow('claude', 'b');
+  f.settings.claude.enabled = true;
+  f.advance(2 * HOUR + 1);
+  await f.service.tick();
+  assert.deepEqual(f.calls.map(call => call[1]).filter(id => id === 'b').length, 3);
+  assert.deepEqual(f.problems, []);
+});
+
 test('a merely expired token is a login problem to check again, not one to announce', async t => {
   const expired = 'Login token expired. Run `codex` once to refresh it.';
   const f = fixture(t, { values: { c: undefined }, usageErrors: { c: expired } });

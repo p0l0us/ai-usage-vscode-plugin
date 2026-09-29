@@ -187,7 +187,7 @@ export class AccountAutomation {
   /**
    * Set by extension.ts: told once per credential and problem when a saved login is broken — `revoked` when only a
    * new sign-in can fix it (revoked, or expired and not refreshable, from any check), otherwise when rotation's
-   * keep-alive refused a switch candidate.
+   * keep-alive refused a switch candidate. Not told when the check's caller reports the problem itself.
    */
   onAccountProblem?: (provider: AuthProvider, id: string, reason: string, revoked: boolean) => void;
 
@@ -289,10 +289,14 @@ export class AccountAutomation {
     void this.tick();
   }
 
-  /** Run an explicitly requested keep-alive regardless of the periodic feature state or current backoff. */
-  sendKeepAliveNow(provider: AuthProvider, id: string): Promise<KeepAliveNowResult> {
+  /**
+   * Run an explicitly requested keep-alive regardless of the periodic feature state or current backoff.
+   * `callerReports`: the caller tells the user about a dead login itself, from the returned errors, so
+   * `onAccountProblem` is not told about it; the login still counts as announced, and later checks stay quiet.
+   */
+  sendKeepAliveNow(provider: AuthProvider, id: string, { callerReports = false }: { callerReports?: boolean } = {}): Promise<KeepAliveNowResult> {
     // A manual call counts as this account's latest keep-alive for the periodic schedule.
-    return this.checkNow(provider, id, true, (state) => ({ ...state, lastKeepAliveAt: this.now() }));
+    return this.checkNow(provider, id, true, (state) => ({ ...state, lastKeepAliveAt: this.now() }), !callerReports);
   }
 
   /** After a new sign-in replaced a profile's login: forget the dead one's errors and read its usage right away. */
@@ -302,7 +306,7 @@ export class AccountAutomation {
   }
 
   private async checkNow(provider: AuthProvider, id: string, keepAlive: boolean,
-    prepare: (state: AccountState) => AccountState): Promise<KeepAliveNowResult> {
+    prepare: (state: AccountState) => AccountState, announce = true): Promise<KeepAliveNowResult> {
     if (this.disposed) { throw new Error('Account automation is no longer running.'); }
     if (!this.profiles.profiles(provider).some((profile) => profile.id === id)) {
       throw new Error('The selected account no longer exists.');
@@ -311,7 +315,7 @@ export class AccountAutomation {
     if (!unlock) { throw new Error(`Another ${provider} account check is already running.`); }
     try {
       this.write(provider, id, prepare(this.read(provider, id)));
-      return await this.checkAccount(provider, id, this.settings(provider), keepAlive, true);
+      return await this.checkAccount(provider, id, this.settings(provider), keepAlive, { ignoreBackoff: true, announce });
     } finally { unlock(); }
   }
 
@@ -356,9 +360,14 @@ export class AccountAutomation {
     } finally { unlock(); }
   }
 
-  /** `verifying`: rotation's pre-switch keep-alive, where any failure is worth telling the user about. */
-  private async checkAccount(provider: AuthProvider, id: string, settings: AutomationSettings,
-    keepAlive: boolean, ignoreBackoff = false, verifying = false): Promise<KeepAliveNowResult> {
+  /**
+   * `ignoreBackoff`: check even while a provider error pauses this account. `verifying`: rotation's pre-switch
+   * keep-alive, where any failure is worth telling the user about. `announce`: a broken login is told to
+   * `onAccountProblem`; off when the caller reports it from the result, which still records it as announced.
+   */
+  private async checkAccount(provider: AuthProvider, id: string, settings: AutomationSettings, keepAlive: boolean,
+    { ignoreBackoff = false, verifying = false, announce = true }: { ignoreBackoff?: boolean; verifying?: boolean; announce?: boolean } = {}
+  ): Promise<KeepAliveNowResult> {
     const previous = this.read(provider, id);
     if (!ignoreBackoff && previous.nextAllowedAt && previous.nextAllowedAt > this.now()) {
       return { usageError: 'Account usage check is temporarily paused after a provider error.' };
@@ -396,8 +405,8 @@ export class AccountAutomation {
       const key = `${fingerprint(credential)}:${revoked ? 'revoked' : problem}`;
       if (state.problemNotified !== key) {
         this.write(provider, id, { ...this.read(provider, id), problemNotified: key });
-        this.log(`${provider}: account ${id} ${revoked ? 'login was revoked' : 'failed its pre-switch keep-alive'}: ${problem}`);
-        this.onAccountProblem?.(provider, id, problem, Boolean(revoked));
+        this.log(`${provider}: account ${id} ${revoked ? 'login was revoked' : 'failed its pre-switch keep-alive'}: ${problem}${announce ? '' : ' (reported by the caller)'}`);
+        if (announce) { this.onAccountProblem?.(provider, id, problem, Boolean(revoked)); }
       }
     }
     this.log(`${provider}: account ${id} ${keepAlive ? 'keep-alive / ' : ''}usage: ${result.kind}${usageError ? ` (${usageError})` : ''}${outcome.keepAliveError ? `; keep-alive: ${outcome.keepAliveError}` : ''}`);
@@ -491,7 +500,7 @@ export class AccountAutomation {
       // A usage reading does not prove that the login still works; a real model call does. Never switch to a
       // broken login: report it and try the next account. The call counts as the account's periodic keep-alive.
       this.write(provider, candidate.id, { ...this.read(provider, candidate.id), lastKeepAliveAt: this.now() });
-      const verified = await this.checkAccount(provider, candidate.id, settings, true, true, true);
+      const verified = await this.checkAccount(provider, candidate.id, settings, true, { ignoreBackoff: true, verifying: true });
       if (verified.keepAliveError || !verified.usage) {
         this.log(`${provider}: not rotating to "${candidate.name}": ${verified.keepAliveError ?? verified.usageError ?? 'usage unavailable'}`);
         continue;
