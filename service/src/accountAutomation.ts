@@ -121,6 +121,8 @@ export function eligibleAccount(usage: LiveUsage, now = Date.now(), limits: numb
 const PACE_MARGIN = 10;
 /** An active-account reading at most this old decides rotation without reading the account again. */
 const RECENT_READING_MS = 2 * 60_000;
+/** A hold whose client never lifts it, such as a sign-in whose window closed, ends by itself after this long. */
+const HOLD_MAX_MS = 20 * 60_000;
 /** How much better a candidate must score before proactive rotation leaves a working account. */
 const SWITCH_MARGIN: Record<Exclude<RotationStrategy, 'sequential'>, number> = { soonestReset: 3, evenPace: 5, leastWaste: 0.1 };
 
@@ -203,10 +205,46 @@ export class AccountAutomation {
   private heartbeat?: () => void;
   /** Providers whose sweep was requested by hand, which runs even with rotation off and ignores the sweep spacing. */
   private readonly forced = new Set<AuthProvider>();
+  /** Providers whose checks wait for something interactive, such as a sign-in, with the reason a refused action reads. */
+  private readonly holds = new Map<AuthProvider, { reason: string; timer: NodeJS.Timeout }>();
 
-  dispose(): void { this.disposed = true; this.abort.abort(); }
+  dispose(): void {
+    this.disposed = true;
+    this.abort.abort();
+    for (const hold of this.holds.values()) { clearTimeout(hold.timer); }
+    this.holds.clear();
+  }
 
   isCheckingActive(provider: AuthProvider): boolean { return this.checkingActive.has(provider); }
+
+  /**
+   * Keeps every keep-alive, sweep and rotation of the provider from starting until `resume`, and for `maxMs` at
+   * most: a client that vanished in the middle of a sign-in must not stop the automation for good. A running sweep
+   * stops at its next account; a keep-alive or sweep requested by hand is refused with the reason meanwhile.
+   */
+  hold(provider: AuthProvider, reason: string, maxMs = HOLD_MAX_MS): void {
+    this.resume(provider, true);
+    const timer = setTimeout(() => {
+      if (this.holds.get(provider)?.timer !== timer) { return; }
+      this.holds.delete(provider);
+      this.log(`${provider}: account checks resume; the hold (${reason}) ran out after ${Math.round(maxMs / 60_000)} minutes`);
+    }, maxMs);
+    timer.unref?.();
+    this.holds.set(provider, { reason, timer });
+    this.log(`${provider}: account checks on hold: ${reason}`);
+  }
+
+  /** Lets the provider's checks run again; nothing happens when they were not on hold. */
+  resume(provider: AuthProvider, replacing = false): void {
+    const hold = this.holds.get(provider);
+    if (!hold) { return; }
+    clearTimeout(hold.timer);
+    this.holds.delete(provider);
+    if (!replacing) { this.log(`${provider}: account checks resume`); }
+  }
+
+  /** Why the provider's checks are on hold, when they are. */
+  heldFor(provider: AuthProvider): string | undefined { return this.holds.get(provider)?.reason; }
 
   /** The stored reading and check record of one account; no credential is ever part of it. */
   accountState(provider: AuthProvider, id: string): AccountState { return this.read(provider, id); }
@@ -324,8 +362,20 @@ export class AccountAutomation {
    * `onAccountProblem` is not told about it; the login still counts as announced, and later checks stay quiet.
    */
   sendKeepAliveNow(provider: AuthProvider, id: string, { callerReports = false }: { callerReports?: boolean } = {}): Promise<KeepAliveNowResult> {
+    const held = this.heldFor(provider);
+    if (held) { return Promise.reject(new Error(`${held.charAt(0).toUpperCase()}${held.slice(1)}; keep-alives wait until it finishes.`)); }
     // A manual call counts as this account's latest keep-alive for the periodic schedule.
     return this.checkNow(provider, id, true, (state) => ({ ...state, lastKeepAliveAt: this.now() }), !callerReports);
+  }
+
+  /**
+   * Reads an account's usage from the vendor now, without a keep-alive prompt: what an agent asks for before it
+   * decides to switch. Costs one usage read (budgeted for Claude), not a model call.
+   */
+  readUsageNow(provider: AuthProvider, id: string): Promise<KeepAliveNowResult> {
+    const held = this.heldFor(provider);
+    if (held) { return Promise.reject(new Error(`${held.charAt(0).toUpperCase()}${held.slice(1)}; account checks wait until it finishes.`)); }
+    return this.checkNow(provider, id, false, (state) => state);
   }
 
   /** After a new sign-in replaced a profile's login: forget the dead one's errors and read its usage right away. */
@@ -371,6 +421,7 @@ export class AccountAutomation {
   private async checkProvider(provider: AuthProvider): Promise<void> {
     const settings = this.settings(provider);
     if (!settings.enabled && !settings.autoRotate) { return; }
+    if (this.holds.has(provider)) { return; }
     const lock = acquireAccountLock(path.join(this.directory, `${provider}.lock`));
     if (!lock) { return; }
     this.heartbeat = lock.touch;
@@ -379,7 +430,7 @@ export class AccountAutomation {
       if (settings.autoRotate) { await this.rotate(provider, settings); }
       if (settings.enabled) {
         for (const profile of this.profiles.profiles(provider)) {
-          if (this.disposed || this.paused || !this.settings(provider).enabled) { break; }
+          if (this.disposed || this.paused || this.holds.has(provider) || !this.settings(provider).enabled) { break; }
           const due = () => {
             const state = this.read(provider, profile.id);
             return state.lastKeepAliveAt === undefined || this.now() - state.lastKeepAliveAt >= settings.intervalMs ? state : undefined;
@@ -482,6 +533,8 @@ export class AccountAutomation {
 
   private async rotate(provider: AuthProvider, settings: AutomationSettings): Promise<string | undefined> {
     if (this.disposed || this.paused) { return 'the service is busy'; }
+    const held = this.heldFor(provider);
+    if (held) { return held; }
     if (!this.rotationAllowed(provider)) { return 'automatic rotation is off'; }
     const forced = this.forced.has(provider);
     const active = this.profiles.activeProfileId(provider);
@@ -536,14 +589,14 @@ export class AccountAutomation {
     if (!exhausted && (!proactive || own === undefined)) { return 'the active account reports no weekly window to compare'; }
     const requiredWindows = counted(current, settings).map((window) => window.label);
     for (const candidate of this.ranked(provider, active, settings)) {
-      if (this.disposed || this.paused || !this.rotationAllowed(provider)) { return 'the sweep was interrupted'; }
+      if (this.disposed || this.paused || this.holds.has(provider) || !this.rotationAllowed(provider)) { return 'the sweep was interrupted'; }
       if (own !== undefined && !(candidate.usable && candidate.score !== undefined && candidate.score + margin < own)) { continue; }
       const candidateUsage = (await this.checkAccount(provider, candidate.id, settings, false)).usage;
       if (!candidateUsage || !eligibleAccount(candidateUsage, this.now(), settings) ||
         !requiredWindows.every((label) => candidateUsage.windows.some((window) => window.label === label))) { continue; }
       const score = rotationScore(strategy, candidateUsage, this.now(), settings);
       if (own !== undefined && !(score !== undefined && score + margin < own)) { continue; }
-      if (this.disposed || this.paused || !this.rotationAllowed(provider)) { return 'the sweep was interrupted'; }
+      if (this.disposed || this.paused || this.holds.has(provider) || !this.rotationAllowed(provider)) { return 'the sweep was interrupted'; }
       // A usage reading does not prove that the login still works; a real model call does. Never switch to a
       // broken login: report it and try the next account. The call counts as the account's periodic keep-alive.
       this.write(provider, candidate.id, { ...this.read(provider, candidate.id), lastKeepAliveAt: this.now() });

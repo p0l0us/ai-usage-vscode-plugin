@@ -25,6 +25,26 @@ test('setting names map to service keys only for known settings of the right ser
   assert.equal(configKeyOf('aiUsage.codex.autoRotate.strategy'), undefined, 'Codex has no strategy setting');
   assert.equal(configKeyOf('aiUsage.claude.source'), undefined, 'the usage source is not a service setting');
   assert.equal(configKeyOf('aiUsage.statusBar.enabled'), undefined);
+  assert.equal(configKeyOf('aiUsage.mcp.enabled'), 'mcp.enabled', 'the MCP switches are global service settings');
+  assert.equal(configKeyOf('aiUsage.mcp.switching'), 'mcp.switching');
+  assert.equal(configKeyOf('aiUsage.mcp.other'), undefined);
+  assert.equal(settingKey('mcp.enabled'), 'aiUsage.mcp.enabled');
+});
+
+test('the MCP switches are seeded, pulled and pushed like the provider settings', async () => {
+  settings.clear(); updates.length = 0;
+  // VS Code answers an unset setting with its package.json default; the mock needs the value set.
+  settings.set('aiUsage.mcp.enabled', true);
+  settings.set('aiUsage.mcp.switching', true);
+  const config = defaultConfig();
+  assert.equal(readSettings(config)['mcp.enabled'], true);
+  assert.deepEqual(differences(config).map((diff) => diff.key), ['mcp.enabled']);
+  const sync = new ConfigSync(() => undefined);
+  assert.equal(await sync.pull(setConfigValue(config, 'mcp.switching', false)), 2, 'the service values win: enabled off, switching off');
+  assert.deepEqual(updates.sort(), [['aiUsage.mcp.enabled', false], ['aiUsage.mcp.switching', false]]);
+  await new Promise((resolve) => setTimeout(resolve, 600));
+  settings.set('aiUsage.mcp.enabled', true);
+  assert.deepEqual(sync.changedKeys({ affectsConfiguration: (key) => key === 'aiUsage.mcp.enabled' }, config), { 'mcp.enabled': true });
 });
 
 test('user settings are read for seeding, differences are found, and pulls write only what differs', async () => {

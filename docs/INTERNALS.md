@@ -75,6 +75,14 @@ hands every reading of the active account to the service (`usage.observe`), whic
 profile still owns the native login. The Claude endpoint call ledger lives in the service home, so the status
 bar's calls and the service's probes are spaced together.
 
+`service/src/mcp.ts` is the MCP server behind `ai-usage mcp` (experimental): JSON-RPC 2.0 over stdio, one message
+per line, written without an SDK, with `list_accounts`, `refresh_usage` (the `usage.read` method, a probe without
+the keep-alive prompt), `switch_account` and `rotate_account` as thin tools over the service client. The `mcp`
+block of `config.json` (`mcp.enabled`, `mcp.switching`; `GLOBAL_SETTINGS` in `configStore.ts`, synced to
+`aiUsage.mcp.*` like the provider settings) is read on every tool call, so a switch takes effect for a running
+server. `src/mcpProvider.ts` registers a `McpServerDefinitionProvider` that offers the installed service's command
+to the agents of the VS Code window while the setting is on, and re-announces it after an install or upgrade.
+
 ## Authentication profile storage and switching
 
 `service/src/profileStore.ts` keeps profile names, timestamps, stable account ids, emails, logins and the active

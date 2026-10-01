@@ -15,7 +15,7 @@ import { ExportedProfile, ImportPlan, parseProfileExport, serializeProfileExport
 import { ActivationOutcome, ProfileMetadata, ProfileStore, PROVIDERS, TITLES, importOutcome } from './profileStore';
 import {
   ActivationResult, ExportResult, ImportPlanView, ImportSummary, ProfileView, ProviderView, SaveNativeResult, ServiceEvent, ServiceInfo,
-  SerializedUsage, SignInPreparation, SignInResult, Snapshot, serializeKeepAlive
+  SerializedUsage, SignInPreparation, SignInResult, Snapshot, UsageReadResult, serializeKeepAlive
 } from './protocol';
 import { profilesFile, stateDir } from './paths';
 
@@ -311,6 +311,9 @@ export class AccountService {
     for (const [key, value] of Object.entries(isolatedEnvironment(provider, home))) {
       if (typeof value === 'string') { env[key] = value; }
     }
+    // The user is about to attend a browser sign-in; keep-alives and sweeps of this service wait until it is over,
+    // so no check competes with it and no notification about another account interrupts it.
+    this.automation.hold(provider, `a ${TITLES[provider]} sign-in is in progress`);
     return { cli, args: loginArgs(provider), cwd: home, env, file };
   }
 
@@ -322,7 +325,7 @@ export class AccountService {
     const file = stagedCredentialPath(provider, loginHome(provider, settings.home));
     let credential: StoredCredential;
     try { credential = parseCredentialJson(provider, fs.readFileSync(file, 'utf8')); }
-    catch { throw new Error('The sign-in was not completed: the CLI wrote no login.'); }
+    catch { this.automation.resume(provider); throw new Error('The sign-in was not completed: the CLI wrote no login.'); }
     const identity = await this.store.identity(provider, credential);
     const otherAccount = (profile.accountId && identity.accountId && profile.accountId !== identity.accountId) ||
       (profile.email && identity.email && profile.email.toLowerCase() !== identity.email.toLowerCase());
@@ -332,6 +335,7 @@ export class AccountService {
     }
     const active = await this.automation.withPaused(() => this.store.replaceCredential(provider, id, credential));
     fs.rmSync(file, { force: true });
+    this.automation.resume(provider);
     this.emit({ event: 'stateChanged', provider });
     // The login is saved either way; a busy check elsewhere only delays the usage reading.
     const result = await this.automation.credentialReplaced(provider, id).catch((error: unknown): KeepAliveNowResult =>
@@ -345,6 +349,7 @@ export class AccountService {
   cancelSignIn(provider: AuthProvider): void {
     const settings = automationSettings(this.config, provider);
     fs.rmSync(stagedCredentialPath(provider, loginHome(provider, settings.home)), { force: true });
+    this.automation.resume(provider);
   }
 
   // --- import and export ---------------------------------------------------------------------------------------
@@ -454,6 +459,13 @@ export class AccountService {
         return { ...outcome, activeProfileId: this.store.activeProfileId(provider), activeProfileName: this.store.activeProfileName(provider) };
       }
       case 'automation.tick': await this.tick(); return { ok: true };
+      case 'usage.read': {
+        const provider = providerParam(params);
+        const profile = this.resolveParam(provider, params);
+        const result = await this.automation.readUsageNow(provider, profile.id);
+        this.emit({ event: 'stateChanged', provider });
+        return { profile: { id: profile.id, name: profile.name, email: profile.email }, ...serializeKeepAlive(result) } satisfies UsageReadResult;
+      }
       case 'usage.observe': {
         const provider = providerParam(params);
         const id = stringParam(params, 'id');

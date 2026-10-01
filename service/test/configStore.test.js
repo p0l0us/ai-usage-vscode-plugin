@@ -3,7 +3,7 @@ const test = require('node:test');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { defaultConfig, normalizeConfig, setConfigValue, getConfigValue, listConfig, loadConfig, saveConfig, automationSettings, strategySummary, SETTINGS } = require('../out/configStore');
+const { defaultConfig, normalizeConfig, setConfigValue, getConfigValue, listConfig, loadConfig, saveConfig, automationSettings, strategySummary, SETTINGS, GLOBAL_SETTINGS } = require('../out/configStore');
 
 test('defaults match the extension settings: Claude rotates at 95/99.5 with soonestReset, Codex at 100/99 sequentially', () => {
   const config = defaultConfig();
@@ -49,7 +49,7 @@ test('listConfig lists every applicable key with Claude first and Codex without 
   assert.ok(keys.includes('claude.autoRotate.strategy'));
   assert.ok(!keys.includes('codex.autoRotate.strategy'));
   assert.ok(keys.includes('codex.autoRotate.fiveHourThresholdPercent'));
-  assert.equal(entries.length, SETTINGS.length + SETTINGS.filter((setting) => !setting.providers).length);
+  assert.equal(entries.length, SETTINGS.length + SETTINGS.filter((setting) => !setting.providers).length + GLOBAL_SETTINGS.length);
 });
 
 test('the file round-trips and a missing file yields the defaults', (t) => {
@@ -80,4 +80,22 @@ test('automation settings bound the intervals and force Codex to sequential at i
   assert.equal(codex.intervalMs, 6 * 3_600_000);
   assert.equal(strategySummary(config, 'claude'), 'soonestReset, proactive, 5h ≥ 95%, 7d ≥ 99.5%');
   assert.equal(strategySummary(config, 'codex'), '5h ≥ 100%, 7d ≥ 99%');
+});
+
+test('the mcp block is a global setting: off by default, switching on, listed after the provider settings and synced like them', () => {
+  const config = defaultConfig();
+  assert.deepEqual(config.mcp, { enabled: false, switching: true });
+  assert.equal(normalizeConfig({ mcp: { enabled: 'yes', switching: 'maybe' } }).mcp.enabled, true);
+  assert.equal(normalizeConfig({ mcp: { enabled: 'yes', switching: 'maybe' } }).mcp.switching, true, 'an invalid value keeps the default');
+  const next = setConfigValue(config, 'mcp.enabled', 'on');
+  assert.equal(next.mcp.enabled, true);
+  assert.equal(config.mcp.enabled, false);
+  assert.equal(getConfigValue(next, 'mcp.enabled'), true);
+  assert.equal(getConfigValue(setConfigValue(next, 'mcp.switching', false), 'mcp.switching'), false);
+  assert.throws(() => setConfigValue(config, 'claude.mcp.enabled', true), /Unknown setting/);
+  assert.throws(() => setConfigValue(config, 'mcp.nothing', true), /mcp\.enabled, mcp\.switching/);
+  const keys = listConfig(next).map((entry) => entry.key);
+  assert.deepEqual(keys.slice(-2), ['mcp.enabled', 'mcp.switching']);
+  assert.equal(listConfig(next).find((entry) => entry.key === 'mcp.enabled').value, true);
+  assert.ok(GLOBAL_SETTINGS.every((setting) => setting.type === 'boolean'));
 });

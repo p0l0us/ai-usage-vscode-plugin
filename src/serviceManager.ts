@@ -25,6 +25,7 @@ export class ServiceManager implements vscode.Disposable {
   private connecting?: Promise<ServiceClient | undefined>;
   private readonly eventEmitter = new vscode.EventEmitter<ServiceEvent>();
   private readonly stateEmitter = new vscode.EventEmitter<AuthProvider | undefined>();
+  private readonly installEmitter = new vscode.EventEmitter<void>();
   private lastAttemptAt = 0;
   private offered = false;
   private disposed = false;
@@ -37,6 +38,8 @@ export class ServiceManager implements vscode.Disposable {
   readonly onEvent = this.eventEmitter.event;
   /** Fired when a provider's view was refreshed (undefined: the connection was lost). */
   readonly onStateChanged = this.stateEmitter.event;
+  /** Fired after the service package was installed, reinstalled or upgraded. */
+  readonly onDidInstall = this.installEmitter.event;
 
   constructor(private readonly context: vscode.ExtensionContext, private readonly log: (message: string) => void) {
     this.configSync = new ConfigSync(log);
@@ -47,6 +50,7 @@ export class ServiceManager implements vscode.Disposable {
     this.client?.close();
     this.eventEmitter.dispose();
     this.stateEmitter.dispose();
+    this.installEmitter.dispose();
   }
 
   get enabled(): boolean {
@@ -246,6 +250,7 @@ export class ServiceManager implements vscode.Disposable {
         this.log(`service: ${restarted.ok ? `restarted (${restarted.detail})` : `could not start: ${restarted.detail}`}`);
         return { installed, restarted };
       });
+      this.installEmitter.fire();
       const client = this.connected ?? await this.connect();
       const autostart = result.installed.autostart.ok ? `starts at sign-in (${result.installed.autostart.detail})` : `not registered to start at sign-in: ${result.installed.autostart.detail}`;
       const message = `AI Usage: account service ${result.installed.version} installed with Node.js ${node.version} from ${node.source}; ${autostart}. The ai-usage command is available in VS Code terminals${vscode.env.remoteName ? ' of this remote' : ''}; elsewhere add ${launcherDir(this.home)} to your PATH.`;
@@ -266,6 +271,7 @@ export class ServiceManager implements vscode.Disposable {
     const installed = installService({ home: this.home, sourceDir: this.bundledDir, node, log: this.log });
     const restarted = await restartService(this.home);
     this.log(`service: upgraded ${from} → ${installed.version}; ${restarted.ok ? `restarted (${restarted.detail})` : `could not restart: ${restarted.detail}`}`);
+    this.installEmitter.fire();
   }
 
   /** The Account Service menu: status, start, stop, restart, reinstall, uninstall, log, command path. */

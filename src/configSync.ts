@@ -1,22 +1,25 @@
 import * as vscode from 'vscode';
-import { ServiceConfig, SETTINGS, listConfig } from '../service/out';
+import { GLOBAL_SETTINGS, ServiceConfig, SETTINGS, listConfig } from '../service/out';
 
 /**
- * Keeps the service's settings and the extension's `aiUsage.<provider>.*` settings equal: a change in Settings is
- * pushed to the service, a change made with `ai-usage config` (or a hand-edited config.json) is written back to
- * the user settings. The service's file is the source of truth once it exists; the extension seeds it from the
- * user settings the first time.
+ * Keeps the service's settings and the extension's `aiUsage.<provider>.*` and `aiUsage.mcp.*` settings equal: a
+ * change in Settings is pushed to the service, a change made with `ai-usage config` (or a hand-edited config.json)
+ * is written back to the user settings. The service's file is the source of truth once it exists; the extension
+ * seeds it from the user settings the first time.
  */
 
-/** `claude.autoRotate.enabled` ↔ `aiUsage.claude.autoRotate.enabled`. */
+/** `claude.autoRotate.enabled` ↔ `aiUsage.claude.autoRotate.enabled`, `mcp.enabled` ↔ `aiUsage.mcp.enabled`. */
 export function settingKey(configKey: string): string {
   return `aiUsage.${configKey}`;
 }
 
 export function configKeyOf(settingKey: string): string | undefined {
-  const match = /^aiUsage\.((claude|codex)\.(.+))$/.exec(settingKey);
+  if (!settingKey.startsWith('aiUsage.')) { return undefined; }
+  const key = settingKey.slice('aiUsage.'.length);
+  if (GLOBAL_SETTINGS.some((setting) => setting.key === key)) { return key; }
+  const match = /^(claude|codex)\.(.+)$/.exec(key);
   if (!match) { return undefined; }
-  const [, key, provider, rest] = match;
+  const [, provider, rest] = match;
   const schema = SETTINGS.find((setting) => setting.key === rest);
   return schema && (!schema.providers || schema.providers.includes(provider as 'claude' | 'codex')) ? key : undefined;
 }

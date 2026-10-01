@@ -40,6 +40,22 @@
   during a sweep of many accounts switches within one account check, not minutes later.
 - `aiUsage.codex.autoRotate.fiveHourThresholdPercent` sets the Codex 5-hour threshold; its default 100 keeps the
   previous behavior of rotating only on a used-up window.
+- A pending sign-in no longer competes with the automation. From **Sign in again…** (or `ai-usage login`) until the
+  new login is stored or the sign-in is cancelled, that service's keep-alives and rotation wait, a running sweep
+  stops at its next account, and a keep-alive or sweep started by hand says that a sign-in is in progress; the
+  **All accounts** keep-alive stops there and says how many accounts were not sent. The wait ends with the
+  sign-in, or after 20 minutes if the client that started it vanished.
+- **MCP server for AI agents (experimental, off by default).** `ai-usage mcp` serves the saved profiles to an AI
+  agent over the Model Context Protocol on stdin/stdout: `list_accounts` lists every Claude Code and Codex profile
+  with its usage windows, reset times, check time, limit state and login problems; `refresh_usage` reads one
+  profile from the vendor now without a keep-alive prompt; `switch_account` activates a profile by name, number,
+  id or email; `rotate_account` runs a rotation sweep. `aiUsage.mcp.enabled` (`mcp.enabled` for `ai-usage config`)
+  turns it on; `aiUsage.mcp.switching` (default on) decides whether the switching tools are offered at all. Both are
+  checked by the service on every call. While it is on, the extension offers the server to the agents of the VS
+  Code window as **AI Usage accounts** (Copilot agent mode and other consumers of the editor's MCP servers see it
+  without configuration); Claude Code and Codex in a terminal register `~/.ai-usage/bin/ai-usage mcp` themselves.
+  No tool returns login material, and nothing listens on a network port. See
+  [docs/MCP.md](docs/MCP.md).
 
 ## 0.0.32 (2026-09-29)
 

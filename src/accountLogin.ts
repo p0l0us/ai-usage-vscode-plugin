@@ -15,16 +15,23 @@ const LOGIN_TIMEOUT_MS = 15 * 60_000;
 export async function signInWithTerminal(client: ServiceClient, provider: AuthProvider, profileId: string, label: string,
   confirmOtherAccount: (message: string) => Promise<boolean>): Promise<SignInResult | undefined> {
   const prepared = await client.prepareSignIn(provider);
-  const terminal = vscode.window.createTerminal({
-    name: `AI Usage · sign in ${label}`,
-    shellPath: prepared.cli,
-    shellArgs: prepared.args,
-    cwd: prepared.cwd,
-    env: prepared.env,
-    // The service's environment already removed provider variables; merging VS Code's would bring them back.
-    strictEnv: true,
-    isTransient: true
-  });
+  let terminal: vscode.Terminal;
+  try {
+    terminal = vscode.window.createTerminal({
+      name: `AI Usage · sign in ${label}`,
+      shellPath: prepared.cli,
+      shellArgs: prepared.args,
+      cwd: prepared.cwd,
+      env: prepared.env,
+      // The service's environment already removed provider variables; merging VS Code's would bring them back.
+      strictEnv: true,
+      isTransient: true
+    });
+  } catch (error) {
+    // The service holds its checks for this sign-in from `prepare` on; a sign-in that never starts must let go.
+    await client.cancelSignIn(provider).catch(() => undefined);
+    throw error;
+  }
   terminal.show();
   const written = await vscode.window.withProgress({
     location: vscode.ProgressLocation.Notification,

@@ -6,10 +6,11 @@ import * as readline from 'readline';
 import { AuthProvider } from './authFiles';
 import { readableProblem } from './accountProbe';
 import { ServiceClient, ServiceUnavailableError, connectService } from './client';
-import { SETTINGS, listConfig } from './configStore';
+import { GLOBAL_SETTINGS, SETTINGS, listConfig } from './configStore';
 import { runDaemon } from './daemon';
 import { findNode, installService, launcherPath, readCurrentInstall, restartService, serviceStatus, startService, stopService, uninstallService } from './installer';
 import { Logger } from './logger';
+import { runMcpStdio } from './mcp';
 import { logFile, serviceHome } from './paths';
 import { PROVIDERS, TITLES } from './profileStore';
 import type { ProfileView, ProviderView, ServiceEvent, Snapshot } from './protocol';
@@ -52,6 +53,10 @@ Settings
   config                          List every setting with its value
   config <key>                    Show one value, e.g. claude.autoRotate.strategy
   config <key> <value>            Change it, e.g. claude.autoRotate.enabled true
+
+AI agents (experimental)
+  mcp                             Serve the MCP tools on stdin/stdout for an agent (list_accounts, refresh_usage,
+                                  switch_account, rotate_account); off until "config mcp.enabled true"
 
 Service
   service status                  Whether the service is installed, running and registered to start at login
@@ -348,11 +353,17 @@ export async function main(argv: string[], io?: CliOutput): Promise<number> {
           if (!target) { throw new UsageError(`No ${TITLES[service]} profile matches "${rest.slice(1).join(' ')}".`); }
           const prepared = await client.prepareSignIn(service);
           out(`Signing in for ${TITLES[service]} profile “${target.name}”${target.email ? ` (${target.email})` : ''} with a separate home; the active login is untouched until the profile is active.\n`);
-          const code = await new Promise<number | null>((resolve, reject) => {
-            const child = spawn(prepared.cli, prepared.args, { cwd: prepared.cwd, env: prepared.env, stdio: 'inherit', windowsHide: false });
-            child.on('error', reject);
-            child.on('close', (exit) => resolve(exit));
-          });
+          // Ctrl-C reaches the vendor CLI as well; surviving it here lets the cancel below lift the service's hold.
+          const ignoreInterrupt = () => undefined;
+          process.on('SIGINT', ignoreInterrupt);
+          let code: number | null;
+          try {
+            code = await new Promise<number | null>((resolve, reject) => {
+              const child = spawn(prepared.cli, prepared.args, { cwd: prepared.cwd, env: prepared.env, stdio: 'inherit', windowsHide: false });
+              child.on('error', reject);
+              child.on('close', (exit) => resolve(exit));
+            });
+          } finally { process.off('SIGINT', ignoreInterrupt); }
           if (!fs.existsSync(prepared.file)) {
             await client.cancelSignIn(service);
             out(`${yellow('!')} The sign-in was not completed (the CLI exited with ${code ?? 'a signal'}); the profile is unchanged.\n`);
@@ -438,7 +449,7 @@ export async function main(argv: string[], io?: CliOutput): Promise<number> {
           if (args.length < 2 || verb === 'get') {
             const config = await client.getConfig();
             const entry = listConfig(config).find((candidate) => candidate.key === args[0]);
-            if (!entry) { throw new UsageError(`Unknown setting "${args[0]}". Settings: ${SETTINGS.map((setting) => setting.key).join(', ')} (prefixed with claude. or codex.).`); }
+            if (!entry) { throw new UsageError(`Unknown setting "${args[0]}". Settings: ${SETTINGS.map((setting) => setting.key).join(', ')} (prefixed with claude. or codex.), ${GLOBAL_SETTINGS.map((setting) => setting.key).join(', ')}.`); }
             out(json ? `${JSON.stringify(entry.value)}\n` : `${entry.key} = ${bold(String(entry.value))}\n`);
             return 0;
           }
@@ -447,6 +458,21 @@ export async function main(argv: string[], io?: CliOutput): Promise<number> {
           out(json ? `${JSON.stringify(entry?.value)}\n` : `${green('✓')} ${args[0]} = ${bold(String(entry?.value))}\n`);
           return 0;
         });
+      }
+      case 'mcp': {
+        // Stdout carries the protocol; whatever else there is to say goes to stderr.
+        const connect = () => connectService({ home, client: 'mcp', version: serviceVersion(), subscribe: [], start: startInstalledOrLocal(home) });
+        try {
+          const probe = await connect();
+          if (!probe.connected || !(await probe.getConfig()).mcp.enabled) {
+            err('The AI Usage MCP server is turned off: its tools answer with that until "ai-usage config mcp.enabled true" (or aiUsage.mcp.enabled in VS Code) turns it on.\n');
+          }
+          probe.close();
+        } catch (error) {
+          // Served anyway: the service may come up later, and every tool call tries again and reports.
+          err(`${error instanceof Error ? error.message : String(error)}\n`);
+        }
+        return runMcpStdio({ input: process.stdin, output: process.stdout, version: serviceVersion(), log: (message) => err(`${message}\n`), connect });
       }
       case 'service': return serviceCommand(home, rest, flags);
       case 'daemon': {

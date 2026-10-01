@@ -154,7 +154,9 @@ is captured before switching away. If a saved profile stops working with "Login 
 keep-alive instead of being activated, and when the login cannot be refreshed the failure notification offers
 **Sign in again**. The sign-in runs the vendor CLI's login in a terminal whose home is a folder inside the keep-alive
 home, so the active login is not touched; the new login is stored in the profile, and written to the native file
-only when that profile is the active one. A keep-alive or usage check that finds a login revoked, or expired and not
+only when that profile is the active one. While the sign-in is pending, that service's keep-alives and rotation
+wait for it, and a keep-alive or sweep started by hand says that a sign-in is in progress; the wait ends with the
+sign-in, or after 20 minutes at most. A keep-alive or usage check that finds a login revoked, or expired and not
 refreshable, says so once in a notification with the same **Sign in again** action. Signing in natively and using
 **Save current login** to replace the profile still works too.
 
@@ -332,7 +334,8 @@ start the service when they need it.
 view; `status` and `list` print the same information, `use <service> <profile>` switches (by name, number or
 id), `save`, `import`, `rename`, `delete`, `login`, `keepalive`, `rotate`, `export` and `import-profiles`
 do what the Accounts menus do, `config` shows or changes the settings, `service status|install|uninstall|start|
-stop|restart|run` manages the service and `log` shows its log. VS Code terminals see the command through the
+stop|restart|run` manages the service, `log` shows its log and `mcp` serves the
+[MCP tools for AI agents](#mcp-server-for-ai-agents-experimental). VS Code terminals see the command through the
 extension's terminal environment; elsewhere add `~/.ai-usage/bin` to your PATH.
 
 **Settings.** The service keeps its settings in `~/.ai-usage/config.json`; `ai-usage config` reads and writes
@@ -351,6 +354,22 @@ data files.
 | Setting | Default | Purpose |
 | --- | --- | --- |
 | `aiUsage.accountService.enabled` | `true` | Install, start and use the account service. Off: no Accounts menus, keep-alives or rotation. |
+
+## MCP server for AI agents (experimental)
+
+The account service can serve its profiles to AI agents over the Model Context Protocol: `ai-usage mcp` is a stdio
+MCP server whose tools list every saved profile with its usage windows (`list_accounts`), read a fresh reading for
+one profile (`refresh_usage`) and, when allowed, switch the active account (`switch_account`) or run a rotation
+sweep (`rotate_account`). While it is on, the extension also offers the server to the agents of the VS Code window
+as **AI Usage accounts**, so Copilot agent mode and other consumers of the editor's MCP servers see it without any
+configuration; command-line agents register `~/.ai-usage/bin/ai-usage mcp` themselves. The feature is experimental,
+off by default, and described in [MCP server for AI agents](MCP.md): the tools, their answers, how to register the
+server with Claude Code and Codex, and what a switch by an agent means.
+
+| Setting | Default | Purpose |
+| --- | --- | --- |
+| `aiUsage.mcp.enabled` | `false` | Serve the MCP tools and offer the server to the agents of this window. Mirrored to the service's `mcp.enabled`; checked on every tool call. |
+| `aiUsage.mcp.switching` | `true` | Offer `switch_account` and `rotate_account`; off leaves agents the usage tools only. Mirrored to `mcp.switching`. |
 
 ## Account automation
 

@@ -140,6 +140,9 @@ export type HelloResult = { ok: true; service: ServiceInfo };
 
 export type KeepAliveResult = { usage?: SerializedUsage; keepAliveError?: string; usageError?: string };
 
+/** `usage.read`: a fresh reading of one profile, without a keep-alive prompt. */
+export type UsageReadResult = KeepAliveResult & { profile: { id: string; name: string; email?: string } };
+
 export function serializeKeepAlive(result: KeepAliveNowResult): KeepAliveResult {
   return {
     usage: result.usage ? { ...result.usage, fetchedAt: result.usage.fetchedAt.toISOString(),

@@ -140,7 +140,15 @@ test('a sign-in is prepared with an isolated home and finished from the file the
   assert.equal(prepared.env.CLAUDE_CONFIG_DIR, prepared.cwd);
   assert.equal(prepared.env.HOME, prepared.cwd);
   assert.ok(prepared.cwd.startsWith(path.join(f.root, 'claude-tmp')));
+  // While the sign-in is pending, this service's checks wait, and hand-run ones say so.
+  await assert.rejects(f.call('automation.keepAliveNow', { provider: 'claude', id: work.profile.id }), /A Claude sign-in is in progress; keep-alives wait until it finishes\./);
+  assert.equal((await f.call('automation.rotateNow', { provider: 'claude' })).reason, 'a Claude sign-in is in progress');
   await assert.rejects(f.call('profiles.signIn.finish', { provider: 'claude', id: work.profile.id }), /wrote no login/);
+  // A finish without a login lifts the hold; a new prepare holds again.
+  f.values.a = [5, 5];
+  assert.ok((await f.call('automation.keepAliveNow', { provider: 'claude', id: work.profile.id })).usage);
+  await f.call('profiles.signIn.prepare', { provider: 'claude' });
+  await assert.rejects(f.call('automation.keepAliveNow', { provider: 'claude', id: work.profile.id }), /sign-in is in progress/);
   fs.writeFileSync(prepared.file, JSON.stringify(claudeLogin('other')));
   const refused = await f.call('profiles.signIn.finish', { provider: 'claude', id: work.profile.id });
   assert.equal(refused.status, 'otherAccount');
@@ -152,6 +160,13 @@ test('a sign-in is prepared with an isolated home and finished from the file the
   assert.ok(!fs.existsSync(prepared.file));
   assert.equal(JSON.parse(fs.readFileSync(path.join(f.claudeHome, '.credentials.json'), 'utf8')).claudeAiOauth.accessToken, 'other');
   assert.equal((await f.call('profiles.list', { provider: 'claude' })).profiles[0].email, 'other@example.com');
+  // The stored login lifted the hold: checks run again.
+  f.values.other = [5, 5];
+  assert.ok((await f.call('automation.keepAliveNow', { provider: 'claude', id: work.profile.id })).usage);
+  // A cancelled sign-in lifts it too.
+  await f.call('profiles.signIn.prepare', { provider: 'claude' });
+  await f.call('profiles.signIn.cancel', { provider: 'claude' });
+  assert.ok((await f.call('automation.keepAliveNow', { provider: 'claude', id: work.profile.id })).usage);
 });
 
 test('export and import go through the same plans the extension shows', async (t) => {

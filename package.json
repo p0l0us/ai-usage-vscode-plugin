@@ -7654,8 +7654,32 @@
         }
       },
       {
-        "title": "Advanced",
+        "title": "AI agents (experimental)",
         "order": 8,
+        "properties": {
+          "aiUsage.mcp.enabled": {
+            "type": "boolean",
+            "default": false,
+            "order": 0,
+            "tags": [
+              "experimental"
+            ],
+            "markdownDescription": "**Experimental.** Offer AI agents an MCP server whose tools list every saved Claude Code and Codex profile with its usage windows and, when `#aiUsage.mcp.switching#` allows, switch the active account. Agents of this VS Code window (Copilot agent mode and every other consumer of the editor's MCP servers) see it as **AI Usage accounts** as soon as this is on; command-line agents register `ai-usage mcp` themselves. Needs the account service. Mirrored to the service's `mcp.enabled` setting. See [MCP server for AI agents](https://github.com/p0l0us/ai-usage-vscode-plugin/blob/main/docs/MCP.md)."
+          },
+          "aiUsage.mcp.switching": {
+            "type": "boolean",
+            "default": true,
+            "order": 1,
+            "tags": [
+              "experimental"
+            ],
+            "markdownDescription": "Let agents change the active account through the MCP server (`switch_account` and `rotate_account`). Off: only the usage tools (`list_accounts` and `refresh_usage`) are offered. Mirrored to the service's `mcp.switching` setting."
+          }
+        }
+      },
+      {
+        "title": "Advanced",
+        "order": 9,
         "properties": {
           "aiUsage.chatChips.debug": {
             "type": "boolean",
@@ -20128,6 +20152,12 @@
         "vendor": "ai-usage-cli",
         "displayName": "AI Usage CLI Bridge",
         "managementCommand": "aiUsage.refreshBridgeModels"
+      }
+    ],
+    "mcpServerDefinitionProviders": [
+      {
+        "id": "aiUsage.accounts",
+        "label": "AI Usage accounts"
       }
     ]
   },

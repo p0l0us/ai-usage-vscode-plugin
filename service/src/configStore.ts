@@ -5,8 +5,9 @@ import { AutomationSettings, RotationStrategy, RotationTrigger, modelWindowFilte
 import { claudeConfigDir } from './live';
 
 /**
- * The service's own settings, one block per provider, kept in `config.json`. The VS Code extension mirrors them
- * into its `aiUsage.<provider>.*` settings and back; `ai-usage config` reads and writes them directly.
+ * The service's own settings, one block per provider plus the `mcp` block, kept in `config.json`. The VS Code
+ * extension mirrors them into its `aiUsage.<provider>.*` and `aiUsage.mcp.*` settings and back; `ai-usage config`
+ * reads and writes them directly.
  */
 
 export type ModelLimits = 'auto' | 'always' | 'never';
@@ -38,7 +39,15 @@ export type ProviderConfig = {
   };
 };
 
-export type ServiceConfig = { version: 1; claude: ProviderConfig; codex: ProviderConfig };
+/** The MCP server for AI agents (`ai-usage mcp`); experimental and off by default. */
+export type McpConfig = {
+  /** Serve the tools at all: the command, and the server the extension offers to the agents of a VS Code window. */
+  enabled: boolean;
+  /** Offer the tools that change the active account (switch_account, rotate_account), not only the usage tools. */
+  switching: boolean;
+};
+
+export type ServiceConfig = { version: 1; claude: ProviderConfig; codex: ProviderConfig; mcp: McpConfig };
 
 import { PROVIDERS, TITLES } from './profileStore';
 
@@ -73,6 +82,12 @@ export const SETTINGS: SettingSchema[] = [
   { key: 'api.minIntervalSeconds', type: 'number', min: 0, max: 600, providers: ['claude'], description: 'Smallest gap between two calls to the Claude usage endpoint, across all accounts and clients.' }
 ];
 
+/** Settings outside the provider blocks, addressed by their key alone (`mcp.enabled`), listed after the others. */
+export const GLOBAL_SETTINGS: SettingSchema[] = [
+  { key: 'mcp.enabled', type: 'boolean', description: 'Experimental. Serve the MCP tools that let an AI agent read every profile\'s usage and switch profiles (ai-usage mcp, and the server VS Code offers to its agents).' },
+  { key: 'mcp.switching', type: 'boolean', description: 'Let agents change the active account through MCP (switch_account, rotate_account); off leaves them the usage tools only.' }
+];
+
 export function defaultProviderConfig(provider: AuthProvider): ProviderConfig {
   const claude = provider === 'claude';
   return {
@@ -94,7 +109,7 @@ export function defaultProviderConfig(provider: AuthProvider): ProviderConfig {
 }
 
 export function defaultConfig(): ServiceConfig {
-  return { version: 1, claude: defaultProviderConfig('claude'), codex: defaultProviderConfig('codex') };
+  return { version: 1, claude: defaultProviderConfig('claude'), codex: defaultProviderConfig('codex'), mcp: { enabled: false, switching: true } };
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -121,6 +136,11 @@ function assign(root: Record<string, unknown>, keyPath: string[], value: unknown
 
 export function settingSchema(key: string): SettingSchema | undefined {
   return SETTINGS.find((setting) => setting.key === key);
+}
+
+/** The block a setting lives in: the provider's, or the whole config for a global setting. */
+function blockOf(config: ServiceConfig, provider: AuthProvider | undefined): Record<string, unknown> {
+  return (provider ? config[provider] : config) as unknown as Record<string, unknown>;
 }
 
 /** Turns a raw value (a string from the command line, or JSON from a client) into the setting's type, or throws. */
@@ -165,6 +185,12 @@ export function normalizeConfig(parsed: unknown): ServiceConfig {
       catch { /* An invalid value keeps the default. */ }
     }
   }
+  for (const schema of GLOBAL_SETTINGS) {
+    const raw = lookup(parsed, schema.key.split('.'));
+    if (raw === undefined || raw === null) { continue; }
+    try { assign(blockOf(config, undefined), schema.key.split('.'), coerceSetting(schema, raw)); }
+    catch { /* An invalid value keeps the default. */ }
+  }
   return config;
 }
 
@@ -177,30 +203,35 @@ export function saveConfig(file: string, config: ServiceConfig): void {
   writeJsonAtomically(file, config);
 }
 
-/** `claude.autoRotate.strategy` → its value; throws for an unknown key. */
+/** `claude.autoRotate.strategy` or `mcp.enabled` → its value; throws for an unknown key. */
 export function getConfigValue(config: ServiceConfig, dotted: string): boolean | number | string {
   const { provider, schema } = resolveKey(dotted);
-  return lookup(config[provider], schema.key.split('.')) as boolean | number | string;
+  return lookup(blockOf(config, provider), schema.key.split('.')) as boolean | number | string;
 }
 
 /** Returns a copy of `config` with the value set; throws for an unknown key or an invalid value. */
 export function setConfigValue(config: ServiceConfig, dotted: string, raw: unknown): ServiceConfig {
   const { provider, schema } = resolveKey(dotted);
   const next = structuredClone(config);
-  assign(next[provider] as unknown as Record<string, unknown>, schema.key.split('.'), coerceSetting(schema, raw));
+  assign(blockOf(next, provider), schema.key.split('.'), coerceSetting(schema, raw));
   return next;
 }
 
-export function resolveKey(dotted: string): { provider: AuthProvider; schema: SettingSchema } {
+/** A provider setting (`claude.…`, `codex.…`) with its provider, or a global one (`mcp.…`) without. */
+export function resolveKey(dotted: string): { provider?: AuthProvider; schema: SettingSchema } {
+  const global = GLOBAL_SETTINGS.find((setting) => setting.key === dotted);
+  if (global) { return { schema: global }; }
   const [provider, ...rest] = dotted.split('.');
-  if (provider !== 'claude' && provider !== 'codex') { throw new Error(`Unknown setting "${dotted}": settings start with claude. or codex.`); }
+  if (provider !== 'claude' && provider !== 'codex') {
+    throw new Error(`Unknown setting "${dotted}": settings start with claude. or codex., or are one of ${GLOBAL_SETTINGS.map((setting) => setting.key).join(', ')}.`);
+  }
   const schema = settingSchema(rest.join('.'));
   if (!schema) { throw new Error(`Unknown setting "${dotted}". Run "ai-usage config" for the list.`); }
   if (schema.providers && !schema.providers.includes(provider)) { throw new Error(`"${dotted}" does not apply to ${TITLES[provider]}.`); }
   return { provider, schema };
 }
 
-/** Every applicable dotted key with its value, in schema order, Claude first. */
+/** Every applicable dotted key with its value, in schema order, Claude first, then the global settings. */
 export function listConfig(config: ServiceConfig): Array<{ key: string; value: boolean | number | string; schema: SettingSchema }> {
   const entries: Array<{ key: string; value: boolean | number | string; schema: SettingSchema }> = [];
   for (const provider of PROVIDERS) {
@@ -208,6 +239,9 @@ export function listConfig(config: ServiceConfig): Array<{ key: string; value: b
       if (schema.providers && !schema.providers.includes(provider)) { continue; }
       entries.push({ key: `${provider}.${schema.key}`, value: lookup(config[provider], schema.key.split('.')) as boolean | number | string, schema });
     }
+  }
+  for (const schema of GLOBAL_SETTINGS) {
+    entries.push({ key: schema.key, value: lookup(config, schema.key.split('.')) as boolean | number | string, schema });
   }
   return entries;
 }

@@ -486,3 +486,26 @@ test('a keep-alive sweep rotates as soon as the active account reaches its limit
   // b was read and verified for the switch before c's keep-alive; a sweep that only rotated at its end would do c first.
   assert.ok(order.indexOf('c:ka') > order.lastIndexOf('b:ka'), order.join(' '));
 });
+
+test('a hold stops the service\'s sweeps and rotation and refuses hand-run checks until it is resumed or runs out', async t => {
+  const f = fixture(t, { values: { a: [99.5, 10], b: [10, 10] }, settings: { codex: { enabled: true, autoRotate: true } } });
+  f.service.hold('codex', 'a Codex sign-in is in progress', 60_000);
+  f.observe('codex', [99.5, 10]);
+  await f.service.tick();
+  assert.deepEqual(f.calls, []);
+  assert.deepEqual(f.switches, []);
+  await assert.rejects(f.service.sendKeepAliveNow('codex', 'b'), /A Codex sign-in is in progress; keep-alives wait until it finishes\./);
+  assert.deepEqual(await f.service.rotateNow('codex'), { switched: false, reason: 'a Codex sign-in is in progress' });
+  // The other service is not held.
+  f.settings.claude.enabled = true;
+  await f.service.tick();
+  assert.ok(f.calls.length > 0 && f.calls.every(call => call[0] === 'claude'), JSON.stringify(f.calls));
+  f.service.resume('codex');
+  await f.service.tick();
+  assert.deepEqual(f.switches, [['codex', 'b', true]]);
+  // A hold whose client never lifts it runs out by itself.
+  f.service.hold('codex', 'a Codex sign-in is in progress', 20);
+  assert.equal(f.service.heldFor('codex'), 'a Codex sign-in is in progress');
+  await new Promise(resolve => setTimeout(resolve, 60));
+  assert.equal(f.service.heldFor('codex'), undefined);
+});

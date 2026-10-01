@@ -30,10 +30,21 @@ ai-usage import-profiles <file>   read them elsewhere
 ai-usage config [<key> [<value>]] show or change a setting
 ai-usage service status|install|uninstall|start|stop|restart|run
 ai-usage log [-n <lines>] [-f]
+ai-usage mcp                      MCP server for AI agents on stdin/stdout (experimental, off by default)
 ```
 
 `ai-usage --help` lists everything. Names of settings are `claude.<setting>` and `codex.<setting>`, for example
 `claude.autoRotate.strategy`; `ai-usage config` prints them all with a line of explanation each.
+
+## AI agents
+
+`ai-usage mcp` serves the profiles to an AI agent over the Model Context Protocol (stdio): `list_accounts` lists
+every saved profile with its usage windows, `refresh_usage` reads one profile from the vendor now, and
+`switch_account` and `rotate_account` change the active account. The feature is experimental and off until
+`ai-usage config mcp.enabled true`; `mcp.switching false` keeps agents to the usage tools. Register the launcher
+with the agent, for example `claude mcp add ai-usage -- ~/.ai-usage/bin/ai-usage mcp`. The VS Code extension offers
+the same server to the agents of its window while the setting is on. Details:
+[MCP server for AI agents](https://github.com/p0l0us/ai-usage-vscode-plugin/blob/main/docs/MCP.md).
 
 ## Where things are
 

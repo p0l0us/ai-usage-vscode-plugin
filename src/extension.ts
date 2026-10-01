@@ -41,6 +41,7 @@ import { findStaleCodexProcesses } from './codexProcesses';
 import { CodexProxyRuntime } from './codexProxyRuntime';
 import { applyCodexSettingsToFile, readCodexSettingAssignments } from './codexSettings';
 import { applyClaudeSettingsToFile, readClaudeSettingAssignments } from './claudeSettings';
+import { registerMcpProvider } from './mcpProvider';
 import { ServiceManager } from './serviceManager';
 import { openAiUsageSettings } from './settingsLink';
 import { compactTokenCount, readCurrentSessionTokens, SessionTokenUsage } from './sessionTokens';
@@ -217,6 +218,8 @@ export function activate(context: vscode.ExtensionContext): void {
   // installs and manages; see serviceManager.ts. The Accounts menus and the status bar are its clients.
   const services = new ServiceManager(context, log);
   context.subscriptions.push(services);
+  // Offers the service's MCP server to the agents of this window while aiUsage.mcp.enabled is on (experimental).
+  registerMcpProvider(context, services, log);
   const accountsMenu = new AccountsMenu(services, log);
   // Routes the Codex extension's model calls through a local proxy that reads auth.json per request, so a profile
   // switch reaches open Codex chats on their next turn (aiUsage.codex.proxy.enabled). Opt-in; see codexProxy.ts.
@@ -690,6 +693,7 @@ export function activate(context: vscode.ExtensionContext): void {
         }, async (progress, token) => {
           const failed: string[] = [];
           let done = 0;
+          let blocked: string | undefined;
           for (const [index, profile] of profiles.entries()) {
             if (token.isCancellationRequested) { break; }
             // Space the calls so a sweep of every account does not burst the provider's usage endpoint.
@@ -701,12 +705,15 @@ export function activate(context: vscode.ExtensionContext): void {
               const problem = result.keepAliveError ?? (result.usage ? undefined : result.usageError ?? 'usage statistics could not be updated');
               if (problem) { failed.push(`“${profile.name}”: ${readableProblem(problem)}`); }
             } catch (error) {
-              failed.push(`“${profile.name}”: ${readableProblem(error instanceof Error ? error.message : String(error))}`);
+              const message = error instanceof Error ? error.message : String(error);
+              // A sign-in started meanwhile holds every check of this service; the rest of the sweep would only fail the same way.
+              if (/sign-in is in progress/i.test(message)) { blocked = message.replace(/\.$/, ''); break; }
+              failed.push(`“${profile.name}”: ${readableProblem(message)}`);
             }
             done++;
           }
           const skipped = profiles.length - done;
-          const summary = `AI Usage: ${title} keep-alive sent to ${done - failed.length} of ${profiles.length} accounts${skipped ? ` (${skipped} cancelled)` : ''}.`;
+          const summary = `AI Usage: ${title} keep-alive sent to ${done - failed.length} of ${profiles.length} accounts${skipped ? ` (${skipped} ${blocked ? `not sent: ${blocked}` : 'cancelled'})` : ''}.`;
           if (failed.length) {
             void vscode.window.showWarningMessage(`${summary} Problems: ${failed.join('; ')}`);
           } else {
@@ -880,7 +887,7 @@ export function activate(context: vscode.ExtensionContext): void {
     if (event.affectsConfiguration('aiUsage.claudeConfig')) {
       syncClaudeSettings();
     }
-    if (event.affectsConfiguration('aiUsage.claude') || event.affectsConfiguration('aiUsage.codex')) {
+    if (event.affectsConfiguration('aiUsage.claude') || event.affectsConfiguration('aiUsage.codex') || event.affectsConfiguration('aiUsage.mcp')) {
       void services.pushSettings(event);
     }
     if (event.affectsConfiguration('aiUsage.accountService')) {

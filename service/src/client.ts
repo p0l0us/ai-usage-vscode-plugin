@@ -5,7 +5,7 @@ import type { AuthProvider } from './authFiles';
 import type { ServiceConfig } from './configStore';
 import type {
   ActivationResult, EventName, ExportResult, HelloResult, ImportPlanView, ImportSummary, KeepAliveResult, ProviderView, SaveNativeResult,
-  SerializedUsage, ServiceEvent, ServiceInfo, SignInPreparation, SignInResult, Snapshot
+  SerializedUsage, ServiceEvent, ServiceInfo, SignInPreparation, SignInResult, Snapshot, UsageReadResult
 } from './protocol';
 
 /** Why a connection could not be made, so a caller can install, start or just report. */
@@ -101,6 +101,10 @@ export class ServiceClient extends EventEmitter {
     return this.call('automation.rotateNow', { provider });
   }
   tick(): Promise<unknown> { return this.call('automation.tick'); }
+  /** Reads a profile's usage from the vendor now, without a keep-alive prompt. */
+  readUsage(provider: AuthProvider, target: string | { ref: string }): Promise<UsageReadResult> {
+    return this.call('usage.read', { provider, ...(typeof target === 'string' ? { id: target } : target) });
+  }
   observe(provider: AuthProvider, id: string, usage: SerializedUsage): Promise<unknown> { return this.call('usage.observe', { provider, id, usage }); }
   hintLimit(provider: AuthProvider, usage: SerializedUsage): Promise<unknown> { return this.call('usage.hintLimit', { provider, usage }); }
   getConfig(): Promise<ServiceConfig> { return this.call('config.get'); }

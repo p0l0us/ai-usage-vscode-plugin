@@ -117,6 +117,15 @@ send keep-alives, run a rotation sweep and toggle keep-alive or rotation; `ai-us
 from arguments, with `--json` where it helps. Settings changed with `ai-usage config` show up in VS Code's
 settings and the other way round. Details: [Account service](docs/CONFIGURATION.md#account-service).
 
+### AI agents: the MCP server (experimental)
+
+An AI agent can do the same through the Model Context Protocol: `ai-usage mcp` is a stdio MCP server whose tools
+list every saved profile with its usage windows, read a fresh reading for one of them and, when you allow it,
+switch the active account or run a rotation sweep. It is off by default (`aiUsage.mcp.enabled`); while it is on,
+agents in the VS Code window see it as **AI Usage accounts** without any configuration, and Claude Code or Codex in
+a terminal register `~/.ai-usage/bin/ai-usage mcp` themselves. `aiUsage.mcp.switching` decides whether agents may
+switch at all. Details: [MCP server for AI agents](docs/MCP.md).
+
 ### Account keep-alives and automatic rotation
 
 Click the Claude or Codex status bar item to open that service's **Accounts** menu (or choose **Accounts** in the
