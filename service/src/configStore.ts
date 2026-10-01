@@ -47,9 +47,15 @@ export type McpConfig = {
   switching: boolean;
 };
 
-export type ServiceConfig = { version: 1; claude: ProviderConfig; codex: ProviderConfig; mcp: McpConfig };
+/** Where new profiles may be kept: privately in the service home, or in an open project's folder. */
+export type ProfileScopesConfig = {
+  privateProfiles: { enabled: boolean };
+  projectProfiles: { enabled: boolean; file: string };
+};
 
-import { PROVIDERS, TITLES } from './profileStore';
+export type ServiceConfig = { version: 1; claude: ProviderConfig; codex: ProviderConfig; mcp: McpConfig } & ProfileScopesConfig;
+
+import { DEFAULT_PROJECT_PROFILES_FILE, PROVIDERS, TITLES } from './profileStore';
 
 export type SettingType = 'boolean' | 'number' | 'string' | 'enum';
 export type SettingSchema = {
@@ -78,12 +84,15 @@ export const SETTINGS: SettingSchema[] = [
   { key: 'autoRotate.trigger', type: 'enum', values: ['limit', 'proactive'], providers: ['claude'], description: 'limit switches only at a threshold; proactive also switches to a clearly better account.' },
   { key: 'autoRotate.minStayMinutes', type: 'number', min: 5, max: 10080, providers: ['claude'], description: 'With the proactive trigger, how long a newly active account is kept.' },
   { key: 'cliPath', type: 'string', description: 'Command or full path of the vendor CLI.' },
-  { key: 'checkIntervalMinutes', type: 'number', min: 1, max: 1440, description: 'Spacing of usage endpoint calls and the pause after a transient error, in minutes.' },
+  { key: 'checkIntervalMinutes', type: 'number', min: 0.25, max: 1440, description: 'Spacing of usage endpoint calls and the pause after a transient error, in minutes; Claude accepts a quarter minute, Codex at least one.' },
   { key: 'api.minIntervalSeconds', type: 'number', min: 0, max: 600, providers: ['claude'], description: 'Smallest gap between two calls to the Claude usage endpoint, across all accounts and clients.' }
 ];
 
 /** Settings outside the provider blocks, addressed by their key alone (`mcp.enabled`), listed after the others. */
 export const GLOBAL_SETTINGS: SettingSchema[] = [
+  { key: 'privateProfiles.enabled', type: 'boolean', description: 'Keep new profiles privately in the service home (profiles.json). Off only stops new private profiles; saved ones stay.' },
+  { key: 'projectProfiles.enabled', type: 'boolean', description: 'Also load and save profiles in each open project folder\'s profile file, login included, so they travel with the project.' },
+  { key: 'projectProfiles.file', type: 'string', description: 'Path of a project\'s profile file, relative to the folder (default .ai-usage.profiles.json); it has the format of a profile export.' },
   { key: 'mcp.enabled', type: 'boolean', description: 'Experimental. Serve the MCP tools that let an AI agent read every profile\'s usage and switch profiles (ai-usage mcp, and the server VS Code offers to its agents).' },
   { key: 'mcp.switching', type: 'boolean', description: 'Let agents change the active account through MCP (switch_account, rotate_account); off leaves them the usage tools only.' }
 ];
@@ -109,7 +118,8 @@ export function defaultProviderConfig(provider: AuthProvider): ProviderConfig {
 }
 
 export function defaultConfig(): ServiceConfig {
-  return { version: 1, claude: defaultProviderConfig('claude'), codex: defaultProviderConfig('codex'), mcp: { enabled: false, switching: true } };
+  return { version: 1, claude: defaultProviderConfig('claude'), codex: defaultProviderConfig('codex'), mcp: { enabled: false, switching: true },
+    privateProfiles: { enabled: true }, projectProfiles: { enabled: true, file: DEFAULT_PROJECT_PROFILES_FILE } };
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -270,7 +280,8 @@ export function automationSettings(config: ServiceConfig, provider: AuthProvider
     trigger: claude && own.autoRotate.trigger === 'proactive' ? 'proactive' : 'limit',
     minStayMs: Math.max(5, own.autoRotate.minStayMinutes) * 60_000,
     intervalMs: Math.max(0.25, own.keepAlive.periodHours) * 3_600_000,
-    checkIntervalMs: Math.max(1, own.checkIntervalMinutes) * 60_000,
+    // Claude accepts a quarter minute: every endpoint call is spaced by the shared budget regardless.
+    checkIntervalMs: Math.max(claude ? 0.25 : 1, own.checkIntervalMinutes) * 60_000,
     home: own.keepAlive.home,
     cliPath: own.cliPath,
     model: own.keepAlive.model

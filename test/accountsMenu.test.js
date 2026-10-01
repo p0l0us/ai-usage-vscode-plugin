@@ -29,10 +29,11 @@ Module._load = function(id, ...args) {
   };
   return load.call(this, id, ...args);
 };
-const { AccountsMenu, usageDetail } = require('../out/accountsMenu');
+const { AccountsMenu, usageDetail, pickScope } = require('../out/accountsMenu');
 Module._load = load;
 const { defaultConfig } = require('../service/out/configStore');
 
+const scopes = { privateEnabled: true, projectEnabled: true, folders: [] };
 const profile = (overrides) => ({ id: 'a', name: 'Work', createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-02T00:00:00Z', active: false, number: 1, problems: [],
   limit: { readOnly: false, dimmed: false }, hasCredential: true, ...overrides });
 
@@ -67,7 +68,7 @@ test('the usage detail line shows every window, the check time and known problem
 
 test('choosing a profile activates it through the service and closes the menu; an exhausted one only warns', async () => {
   const views = { claude: { provider: 'claude', title: 'Claude', profiles: [profile({ active: true }), profile({ id: 'b', name: 'Full', number: 2, limit: { readOnly: true, dimmed: false } })],
-    activeProfileId: 'a', activeNumber: 1, nativeUnsaved: false, checkingActive: false, keepAlive: true, autoRotate: false, strategySummary: '' } };
+    activeProfileId: 'a', activeNumber: 1, nativeUnsaved: false, checkingActive: false, keepAlive: true, autoRotate: false, strategySummary: '', scopes } };
   const f = fixture(views);
   quickPickResponses.push((items) => {
     assert.equal(items[0].label, '$(check) Work');
@@ -88,7 +89,7 @@ test('choosing a profile activates it through the service and closes the menu; a
 });
 
 test('a profile with a login problem is checked again instead of activated', async () => {
-  const views = { codex: { provider: 'codex', title: 'Codex', profiles: [profile({ loginProblem: 'OAuth token has expired' })], nativeUnsaved: false, checkingActive: false, keepAlive: false, autoRotate: false, strategySummary: '' } };
+  const views = { codex: { provider: 'codex', title: 'Codex', profiles: [profile({ loginProblem: 'OAuth token has expired' })], nativeUnsaved: false, checkingActive: false, keepAlive: false, autoRotate: false, strategySummary: '', scopes } };
   const f = fixture(views);
   const sent = [];
   quickPickResponses.push((items) => { assert.match(items[0].description, /Login problem/); return items[0]; });
@@ -99,7 +100,7 @@ test('a profile with a login problem is checked again instead of activated', asy
 });
 
 test('saving the current login asks for a name, warns about a duplicate, and can update an existing profile', async () => {
-  const views = { claude: { provider: 'claude', title: 'Claude', profiles: [profile({ active: true })], activeProfileId: 'a', nativeUnsaved: false, checkingActive: false, keepAlive: false, autoRotate: false, strategySummary: '' } };
+  const views = { claude: { provider: 'claude', title: 'Claude', profiles: [profile({ active: true })], activeProfileId: 'a', nativeUnsaved: false, checkingActive: false, keepAlive: false, autoRotate: false, strategySummary: '', scopes } };
   const f = fixture(views);
   const saved = [];
   const hooks = { sendKeepAlive: async () => undefined, signIn: async () => undefined, afterSaved: async (provider) => { saved.push(provider); } };
@@ -118,8 +119,8 @@ test('saving the current login asks for a name, warns about a duplicate, and can
   quickPickResponses.push(undefined);
   await f.menu.show('claude', hooks);
   assert.deepEqual(f.calls, [
-    ['saveNative', 'claude', { name: 'Twin' }],
-    ['saveNative', 'claude', { name: 'Twin' }], ['saveNative', 'claude', { name: 'Twin', allowDuplicate: true }],
+    ['saveNative', 'claude', { name: 'Twin', folder: undefined }],
+    ['saveNative', 'claude', { name: 'Twin', folder: undefined }], ['saveNative', 'claude', { name: 'Twin', allowDuplicate: true, folder: undefined }],
     ['saveNative', 'claude', { id: 'a' }]
   ]);
   assert.deepEqual(saved, ['claude', 'claude']);
@@ -137,4 +138,19 @@ test('without the service the menu offers to install it', async () => {
   quickPickResponses.push((items) => { assert.match(items[0].label, /Install the account service/); return items[0]; });
   await f.menu.show('claude', { sendKeepAlive: async () => undefined, signIn: async () => undefined });
   assert.equal(installed, true);
+});
+
+test('where to keep a profile is asked only when both kinds are possible, and names the project', async () => {
+  const view = (overrides) => ({ provider: 'claude', title: 'Claude', profiles: [], nativeUnsaved: false, checkingActive: false, keepAlive: false, autoRotate: false, strategySummary: '',
+    scopes: { privateEnabled: true, projectEnabled: true, folders: [], ...overrides } });
+  assert.deepEqual(await pickScope(view({})), {});
+  assert.deepEqual(await pickScope(view({ privateEnabled: false, folders: ['/work/app'] })), { folder: '/work/app' });
+  assert.deepEqual(await pickScope(view({ projectEnabled: false, folders: ['/work/app'] })), {});
+  quickPickResponses.push((items) => {
+    assert.deepEqual(items.map((item) => item.label), ['$(account) Private profile', '$(root-folder) Project profile in app', '$(root-folder) Project profile in lib']);
+    return items[2];
+  });
+  assert.deepEqual(await pickScope(view({ folders: ['/work/app', '/work/lib'] })), { folder: '/work/lib' });
+  quickPickResponses.push(undefined);
+  assert.equal(await pickScope(view({ folders: ['/work/app'] })), undefined);
 });

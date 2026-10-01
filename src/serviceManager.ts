@@ -154,6 +154,8 @@ export class ServiceManager implements vscode.Disposable {
       this.log('service: connection closed');
       this.stateEmitter.fire(undefined);
     });
+    // The window's local folders hold its project profiles; the service lists them while this window is connected.
+    await this.declareFolders(client);
     // The extension's terminals get the ai-usage command without any PATH editing by the user.
     this.context.environmentVariableCollection.description = 'Adds the ai-usage command of the AI Usage account service.';
     this.context.environmentVariableCollection.prepend('PATH', `${launcherDir(this.home)}${path.delimiter}`);
@@ -196,6 +198,18 @@ export class ServiceManager implements vscode.Disposable {
       void vscode.window.showWarningMessage(`AI Usage: the account service rejected the setting: ${error instanceof Error ? error.message : String(error)}`);
       await this.configSync.pull(this.config);
     }
+  }
+
+  /** The open local workspace folders, whose project profile files the service reads. */
+  static localFolders(): string[] {
+    return (vscode.workspace.workspaceFolders ?? []).filter((folder) => folder.uri.scheme === 'file').map((folder) => folder.uri.fsPath);
+  }
+
+  /** Tells the service which project folders this window has open; called on connect and when they change. */
+  async declareFolders(client = this.connected): Promise<void> {
+    if (!client) { return; }
+    try { await client.setFolders(ServiceManager.localFolders()); }
+    catch (error) { this.log(`service: could not declare the workspace folders: ${error instanceof Error ? error.message : String(error)}`); }
   }
 
   async refreshViews(provider?: AuthProvider): Promise<void> {

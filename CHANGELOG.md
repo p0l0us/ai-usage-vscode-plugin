@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.0.33 (unreleased)
+## 0.0.37 (unreleased)
 
 - **Account service.** Saved Claude and Codex profiles, keep-alives and automatic rotation moved out of the extension
   host into a background service, so they keep running while VS Code is closed. The extension installs the service
@@ -18,9 +18,72 @@
   and `o` toggle keep-alive and rotation. VS Code terminals have the command on their PATH once the service is
   installed; elsewhere add `~/.ai-usage/bin`. A setting changed with `ai-usage config` shows up in VS Code's
   settings, and a change in Settings reaches the service; the service's `config.json` is the source of truth.
-- Profiles now live with the host the extension runs on (the remote in a Remote-SSH, WSL or container window), in
-  `~/.ai-usage/profiles.json` (mode 0600), no longer with the VS Code client. Export and import are unchanged.
+- Private profiles now live with the host the extension runs on (the remote in a Remote-SSH, WSL or container
+  window), in `~/.ai-usage/profiles.json` (mode 0600), no longer with the VS Code client. Project profiles
+  (0.0.34) work through the service too: every connected window declares its open folders, and `ai-usage` lists a
+  folder's profiles with `--project[=<dir>]`, or by itself when the current directory holds a profile file;
+  `save` and `import` take `--project` to keep the new profile there. The switches are the service's
+  `privateProfiles.enabled`, `projectProfiles.enabled` and `projectProfiles.file`, mirrored from the settings
+  of the same names. Export and import are unchanged.
+- The pending-sign-in hold (0.0.34), the lock waiting of keep-alives sent by hand (0.0.36) and the rotation changes
+  of 0.0.34 and 0.0.36 run in the service. **All accounts** and `ai-usage keepalive --all` run as one sweep in the
+  service, under one lock; the progress notification says when it waits for a running check and can cancel the
+  sweep. `ai-usage rotate` waits for a running check the same way.
+- **MCP server for AI agents (experimental, off by default).** `ai-usage mcp` serves the saved profiles to an AI
+  agent over the Model Context Protocol on stdin/stdout: `list_accounts` lists every Claude Code and Codex profile
+  with its usage windows, reset times, check time, limit state and login problems; `refresh_usage` reads one
+  profile from the vendor now without a keep-alive prompt; `switch_account` activates a profile by name, number,
+  id or email; `rotate_account` runs a rotation sweep. `aiUsage.mcp.enabled` (`mcp.enabled` for `ai-usage config`)
+  turns it on; `aiUsage.mcp.switching` (default on) decides whether the switching tools are offered at all. Both are
+  checked by the service on every call. While it is on, the extension offers the server to the agents of the VS
+  Code window as **AI Usage accounts** (Copilot agent mode and other consumers of the editor's MCP servers see it
+  without configuration); Claude Code and Codex in a terminal register `~/.ai-usage/bin/ai-usage mcp` themselves.
+  No tool returns login material, and nothing listens on a network port. See
+  [docs/MCP.md](docs/MCP.md).
 - The extension package now carries the service under `service/`; the account modules moved there from `src/`.
+
+## 0.0.36 (2026-10-01)
+
+- Rotation no longer re-reads an account whose stored reading is still at a threshold with that window's reset
+  ahead: usage only rises until the reset, so the call could not show it recovered. While every account is at its
+  limit, a sweep now costs nothing and ends at once instead of spending an endpoint call per account every check
+  interval and holding the account lock for minutes. The notification that no candidate remains names those
+  accounts with the time until their reset.
+- **Send keep-alive now…** waits for an account check running in another window instead of failing at once with
+  "Another claude account check is already running" for every account. The progress notification says that it is
+  waiting and can be cancelled; after 3 minutes the accounts are reported as not sent. **All accounts** keeps the
+  lock for the whole sweep, so a periodic check cannot cut in between two of its accounts, and a check requested
+  meanwhile in the same window, such as the re-read after a sign-in, runs after the sweep instead of being refused.
+
+## 0.0.35 (2026-10-01)
+
+- `aiUsage.claude.checkIntervalMinutes` accepts fractional minutes down to 0.25 (15 seconds) instead of stopping at
+  a whole minute. Every call to Anthropic's usage endpoint is still spaced by `aiUsage.claude.api.minIntervalSeconds`
+  (30 seconds by default) and by any limit the endpoint advertises; lower that setting too to call more often than
+  every 30 seconds.
+
+## 0.0.34 (2026-10-01)
+
+- Rotation never switches to an account whose last check failed. A failed keep-alive, whatever the reason, or a
+  usage check that found a login problem leaves the account out of the sweep, without spending a call on it, until a
+  later check of it succeeds (the next periodic keep-alive, or **Send keep-alive now…**). The notification that no
+  candidate remains names the accounts left out for that reason.
+- **Project profiles.** Besides the private profiles kept with the VS Code client, a profile can now live in the
+  workspace folder, in `.ai-usage.profiles.json` by default (`aiUsage.projectProfiles.file` sets another path; the
+  format of a profile export, mode `0600`), login included, and
+  is listed whenever that folder is open on any computer. **Save current login…** and **Import credential JSON…**
+  ask whether to create a private or a project profile when both kinds are enabled (`aiUsage.privateProfiles.enabled`
+  and `aiUsage.projectProfiles.enabled`, both on by default) and a local folder is open; otherwise the only possible
+  kind is used. Refreshed tokens, renames and deletions go back to the file. Known limitation: the project profiles
+  of every folder open in a window are merged into one list, so a project can be used with another open project's
+  profiles. The first project profile saved in a Git repository adds the file to its `.gitignore`.
+- A pending sign-in no longer competes with the automation. From **Sign in again…** until the new login is stored or
+  the sign-in is cancelled, that service's keep-alives and rotation wait, a running sweep stops at its next account,
+  and a keep-alive started by hand says that a sign-in is in progress; the **All accounts** keep-alive stops there
+  and says how many accounts were not sent. The wait ends with the sign-in, or after 20 minutes at most.
+
+## 0.0.33 (2026-09-29)
+
 - **Export or import saved profiles…** in the Claude and Codex Accounts menus opens a picker with **Export saved
   profiles…** and **Import saved profiles…**, also available as **AI Usage: Export/Import Claude/Codex
   Authentication Profiles…** in the Command Palette; they move the saved profiles of both services to another
@@ -40,22 +103,6 @@
   during a sweep of many accounts switches within one account check, not minutes later.
 - `aiUsage.codex.autoRotate.fiveHourThresholdPercent` sets the Codex 5-hour threshold; its default 100 keeps the
   previous behavior of rotating only on a used-up window.
-- A pending sign-in no longer competes with the automation. From **Sign in again…** (or `ai-usage login`) until the
-  new login is stored or the sign-in is cancelled, that service's keep-alives and rotation wait, a running sweep
-  stops at its next account, and a keep-alive or sweep started by hand says that a sign-in is in progress; the
-  **All accounts** keep-alive stops there and says how many accounts were not sent. The wait ends with the
-  sign-in, or after 20 minutes if the client that started it vanished.
-- **MCP server for AI agents (experimental, off by default).** `ai-usage mcp` serves the saved profiles to an AI
-  agent over the Model Context Protocol on stdin/stdout: `list_accounts` lists every Claude Code and Codex profile
-  with its usage windows, reset times, check time, limit state and login problems; `refresh_usage` reads one
-  profile from the vendor now without a keep-alive prompt; `switch_account` activates a profile by name, number,
-  id or email; `rotate_account` runs a rotation sweep. `aiUsage.mcp.enabled` (`mcp.enabled` for `ai-usage config`)
-  turns it on; `aiUsage.mcp.switching` (default on) decides whether the switching tools are offered at all. Both are
-  checked by the service on every call. While it is on, the extension offers the server to the agents of the VS
-  Code window as **AI Usage accounts** (Copilot agent mode and other consumers of the editor's MCP servers see it
-  without configuration); Claude Code and Codex in a terminal register `~/.ai-usage/bin/ai-usage mcp` themselves.
-  No tool returns login material, and nothing listens on a network port. See
-  [docs/MCP.md](docs/MCP.md).
 
 ## 0.0.32 (2026-09-29)
 

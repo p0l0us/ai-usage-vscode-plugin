@@ -161,6 +161,8 @@ export type RpcClientOptions = {
   client: string;
   version?: string;
   subscribe?: string[] | 'all';
+  /** Project folders open at the client. */
+  folders?: string[];
   /** Connect and hello timeout. */
   timeoutMs?: number;
 };
@@ -192,7 +194,7 @@ export class RpcClient extends EventEmitter {
       socket.once('connect', () => {
         const client = new RpcClient(socket);
         // Nothing else may be sent before the hello is answered.
-        client.call('hello', { token: options.token, client: options.client, version: options.version, subscribe: options.subscribe ?? [] }, timeoutMs).then(
+        client.call('hello', { token: options.token, client: options.client, version: options.version, subscribe: options.subscribe ?? [], folders: options.folders }, timeoutMs).then(
           (hello) => { clearTimeout(timer); resolve({ client, hello }); },
           (error) => { clearTimeout(timer); socket.destroy(); reject(error); });
       });

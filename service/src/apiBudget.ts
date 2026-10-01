@@ -120,7 +120,7 @@ export class ApiCallBudget {
   }
 }
 
-function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+export function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve) => {
     let timer: NodeJS.Timeout;
     const done = () => {

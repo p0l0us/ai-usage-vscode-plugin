@@ -65,13 +65,16 @@ log and settings actions in one picker. A service's **Accounts** row opens its A
 Run **AI Usage: Manage Claude/Codex Authentication Profiles** from the Command Palette, click the Claude or Codex
 status bar item, or choose a service's **Accounts** row in the AI Usage menu, to open that service's **Accounts**
 menu. You can save and name the current login, import a credential JSON file, export every saved profile to a file
-and import it on another computer, and switch among up to 20 profiles per service. Every saved profile is listed with its login email, its last usage reading and check time, and the
-active one is marked:
+and import it on another computer, and switch among up to 20 profiles per service. A profile is **private**, kept by
+the [account service](#the-account-service-and-the-ai-usage-command) on this host, or a **project** profile, kept
+with its login in the workspace folder's `.ai-usage.profiles.json` and listed whenever that folder is open; see
+[Private and project profiles](docs/CONFIGURATION.md#private-and-project-profiles). Every saved profile is listed
+with its login email, its last usage reading and check time, and the active one is marked:
 
 ![Claude Accounts menu with five saved profiles, their usage and the manage and account feature actions](images/screenshots/accounts-claude.png)
 
-Saved copies live in VS Code `SecretStorage`, not in project files, workspace settings, or the extension's ordinary
-global storage. Activating a profile atomically updates the native file already shared by the CLI and vendor
+Saved copies live with the account service in `~/.ai-usage/profiles.json` (mode 0600), or in a project's profile
+file, never in workspace settings or the extension's ordinary storage. Activating a profile atomically updates the native file already shared by the CLI and vendor
 extension (`~/.claude/.credentials.json` / `$CLAUDE_CONFIG_DIR`, or `~/.codex/auth.json` / `$CODEX_HOME`). The file
 is forced to mode `0600` on Linux/macOS and inherits the user-profile ACL on Windows. Claude MCP credentials in the
 same file are preserved. This native active copy remains plaintext because Claude Code and Codex require that
@@ -114,8 +117,9 @@ The service comes with the `ai-usage` command, on the PATH of every VS Code term
 your own PATH for other terminals). `ai-usage` alone opens a live view of both services with keys to switch,
 send keep-alives, run a rotation sweep and toggle keep-alive or rotation; `ai-usage status`, `list`, `use`,
 `save`, `login`, `keepalive`, `rotate`, `export`, `import-profiles`, `config`, `service` and `log` do the same
-from arguments, with `--json` where it helps. Settings changed with `ai-usage config` show up in VS Code's
-settings and the other way round. Details: [Account service](docs/CONFIGURATION.md#account-service).
+from arguments, with `--json` where it helps, and `--project` names a project folder whose profiles to list or
+save into. Settings changed with `ai-usage config` show up in VS Code's settings and the other way round.
+Details: [Account service](docs/CONFIGURATION.md#account-service).
 
 ### AI agents: the MCP server (experimental)
 
@@ -212,8 +216,8 @@ it is installed and runs on the remote machine, so:
   not appear; install the extension locally too, or sign in on the remote side.
 - Copilot uses the GitHub account VS Code is signed in with; that works in remote windows as usual.
 - Settings for sources and intervals belong in **Remote Settings**, not the local user settings.
-- Authentication profiles and their SecretStorage entries belong to that extension host too. A Remote-SSH window
-  manages the remote machine's profiles; a normal Windows/macOS/Linux window manages the local machine's profiles.
+- Authentication profiles belong to that extension host's account service too. A Remote-SSH window manages the
+  remote machine's profiles; a normal Windows/macOS/Linux window manages the local machine's profiles.
 - The **Agents window** is the exception: it runs only *local* extensions, and blocks extensions with code until
   you allow them. The chip there needs a local install plus a one-time allow step; run
   **AI Usage: Agents Window Setup Guide** from the Command Palette or see
@@ -229,7 +233,7 @@ it is installed and runs on the remote machine, so:
 | `aiUsage.chatChips.labels` / `.usage` | `name` / `rich` | The same two choices for the chat chips (no icon there). |
 | `aiUsage.chatTokens.enabled` | on | Show the local Claude/Codex chat's consumed-token chip. |
 | `aiUsage.<service>.source` | `both` | Local file first (Claude's account file, Codex's session logs), service endpoint when that reading goes stale. |
-| `aiUsage.<service>.checkIntervalMinutes` | 10 / 5 / 5 | How often Claude / Codex / Copilot are queried. |
+| `aiUsage.<service>.checkIntervalMinutes` | 10 / 5 / 5 | How often Claude / Codex / Copilot are queried. Claude accepts fractions down to 0.25 (15 s). |
 | `aiUsage.copilot.account` | (auto) | GitHub login to use when several are signed in. |
 | `aiUsage.<service>.enabled` | on | Hide a service you do not use. |
 

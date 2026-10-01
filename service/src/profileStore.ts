@@ -1,4 +1,5 @@
 import * as fs from 'fs';
+import * as path from 'path';
 import { randomUUID } from 'crypto';
 import {
   AuthProvider,
@@ -8,18 +9,23 @@ import {
   nativeCredentialPath,
   readNativeCredential,
   writeJsonAtomically,
-  writeNativeCredential
+  writeNativeCredential,
+  writeTextAtomically
 } from './authFiles';
 import { claudeAccountFile, CredentialIdentity, resolveCredentialIdentity } from './accountIdentity';
-import { ExportedProfile, ImportKind, ImportPlan, planImport, uniqueName } from './profileTransfer';
+import { ExportedProfile, ImportKind, ImportPlan, parseProfileExport, planImport, serializeProfileExport, uniqueName } from './profileTransfer';
 
 /**
- * The saved profiles of both services, logins included, in one mode-0600 file inside the service home. This is
- * the store behind every client: the VS Code Accounts menus and the `ai-usage` command both go through the
- * service, which is the only writer. Ported from the extension's SecretStorage-backed manager, without its UI.
+ * The saved profiles of both services, logins included: private ones in one mode-0600 file inside the service home,
+ * project ones in the profile file of each project folder a connected client declared (`.ai-usage.profiles.json`
+ * by default, the format of a profile export). This is the store behind every client: the VS Code Accounts menus
+ * and the `ai-usage` command both go through the service, which is the only writer. Ported from the extension's
+ * SecretStorage-backed manager, without its UI.
  */
 
 export const MAX_PROFILES = 20;
+/** Default path of a project's profile file, inside the project folder; `projectProfiles.file` changes it. */
+export const DEFAULT_PROJECT_PROFILES_FILE = '.ai-usage.profiles.json';
 export const PROVIDERS: AuthProvider[] = ['claude', 'codex'];
 export const TITLES: Record<AuthProvider, string> = { claude: 'Claude', codex: 'Codex' };
 const MAX_NAME_LENGTH = 60;
@@ -33,9 +39,33 @@ export type ProfileMetadata = {
   email?: string;
   /** Stable vendor account id; Claude Team members can share an organization but never this id. */
   accountId?: string;
+  /** The project folder a project profile lives in; a private profile has none. Never written to profiles.json. */
+  folder?: string;
 };
 
 type StoredProfile = ProfileMetadata & { credential?: StoredCredential };
+
+export type ProfileStoreOptions = {
+  /** The project profile file, relative to each folder; absolute paths are used as they are. */
+  projectFileName?: () => string;
+  projectProfilesEnabled?: () => boolean;
+  privateProfilesEnabled?: () => boolean;
+  /** Told about things worth a notification, such as a .gitignore that was edited. */
+  notice?: (message: string) => void;
+};
+
+/** Where a new profile may be kept, as the clients ask before saving one. */
+export type ProfileScopes = { privateEnabled: boolean; projectEnabled: boolean; folders: string[] };
+
+/** A project entry as the file and the merged list both see it, so an unchanged file is not written again. */
+function projectEntryKey(entry: ExportedProfile): string {
+  return JSON.stringify([entry.provider, entry.id, entry.name, entry.createdAt, entry.updatedAt, entry.email, entry.accountId, entry.credential]);
+}
+
+function toEntry(provider: AuthProvider, profile: StoredProfile, credential: StoredCredential): ExportedProfile {
+  return { provider, id: profile.id, name: profile.name, createdAt: profile.createdAt, updatedAt: profile.updatedAt,
+    ...(profile.email ? { email: profile.email } : {}), ...(profile.accountId ? { accountId: profile.accountId } : {}), credential };
+}
 type ProviderState = { profiles: StoredProfile[]; activeProfileId?: string };
 type ProfileFile = { version: 1; claude: ProviderState; codex: ProviderState };
 
@@ -145,8 +175,14 @@ export class ProfileStore {
   constructor(
     private readonly file: string,
     private readonly log: (message: string) => void,
-    private readonly identityOf: (provider: AuthProvider, credential: StoredCredential) => Promise<CredentialIdentity> = resolveCredentialIdentity
+    private readonly identityOf: (provider: AuthProvider, credential: StoredCredential) => Promise<CredentialIdentity> = resolveCredentialIdentity,
+    private readonly options: ProfileStoreOptions = {}
   ) {}
+
+  /** The project folders connected clients declared, in the order they were first declared. */
+  private projectFolders: string[] = [];
+  /** Each project profile file as last read, by path, so an unchanged file is neither parsed nor written again. */
+  private readonly projectFiles = new Map<string, { mtimeMs: number; entries: ExportedProfile[]; error?: string }>();
 
   /** Set by the service: checks, after the native file was written, which login the vendor tool reports. */
   verifyActivation?: ActivationVerifier;
@@ -156,23 +192,144 @@ export class ProfileStore {
   /** Whether that native login belongs to no saved profile. */
   private nativeUnsaved: Partial<Record<AuthProvider, boolean>> = {};
 
+  // --- project folders ---------------------------------------------------------------------------------------
+
+  /** Replaces the declared project folders; returns whether the set changed. */
+  setProjectFolders(folders: string[]): boolean {
+    const next = [...new Set(folders.map((folder) => path.resolve(folder)))];
+    if (next.length === this.projectFolders.length && next.every((folder, index) => folder === this.projectFolders[index])) { return false; }
+    this.projectFolders = next;
+    this.nativeChecked = {};
+    return true;
+  }
+
+  private projectFileName(): string {
+    const configured = this.options.projectFileName?.();
+    return (typeof configured === 'string' && configured.trim()) || DEFAULT_PROJECT_PROFILES_FILE;
+  }
+
+  projectFile(folder: string): string { return path.resolve(folder, this.projectFileName()); }
+
+  /** The declared folders whose profile files are read: all of them while project profiles are enabled. */
+  private activeProjectFolders(): string[] {
+    return this.options.projectProfilesEnabled?.() === false ? [] : this.projectFolders;
+  }
+
+  scopes(): ProfileScopes {
+    return { privateEnabled: this.options.privateProfilesEnabled?.() !== false, projectEnabled: this.options.projectProfilesEnabled?.() !== false, folders: this.activeProjectFolders() };
+  }
+
+  /**
+   * Reads every declared folder's profile file, once per change of the file. The profiles of every folder are
+   * merged into one list: the service is one per host, so a project can be used with another open project's
+   * profiles; that is a known limitation. A profile listed in two folders is taken from the first one.
+   */
+  private loadProjectProfiles(): Record<AuthProvider, StoredProfile[]> {
+    const loaded: Record<AuthProvider, StoredProfile[]> = { claude: [], codex: [] };
+    const seen = new Set<string>();
+    for (const folder of this.activeProjectFolders()) {
+      const file = this.projectFile(folder);
+      let mtimeMs: number;
+      try { mtimeMs = fs.statSync(file).mtimeMs; } catch { this.projectFiles.delete(file); continue; }
+      let cached = this.projectFiles.get(file);
+      if (!cached || cached.mtimeMs !== mtimeMs) {
+        try {
+          cached = { mtimeMs, entries: parseProfileExport(fs.readFileSync(file, 'utf8')) };
+        } catch (error) {
+          cached = { mtimeMs, entries: [], error: error instanceof Error ? error.message : String(error) };
+          this.log(`project profiles in ${file} were not loaded: ${cached.error}`);
+        }
+        this.projectFiles.set(file, cached);
+      }
+      for (const entry of cached.entries) {
+        const key = `${entry.provider}:${entry.id}`;
+        if (seen.has(key)) { continue; }
+        seen.add(key);
+        loaded[entry.provider].push({ id: entry.id, name: entry.name, createdAt: entry.createdAt, updatedAt: entry.updatedAt,
+          ...(entry.email ? { email: entry.email } : {}), ...(entry.accountId ? { accountId: entry.accountId } : {}), folder, credential: entry.credential });
+      }
+    }
+    return loaded;
+  }
+
+  /** Writes a folder's project profiles, unless the file already holds exactly them or could not be read. */
+  private writeProjectFile(folder: string, entries: ExportedProfile[]): void {
+    const file = this.projectFile(folder);
+    const cached = this.projectFiles.get(file);
+    // A file that could not be read is never overwritten: the user has to fix or remove it.
+    if (cached?.error) { return; }
+    if (cached && cached.entries.length === entries.length &&
+      cached.entries.every((entry, index) => projectEntryKey(entry) === projectEntryKey(entries[index]))) { return; }
+    writeTextAtomically(file, serializeProfileExport(entries));
+    this.projectFiles.set(file, { mtimeMs: fs.statSync(file).mtimeMs, entries });
+    this.log(`wrote ${entries.length} project profiles to ${file}`);
+    if (!cached) { this.ignoreInGit(folder); }
+  }
+
+  /** Project profiles hold login tokens in plain text; a Git repository must not commit them. */
+  private ignoreInGit(folder: string): void {
+    if (!fs.existsSync(path.join(folder, '.git'))) { return; }
+    const relative = path.relative(folder, this.projectFile(folder)).split(path.sep).join('/');
+    // A file outside the folder is not the repository's to ignore.
+    if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) { return; }
+    const ignoreFile = path.join(folder, '.gitignore');
+    let text = '';
+    try { text = fs.readFileSync(ignoreFile, 'utf8'); } catch { /* No .gitignore yet. */ }
+    // The file itself, or any directory above it, may be ignored already.
+    const covered = new Set<string>();
+    const parts = relative.split('/');
+    for (let depth = 1; depth <= parts.length; depth++) {
+      const candidate = parts.slice(0, depth).join('/');
+      for (const form of depth < parts.length ? [candidate, `${candidate}/`] : [candidate]) { covered.add(form); covered.add(`/${form}`); }
+    }
+    if (text.split(/\r?\n/).some((line) => covered.has(line.trim()))) { return; }
+    fs.appendFileSync(ignoreFile, `${text && !text.endsWith('\n') ? '\n' : ''}# AI Usage project profiles hold login tokens\n${relative}\n`);
+    this.log(`added ${relative} to ${ignoreFile}`);
+    this.options.notice?.(`Added ${relative} to ${path.basename(folder)}/.gitignore, because project profiles hold login tokens in plain text.`);
+  }
+
+  // --- the merged state --------------------------------------------------------------------------------------
+
+  /** The private profiles from profiles.json, then the project profiles of every declared folder. */
   private state(): ProfileFile {
     let stored: Partial<ProfileFile> | undefined;
     try { stored = JSON.parse(fs.readFileSync(this.file, 'utf8')); } catch { stored = undefined; }
     const fallback = emptyState();
+    const project = this.loadProjectProfiles();
     for (const provider of PROVIDERS) {
       const value = stored?.[provider];
-      if (!value || !Array.isArray(value.profiles)) { continue; }
+      const own = value && Array.isArray(value.profiles)
+        ? value.profiles.filter((profile) => profile && typeof profile.id === 'string' && typeof profile.name === 'string')
+          .map(({ folder: _folder, ...profile }) => profile).slice(0, MAX_PROFILES)
+        : [];
+      const ids = new Set(own.map((profile) => profile.id));
       fallback[provider] = {
-        profiles: value.profiles.filter((profile) => profile && typeof profile.id === 'string' && typeof profile.name === 'string').slice(0, MAX_PROFILES),
-        activeProfileId: typeof value.activeProfileId === 'string' ? value.activeProfileId : undefined
+        profiles: [...own, ...project[provider].filter((profile) => !ids.has(profile.id))],
+        activeProfileId: value && typeof value.activeProfileId === 'string' ? value.activeProfileId : undefined
       };
     }
     return fallback;
   }
 
+  /** Private profiles go to profiles.json; project profiles go back to their folders' files, logins included. */
   private updateState(state: ProfileFile): void {
-    writeJsonAtomically(this.file, state);
+    const stored = emptyState();
+    const perFolder = new Map<string, ExportedProfile[]>();
+    for (const provider of PROVIDERS) {
+      stored[provider] = { profiles: state[provider].profiles.filter((profile) => !profile.folder), activeProfileId: state[provider].activeProfileId };
+      for (const profile of state[provider].profiles) {
+        if (!profile.folder || !profile.credential) { continue; }
+        const entries = perFolder.get(profile.folder) ?? [];
+        entries.push(toEntry(provider, profile, profile.credential));
+        perFolder.set(profile.folder, entries);
+      }
+    }
+    writeJsonAtomically(this.file, stored);
+    // A folder whose file exists but has no profile left gets an empty list, so a deleted profile is gone from it.
+    for (const folder of new Set([...perFolder.keys(), ...this.activeProjectFolders()])) {
+      const entries = perFolder.get(folder) ?? [];
+      if (entries.length || this.projectFiles.has(this.projectFile(folder))) { this.writeProjectFile(folder, entries); }
+    }
     // A saved, renamed or activated profile can change who owns the native login; check again next time.
     this.nativeChecked = {};
   }
@@ -375,7 +532,7 @@ export class ProfileStore {
    * existing profile `id`, which then becomes the active one. A new profile whose login is already saved is
    * refused unless `allowDuplicate` is set.
    */
-  async saveNative(provider: AuthProvider, options: { name?: string; id?: string; allowDuplicate?: boolean }): Promise<SaveOutcome> {
+  async saveNative(provider: AuthProvider, options: { name?: string; id?: string; allowDuplicate?: boolean; folder?: string }): Promise<SaveOutcome> {
     const credential = readNativeCredential(provider);
     if (options.id) {
       const state = this.state();
@@ -389,18 +546,32 @@ export class ProfileStore {
       this.log(`${provider}: updated authentication profile "${target.name}" from the current login`);
       return { status: 'updated', profile: this.profile(provider, target.id)! };
     }
-    return this.saveNew(provider, options.name ?? '', credential, true, options.allowDuplicate);
+    return this.saveNew(provider, options.name ?? '', credential, true, options.allowDuplicate, options.folder);
   }
 
-  /** Imports a credential document as a profile that is saved but not activated. */
-  async importCredential(provider: AuthProvider, name: string, document: unknown, allowDuplicate = false): Promise<SaveOutcome> {
-    return this.saveNew(provider, name, extractCredential(provider, document), false, allowDuplicate);
+  /** Imports a credential document as a profile that is saved but not activated; in `folder`'s file when given. */
+  async importCredential(provider: AuthProvider, name: string, document: unknown, allowDuplicate = false, folder?: string): Promise<SaveOutcome> {
+    return this.saveNew(provider, name, extractCredential(provider, document), false, allowDuplicate, folder);
   }
 
-  private async saveNew(provider: AuthProvider, rawName: string, credential: StoredCredential, active: boolean, allowDuplicate = false): Promise<SaveOutcome> {
+  /** The declared folder a new project profile may go to, or why not. */
+  private resolveScope(folder: string | undefined): string | undefined {
+    const scopes = this.scopes();
+    if (!folder) {
+      if (!scopes.privateEnabled) { throw new Error('Private profiles are turned off; choose a project folder for the profile.'); }
+      return undefined;
+    }
+    if (!scopes.projectEnabled) { throw new Error('Project profiles are turned off.'); }
+    const resolved = path.resolve(folder);
+    if (!scopes.folders.includes(resolved)) { throw new Error(`${resolved} is not an open project folder of a connected client.`); }
+    return resolved;
+  }
+
+  private async saveNew(provider: AuthProvider, rawName: string, credential: StoredCredential, active: boolean, allowDuplicate = false, folderOption?: string): Promise<SaveOutcome> {
     const invalid = validateName(rawName);
     if (invalid) { throw new Error(invalid); }
     const name = rawName.trim();
+    const folder = this.resolveScope(folderOption);
     const state = this.state();
     const providerState = state[provider];
     if (providerState.profiles.length >= MAX_PROFILES) {
@@ -414,14 +585,14 @@ export class ProfileStore {
       if (twin) { return { status: 'duplicate', twin, warning: duplicateWarning(provider, twin) }; }
     }
     const now = new Date().toISOString();
-    const profile: StoredProfile = { id: randomUUID(), name, createdAt: now, updatedAt: now, credential };
+    const profile: StoredProfile = { id: randomUUID(), name, createdAt: now, updatedAt: now, ...(folder ? { folder } : {}), credential };
     // Re-read: the duplicate check may have taken a while, and the file is the only truth.
     const fresh = this.state();
     fresh[provider].profiles.push(profile);
     if (active) { fresh[provider].activeProfileId = profile.id; }
     this.updateState(fresh);
     await this.recordIdentity(provider, profile.id, credential);
-    this.log(`${provider}: saved authentication profile "${name}"${active ? ' (active)' : ''}`);
+    this.log(`${provider}: saved authentication profile "${name}"${active ? ' (active)' : ''}${folder ? ` in project ${folder}` : ''}`);
     return { status: 'saved', profile: this.profile(provider, profile.id)! };
   }
 

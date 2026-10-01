@@ -8,6 +8,8 @@ import {
   ApiCallBudget,
   AuthProvider,
   GitHubAccount,
+  KeepAliveAllResult,
+  KeepAliveResult,
   LiveResult,
   LiveUsage,
   ProviderId,
@@ -131,6 +133,9 @@ const SOURCE_LABELS: Record<SourceId, string> = {
   both: 'local file, service API when stale'
 };
 const DEFAULT_CHECK_MINUTES: Record<ProviderId, number> = { claude: 10, codex: 5, copilot: 5 };
+/** Floors for `checkIntervalMinutes`. Claude accepts a quarter minute: with `both` the local account file
+ *  answers most checks, and every endpoint call is spaced by the shared budget regardless. */
+const MIN_CHECK_MINUTES: Record<ProviderId, number> = { claude: 0.25, codex: 1, copilot: 1 };
 /** Default and floor for `aiUsage.claude.accountFile.checkIntervalSeconds`; this source is a plain
  *  local file read, so it can be polled far more often than the rate-limited API. */
 const ACCOUNT_FILE_DEFAULT_SECONDS = 15;
@@ -142,7 +147,7 @@ function settingsFor(provider: ProviderId) {
   const legacy = config.get<number>('aiUsage.refreshIntervalMinutes');
   const check = config.get<number>(`aiUsage.${provider}.checkIntervalMinutes`);
   /** How often the service endpoint may be called, and the spacing `both` gives its fallback. */
-  const apiCheckIntervalMs = Math.max(1, check ?? legacy ?? DEFAULT_CHECK_MINUTES[provider]) * 60_000;
+  const apiCheckIntervalMs = Math.max(MIN_CHECK_MINUTES[provider], check ?? legacy ?? DEFAULT_CHECK_MINUTES[provider]) * 60_000;
   if (provider === 'claude' && (source === 'accountFile' || source === 'both')) {
     const seconds = config.get<number>('aiUsage.claude.accountFile.checkIntervalSeconds', ACCOUNT_FILE_DEFAULT_SECONDS);
     return {
@@ -193,8 +198,6 @@ function formatInterval(ms: number): string {
 
 /** After this long, a reading shown in place of a failed refresh is greyed out. */
 const STALE_AFTER_MS = 15 * 60_000;
-/** Pause between accounts when a keep-alive is sent to all of them at once. */
-const KEEP_ALIVE_ALL_SPACING_MS = 3_000;
 const GITHUB_ACCESS_REQUESTED_KEY = 'aiUsage.githubAccessRequested';
 /** Last Codex profile switch, shared by every window so each can check its own Codex process (non-secret). */
 const CODEX_SWITCH_KEY = 'aiUsage.codexSwitch.v1';
@@ -657,11 +660,27 @@ export function activate(context: vscode.ExtensionContext): void {
           const [profile] = profiles;
           // This one notification reports the outcome, a dead login included, so the service must not announce
           // the same failure a second time; it only records the login as reported.
-          const result = await vscode.window.withProgress({
-            location: vscode.ProgressLocation.Notification,
-            title: `AI Usage: sending ${title} keep-alive for “${profile.name}”…`,
-            cancellable: false
-          }, () => client.keepAliveNow(provider, profile.id, true));
+          const token = `vscode-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+          let result: KeepAliveResult;
+          let cancelled = false;
+          try {
+            result = await vscode.window.withProgress({
+              location: vscode.ProgressLocation.Notification,
+              title: `AI Usage: sending ${title} keep-alive for “${profile.name}”…`,
+              cancellable: true
+            }, async (progress, cancel) => {
+              cancel.onCancellationRequested(() => { cancelled = true; void client.cancel(token).catch(() => undefined); });
+              // A check running in the service (a periodic sweep) is waited for; the progress says so.
+              const waiting = services.onEvent((event) => {
+                if (event.event === 'waiting' && event.token === token) { progress.report({ message: `waiting for a running ${title} account check…` }); }
+              });
+              try { return await client.keepAliveNow(provider, profile.id, { callerReports: true, token }); } finally { waiting.dispose(); }
+            });
+          } catch (error) {
+            if (cancelled) { return; }
+            void vscode.window.showWarningMessage(`AI Usage: ${title} keep-alive for “${profile.name}” not sent: ${readableProblem(error instanceof Error ? error.message : String(error))}`);
+            return;
+          }
           // Revoked, or expired and not refreshable, found by the keep-alive or by the usage read: only a new sign-in helps.
           const dead = [result.keepAliveError, result.usageError].find(needsSignIn);
           let message: string;
@@ -686,34 +705,30 @@ export function activate(context: vscode.ExtensionContext): void {
           }
           return;
         }
+        // One sweep in the service, under one lock, so a periodic check cannot cut in between two accounts; the
+        // service spaces the accounts and reports progress through events.
+        const token = `vscode-${Date.now()}-${Math.random().toString(36).slice(2)}`;
         await vscode.window.withProgress({
           location: vscode.ProgressLocation.Notification,
           title: `AI Usage: sending ${title} keep-alives`,
           cancellable: true
-        }, async (progress, token) => {
-          const failed: string[] = [];
-          let done = 0;
-          let blocked: string | undefined;
-          for (const [index, profile] of profiles.entries()) {
-            if (token.isCancellationRequested) { break; }
-            // Space the calls so a sweep of every account does not burst the provider's usage endpoint.
-            if (index > 0) { await new Promise((resolve) => setTimeout(resolve, KEEP_ALIVE_ALL_SPACING_MS)); }
-            if (token.isCancellationRequested) { break; }
-            progress.report({ message: `${index + 1}/${profiles.length}: “${profile.name}”…`, increment: index ? 100 / profiles.length : 0 });
-            try {
-              const result = await client.keepAliveNow(provider, profile.id);
-              const problem = result.keepAliveError ?? (result.usage ? undefined : result.usageError ?? 'usage statistics could not be updated');
-              if (problem) { failed.push(`“${profile.name}”: ${readableProblem(problem)}`); }
-            } catch (error) {
-              const message = error instanceof Error ? error.message : String(error);
-              // A sign-in started meanwhile holds every check of this service; the rest of the sweep would only fail the same way.
-              if (/sign-in is in progress/i.test(message)) { blocked = message.replace(/\.$/, ''); break; }
-              failed.push(`“${profile.name}”: ${readableProblem(message)}`);
+        }, async (progress, cancel) => {
+          cancel.onCancellationRequested(() => { void client.cancel(token).catch(() => undefined); });
+          const listener = services.onEvent((event) => {
+            if (event.event === 'waiting' && event.token === token) { progress.report({ message: `waiting for a running ${title} account check…` }); }
+            if (event.event === 'keepAliveProgress' && event.token === token) {
+              progress.report({ message: `${event.index + 1}/${event.total}: “${event.name}”…`, increment: event.index ? 100 / event.total : 0 });
             }
-            done++;
+          });
+          let sweep: KeepAliveAllResult;
+          try { sweep = await client.keepAliveAll(provider, profiles.map((profile) => profile.id), { token }); } finally { listener.dispose(); }
+          const failed: string[] = [];
+          for (const result of sweep.results) {
+            const problem = result.error ?? result.keepAliveError ?? (result.usage ? undefined : result.usageError ?? 'usage statistics could not be updated');
+            if (problem) { failed.push(`“${result.name}”: ${readableProblem(problem)}`); }
           }
-          const skipped = profiles.length - done;
-          const summary = `AI Usage: ${title} keep-alive sent to ${done - failed.length} of ${profiles.length} accounts${skipped ? ` (${skipped} ${blocked ? `not sent: ${blocked}` : 'cancelled'})` : ''}.`;
+          const skipped = sweep.total - sweep.done;
+          const summary = `AI Usage: ${title} keep-alive sent to ${sweep.done - failed.length} of ${sweep.total} accounts${skipped ? ` (${skipped} ${sweep.cancelled ? 'cancelled' : `not sent: ${sweep.blocked ?? 'the sweep stopped'}`})` : ''}.`;
           if (failed.length) {
             void vscode.window.showWarningMessage(`${summary} Problems: ${failed.join('; ')}`);
           } else {
@@ -866,6 +881,8 @@ export function activate(context: vscode.ExtensionContext): void {
   // The workspace's repositories decide which Copilot account/organization applies.
   context.subscriptions.push(vscode.workspace.onDidChangeWorkspaceFolders(() => void refreshLive()));
   context.subscriptions.push(vscode.workspace.onDidChangeWorkspaceFolders(() => void updateSessionTokens()));
+  // The folders' project profile files are listed by the service while this window has them open.
+  context.subscriptions.push(vscode.workspace.onDidChangeWorkspaceFolders(() => void services.declareFolders()));
 
   // Refresh live data when the GitHub sign-in state changes (affects Copilot).
   context.subscriptions.push(vscode.authentication.onDidChangeSessions((event) => {

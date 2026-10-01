@@ -75,6 +75,22 @@ hands every reading of the active account to the service (`usage.observe`), whic
 profile still owns the native login. The Claude endpoint call ledger lives in the service home, so the status
 bar's calls and the service's probes are spaced together.
 
+Project profiles live in the profile file of a project folder (`projectProfiles.file`, the format of a profile
+export). Each client declares its folders in its `hello` and with `session.folders` (the extension sends its local
+workspace folders and follows changes; `ai-usage` sends `--project` or the current directory when it holds a
+profile file); the service keeps the union of the connected clients' folders and `ProfileStore` reads every
+folder's file (cached by mtime) into the merged list, marking those profiles with their `folder`. Writes go back to
+the folder's file, and the first write into a Git repository adds the path to its `.gitignore` and emits a
+`notice` event. `profiles.saveNative` and `profiles.importCredential` take a `folder` for a new project
+profile; the import of an export always makes private profiles.
+
+Checks requested by hand go through `AccountAutomation.withAccountLock`, which queues them under the lock of a
+running sweep or waits for it (`waitMs`, 3 minutes by default) and announces the wait as a `waiting` event
+with the request's `token`; `automation.cancel` with that token aborts the wait or the sweep.
+`automation.keepAliveAll` runs a whole-list keep-alive as one sweep under one lock, spaced by 3 seconds, and
+reports each account as a `keepAliveProgress` event, so the extension's and the command line's progress come
+from the service rather than from a client-side loop.
+
 `service/src/mcp.ts` is the MCP server behind `ai-usage mcp` (experimental): JSON-RPC 2.0 over stdio, one message
 per line, written without an SDK, with `list_accounts`, `refresh_usage` (the `usage.read` method, a probe without
 the keep-alive prompt), `switch_account` and `rotate_account` as thin tools over the service client. The `mcp`

@@ -28,6 +28,8 @@ test('setting names map to service keys only for known settings of the right ser
   assert.equal(configKeyOf('aiUsage.mcp.enabled'), 'mcp.enabled', 'the MCP switches are global service settings');
   assert.equal(configKeyOf('aiUsage.mcp.switching'), 'mcp.switching');
   assert.equal(configKeyOf('aiUsage.mcp.other'), undefined);
+  assert.equal(configKeyOf('aiUsage.projectProfiles.file'), 'projectProfiles.file', 'the profile scope switches are global service settings');
+  assert.equal(configKeyOf('aiUsage.privateProfiles.enabled'), 'privateProfiles.enabled');
   assert.equal(settingKey('mcp.enabled'), 'aiUsage.mcp.enabled');
 });
 

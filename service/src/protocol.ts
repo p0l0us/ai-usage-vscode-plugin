@@ -44,6 +44,8 @@ export type ProfileView = {
   loginProblem?: string;
   /** Whether the service holds the profile's login at all. */
   hasCredential: boolean;
+  /** The project folder a project profile lives in; a private profile has none. */
+  folder?: string;
 };
 
 export type ProviderView = {
@@ -60,6 +62,8 @@ export type ProviderView = {
   keepAlive: boolean;
   autoRotate: boolean;
   strategySummary: string;
+  /** Where a new profile may be kept: privately, and in which of the declared project folders. */
+  scopes: { privateEnabled: boolean; projectEnabled: boolean; folders: string[] };
 };
 
 export type ServiceInfo = {
@@ -131,14 +135,34 @@ export type ServiceEvent =
   | { event: 'notice'; level: 'info' | 'warning' | 'error'; message: string; provider?: AuthProvider }
   | { event: 'stateChanged'; provider?: AuthProvider }
   | { event: 'configChanged'; config: ServiceConfig }
+  /** A check requested with `token` waits for a running sweep of the service to finish. */
+  | { event: 'waiting'; provider: AuthProvider; token?: string }
+  /** A keep-alive sweep requested with `token` is about to check account `index` of `total`. */
+  | { event: 'keepAliveProgress'; provider: AuthProvider; token?: string; index: number; total: number; id: string; name: string }
   | { event: 'log'; line: string };
 
 export type EventName = ServiceEvent['event'];
 
-export type HelloParams = { token: string; client: string; version?: string; subscribe?: EventName[] | 'all' };
+export type HelloParams = { token: string; client: string; version?: string; subscribe?: EventName[] | 'all';
+  /** Project folders open at the client, whose profile files the service lists while the client is connected. */
+  folders?: string[] };
 export type HelloResult = { ok: true; service: ServiceInfo };
 
 export type KeepAliveResult = { usage?: SerializedUsage; keepAliveError?: string; usageError?: string };
+
+/** What a check requested by hand does about a sweep that is running: wait for it, and stop on `automation.cancel` with the token. */
+export type CheckWait = { waitMs?: number; token?: string };
+
+/** `automation.keepAliveAll`: one keep-alive sweep over several accounts under one lock. */
+export type KeepAliveAllResult = {
+  results: Array<{ id: string; name: string; error?: string } & KeepAliveResult>;
+  /** Accounts the sweep got to; the rest were not sent. */
+  done: number;
+  total: number;
+  /** Why the sweep stopped early, when it did not finish or start: a sign-in, or a check still running after the wait. */
+  blocked?: string;
+  cancelled: boolean;
+};
 
 /** `usage.read`: a fresh reading of one profile, without a keep-alive prompt. */
 export type UsageReadResult = KeepAliveResult & { profile: { id: string; name: string; email?: string } };

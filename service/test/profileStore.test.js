@@ -189,3 +189,92 @@ test('replacing the login of the active profile replaces the native login as wel
   assert.equal(await f.store.replaceCredential('codex', spare.profile.id, codexLogin('acc-spare-2')), false);
   assert.equal(f.readNative(f.nativeCodex).tokens.account_id, 'acc-new');
 });
+
+function projectStore(f, options = {}) {
+  const config = { file: '.ai-usage.profiles.json', projectEnabled: true, privateEnabled: true, ...options };
+  const notices = [];
+  const store = new ProfileStore(path.join(f.root, 'profiles.json'), (message) => f.logs.push(message),
+    async (provider, credential) => provider === 'codex' ? { email: `${credential.tokens?.account_id}@example.com`, accountId: credential.tokens?.account_id }
+      : ({ a: { email: 'a@example.com', accountId: 'account-a' }, external: { email: 'other@example.com', accountId: 'account-other' } }[credential.claudeAiOauth?.accessToken] ?? {}),
+    { projectFileName: () => config.file, projectProfilesEnabled: () => config.projectEnabled, privateProfilesEnabled: () => config.privateEnabled, notice: (message) => notices.push(message) });
+  return { store, config, notices };
+}
+
+test('project profiles of a declared folder are listed with the private ones, keep their login in the file, and are written back', async (t) => {
+  const f = fixture(t);
+  const { store, config } = projectStore(f, { file: 'config/ai-usage.json' });
+  await store.saveNative('claude', { name: 'A' });
+  const project = path.join(f.root, 'project');
+  fs.mkdirSync(path.join(project, 'config'), { recursive: true });
+  const file = path.join(project, 'config', 'ai-usage.json');
+  const login = claudeLogin('project');
+  fs.writeFileSync(file, JSON.stringify({ aiUsageProfiles: 1, profiles: [{ provider: 'claude', id: 'p1', name: 'Client', email: 'client@example.com', accountId: 'acc-c',
+    createdAt: '2026-09-01T00:00:00.000Z', updatedAt: '2026-09-01T00:00:00.000Z', credential: login }] }));
+  assert.deepEqual(store.profiles('claude').map((p) => p.folder), [undefined], 'nothing is read until the folder is declared');
+  assert.equal(store.setProjectFolders([project]), true);
+  assert.equal(store.setProjectFolders([project]), false);
+  assert.deepEqual(store.profiles('claude').map((p) => [p.id, p.name, p.folder]), [[store.profiles('claude')[0].id, 'A', undefined], ['p1', 'Client', project]]);
+  assert.deepEqual(store.scopes(), { privateEnabled: true, projectEnabled: true, folders: [project] });
+  assert.deepEqual(await store.credential('claude', 'p1'), login);
+  assert.ok(!fs.readFileSync(path.join(f.root, 'profiles.json'), 'utf8').includes('p1'), 'a project profile never reaches profiles.json');
+  // A refreshed token goes back to the project file.
+  const refreshed = claudeLogin('project2');
+  await store.refreshedCredential('claude', 'p1', login, refreshed);
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')).profiles[0].credential, refreshed);
+  assert.deepEqual(await store.credential('claude', 'p1'), refreshed);
+  // A hand-edited file is read again; renames are written back.
+  const edited = JSON.parse(fs.readFileSync(file, 'utf8'));
+  edited.profiles[0].name = 'Client (edited)';
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  fs.writeFileSync(file, JSON.stringify(edited));
+  assert.equal(store.profile('claude', 'p1').name, 'Client (edited)');
+  store.rename('claude', 'p1', 'Customer');
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).profiles[0].name, 'Customer');
+  // With project profiles turned off the folder is left alone and its profiles are not listed.
+  config.projectEnabled = false;
+  assert.deepEqual(store.profiles('claude').map((p) => p.name), ['A']);
+  assert.deepEqual(store.scopes().folders, []);
+  config.projectEnabled = true;
+  // Deleting a project profile removes it from the file; export includes project profiles.
+  assert.deepEqual(store.exportEntries().entries.map((entry) => entry.name), ['A', 'Customer']);
+  store.delete('claude', 'p1');
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')).profiles, []);
+  assert.deepEqual(store.profiles('claude').map((p) => p.name), ['A']);
+});
+
+test('a new profile may go to a declared project folder, which gets the file, mode 0600, and a .gitignore line', async (t) => {
+  const f = fixture(t);
+  const { store, config, notices } = projectStore(f);
+  const project = path.join(f.root, 'repo');
+  fs.mkdirSync(path.join(project, '.git'), { recursive: true });
+  fs.writeFileSync(path.join(project, '.gitignore'), 'node_modules/');
+  await assert.rejects(store.saveNative('claude', { name: 'Client', folder: project }), /not an open project folder/);
+  store.setProjectFolders([project]);
+  const saved = await store.saveNative('claude', { name: 'Client', folder: project });
+  assert.equal(saved.status, 'saved');
+  assert.equal(saved.profile.folder, project);
+  assert.equal(store.activeProfileId('claude'), saved.profile.id);
+  const file = path.join(project, '.ai-usage.profiles.json');
+  const written = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.deepEqual(written.profiles.map((p) => [p.provider, p.name, p.email, p.credential.claudeAiOauth.accessToken]), [['claude', 'Client', 'a@example.com', 'a']]);
+  if (process.platform !== 'win32') { assert.equal(fs.statSync(file).mode & 0o777, 0o600); }
+  assert.equal(fs.readFileSync(path.join(project, '.gitignore'), 'utf8'), 'node_modules/\n# AI Usage project profiles hold login tokens\n.ai-usage.profiles.json\n');
+  assert.equal(notices.length, 1);
+  assert.match(notices[0], /Added \.ai-usage\.profiles\.json to repo\/\.gitignore/);
+  // The private file keeps only the pointer to the active profile, never the project profile itself.
+  const privateFile = JSON.parse(fs.readFileSync(path.join(f.root, 'profiles.json'), 'utf8'));
+  assert.equal(privateFile.claude.activeProfileId, saved.profile.id);
+  assert.ok(!privateFile.claude.profiles.some((profile) => profile.id === saved.profile.id));
+  // An import into a project needs project profiles on; a private one needs private profiles on.
+  config.projectEnabled = false;
+  await assert.rejects(store.importCredential('claude', 'B', claudeLogin('b'), false, project), /Project profiles are turned off/);
+  config.projectEnabled = true;
+  config.privateEnabled = false;
+  await assert.rejects(store.importCredential('claude', 'B', claudeLogin('b')), /Private profiles are turned off/);
+  assert.deepEqual(store.scopes(), { privateEnabled: false, projectEnabled: true, folders: [project] });
+  const imported = await store.importCredential('claude', 'B', claudeLogin('b'), false, project);
+  assert.equal(imported.profile.folder, project);
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).profiles.length, 2);
+  // A second save does not touch .gitignore again, nor does a file in an ignored subfolder.
+  assert.equal(notices.length, 1);
+});

@@ -36,7 +36,8 @@ Accounts
   save <service> [name]           Save the login the CLI currently uses as a new profile
       --update <profile>          …or into an existing profile, which becomes active
       --allow-duplicate           Save even when the login is already saved under another profile
-  import <service> <file> --name <name>
+      --project[=<dir>]           Keep it in the project folder's profile file (the current directory by default)
+  import <service> <file> --name <name> [--project[=<dir>]]
                                   Import a credential JSON file as a profile without activating it
   rename <service> <profile> <new name>
   delete <service> <profile> [-y]
@@ -68,6 +69,8 @@ Service
   log [-n <lines>] [-f]           Show the service log; -f follows it live
 
 Options
+  --project[=<dir>]               Also list the project profiles of that folder (the current directory when its
+                                  profile file exists); with save and import, where to keep the new profile
   --json                          Machine-readable output where it applies
   --home <dir>                    Service home (default ~/.ai-usage, or $AI_USAGE_HOME)
   -y, --yes                       Answer confirmations with yes
@@ -78,6 +81,8 @@ type Flags = { [name: string]: string | boolean | undefined };
 type Parsed = { positional: string[]; flags: Flags };
 
 const VALUE_FLAGS = new Set(['home', 'name', 'provider', 'lines', 'n', 'update']);
+/** Flags that may stand alone or carry a value with "=", such as `--project` and `--project=/path`. */
+const OPTIONAL_VALUE_FLAGS = new Set(['project']);
 const ALIASES: Record<string, string> = { y: 'yes', h: 'help', v: 'version', f: 'follow', n: 'lines' };
 
 export function parseArgs(argv: string[]): Parsed {
@@ -91,6 +96,7 @@ export function parseArgs(argv: string[]): Parsed {
       const name = ALIASES[rawName] ?? rawName;
       if (rawName.startsWith('no-')) { flags[rawName.slice(3)] = false; continue; }
       if (VALUE_FLAGS.has(name)) { flags[name] = inline ?? argv[++index]; }
+      else if (OPTIONAL_VALUE_FLAGS.has(name)) { flags[name] = inline ?? true; }
       else { flags[name] = inline ?? true; }
     } else if (/^-[a-zA-Z]$/.test(arg)) {
       const name = ALIASES[arg[1]] ?? arg[1];
@@ -153,7 +159,8 @@ export function profileRows(view: ProviderView, now = new Date()): string[][] {
     const other = windows.filter((window) => !labels.includes(window.label)).map((window) => `${window.label} ${percentText(window, now)}`).join(' ');
     const problem = profile.loginProblem ? yellow(readableProblem(profile.loginProblem).split('. ')[0])
       : profile.limit.readOnly ? red('at its limit') : profile.problems[0] ? yellow(profile.problems[0].label) : '';
-    rows.push([String(profile.number), profile.active ? bold(profile.name) : profile.name, profile.active ? green('●') : '', profile.email ?? dim('–'),
+    const where = [profile.email ?? dim('–'), profile.folder ? dim(`project ${path.basename(profile.folder)}`) : ''].filter(Boolean).join(' · ');
+    rows.push([String(profile.number), profile.active ? bold(profile.name) : profile.name, profile.active ? green('●') : '', where,
       ...cells, other, clock(profile.checkedAt), problem]);
   }
   return rows;
@@ -208,28 +215,55 @@ function startInstalledOrLocal(home: string): () => void {
   };
 }
 
-async function withClient<T>(home: string, subscribe: ServiceEvent['event'][] | 'all', action: (client: ServiceClient) => Promise<T>): Promise<T> {
+/** The project folder of this run: `--project=<dir>`, or the current directory with `--project` alone. */
+function projectFolder(flags: Flags): string | undefined {
+  if (typeof flags.project === 'string' && flags.project) { return path.resolve(flags.project); }
+  return flags.project === true ? process.cwd() : undefined;
+}
+
+/**
+ * Connects, declaring the project folder of this run so its profile file is listed: the one named with
+ * `--project`, or the current directory when it holds a profile file.
+ */
+async function withClient<T>(home: string, subscribe: ServiceEvent['event'][] | 'all', action: (client: ServiceClient) => Promise<T>, flags: Flags = {}): Promise<T> {
   const client = await connectService({ home, client: 'cli', version: serviceVersion(), subscribe, start: startInstalledOrLocal(home) });
-  try { return await action(client); } finally { client.close(); }
+  try {
+    let folder = projectFolder(flags);
+    if (!folder) {
+      const config = await client.getConfig();
+      if (config.projectProfiles.enabled && fs.existsSync(path.resolve(process.cwd(), config.projectProfiles.file || '.ai-usage.profiles.json'))) { folder = process.cwd(); }
+    }
+    if (folder) { await client.setFolders([folder]); }
+    return await action(client);
+  } finally { client.close(); }
 }
 
 function printJson(value: unknown): void {
   out(`${JSON.stringify(value, null, 2)}\n`);
 }
 
-async function keepAliveOne(client: ServiceClient, service: AuthProvider, profile: ProfileView | { name: string; id: string }): Promise<boolean> {
-  const result = await client.keepAliveNow(service, profile.id);
+/** Prints one account's keep-alive outcome; true when the prompt went through and usage was read. */
+function reportKeepAlive(service: AuthProvider, name: string, result: { usage?: { windows: Array<{ label: string; usedPercent: number; resetsAt?: string }> }; keepAliveError?: string; usageError?: string }): boolean {
   const title = TITLES[service];
   if (result.keepAliveError) {
-    out(`${red('✗')} ${title} keep-alive failed for “${profile.name}”: ${readableProblem(result.keepAliveError)}${result.usage ? ' Usage statistics were still updated.' : ''}\n`);
+    out(`${red('✗')} ${title} keep-alive failed for “${name}”: ${readableProblem(result.keepAliveError)}${result.usage ? ' Usage statistics were still updated.' : ''}\n`);
     return false;
   }
   if (result.usage) {
-    out(`${green('✓')} ${title} keep-alive completed for “${profile.name}”: ${result.usage.windows.map((window) => `${window.label} ${percentText(window)}`).join(' · ')}\n`);
+    out(`${green('✓')} ${title} keep-alive completed for “${name}”: ${result.usage.windows.map((window) => `${window.label} ${percentText(window)}`).join(' · ')}\n`);
     return true;
   }
-  out(`${yellow('!')} ${title} keep-alive completed for “${profile.name}”, but usage could not be read${result.usageError ? `: ${readableProblem(result.usageError)}` : '.'}\n`);
+  out(`${yellow('!')} ${title} keep-alive completed for “${name}”, but usage could not be read${result.usageError ? `: ${readableProblem(result.usageError)}` : '.'}\n`);
   return false;
+}
+
+async function keepAliveOne(client: ServiceClient, service: AuthProvider, profile: ProfileView | { name: string; id: string }, token?: string): Promise<boolean> {
+  try {
+    return reportKeepAlive(service, profile.name, await client.keepAliveNow(service, profile.id, { token }));
+  } catch (error) {
+    out(`${red('✗')} ${TITLES[service]} keep-alive for “${profile.name}” not sent: ${readableProblem(error instanceof Error ? error.message : String(error))}\n`);
+    return false;
+  }
 }
 
 export type CliOutput = { stdout: (text: string) => void; stderr: (text: string) => void };
@@ -254,7 +288,7 @@ export async function main(argv: string[], io?: CliOutput): Promise<number> {
           const snapshot = await client.snapshot();
           if (json) { printJson(snapshot); } else { out(`${formatStatus(snapshot)}\n`); }
           return 0;
-        });
+        }, flags);
       }
       case 'top': case 'watch': case 'live': {
         if (!process.stdout.isTTY) { throw new UsageError('The live view needs a terminal; use "ai-usage status" instead.'); }
@@ -269,7 +303,7 @@ export async function main(argv: string[], io?: CliOutput): Promise<number> {
             out(`${providerSummary(view)}\n${view.profiles.length ? table(profileRows(view)) : dim('  no saved profiles')}\n\n`);
           }
           return 0;
-        });
+        }, flags);
       }
       case 'use': case 'switch': case 'activate': {
         const service = provider(rest[0]);
@@ -280,7 +314,7 @@ export async function main(argv: string[], io?: CliOutput): Promise<number> {
           const mark = result.level === 'info' ? green('✓') : result.level === 'warning' ? yellow('!') : red('✗');
           out(`${mark} ${result.message}\n`);
           return result.level === 'error' ? 1 : 0;
-        });
+        }, flags);
       }
       case 'save': {
         const service = provider(rest[0]);
@@ -290,17 +324,18 @@ export async function main(argv: string[], io?: CliOutput): Promise<number> {
           if (!update && !name) { throw new UsageError('Name the new profile, or pass --update <profile> to replace a saved one.'); }
           let target: string | undefined;
           if (update) { target = (await client.list(service)).profiles.find((candidate) => matches(candidate, update))?.id; if (!target) { throw new UsageError(`No ${TITLES[service]} profile matches "${update}".`); } }
-          let result = await client.saveNative(service, update ? { id: target } : { name, allowDuplicate: flags['allow-duplicate'] === true });
+          const folder = projectFolder(flags);
+          let result = await client.saveNative(service, update ? { id: target } : { name, allowDuplicate: flags['allow-duplicate'] === true, folder });
           if (result.status === 'duplicate') {
             out(`${yellow('!')} ${result.warning}\n`);
             if (!await confirm('Save a copy anyway?', flags)) { return 1; }
-            result = await client.saveNative(service, { name, allowDuplicate: true });
+            result = await client.saveNative(service, { name, allowDuplicate: true, folder });
             if (result.status === 'duplicate') { return 1; }
           }
           if (json) { printJson(result); return 0; }
-          out(`${green('✓')} ${TITLES[service]} login ${result.status === 'saved' ? 'saved as' : 'stored into'} “${result.profile.name}”${result.profile.email ? ` (${result.profile.email})` : ''}.\n`);
+          out(`${green('✓')} ${TITLES[service]} login ${result.status === 'saved' ? 'saved as' : 'stored into'} “${result.profile.name}”${result.profile.email ? ` (${result.profile.email})` : ''}${folder && result.status === 'saved' ? ` in project ${path.basename(folder)}` : ''}.\n`);
           return 0;
-        });
+        }, flags);
       }
       case 'import': {
         const service = provider(rest[0]);
@@ -310,17 +345,18 @@ export async function main(argv: string[], io?: CliOutput): Promise<number> {
         if (!name) { throw new UsageError('Pass --name <profile name> for the imported login.'); }
         const document = JSON.parse(fs.readFileSync(file, 'utf8'));
         return withClient(home, [], async (client) => {
-          let result = await client.importCredential(service, name, document, flags['allow-duplicate'] === true);
+          const folder = projectFolder(flags);
+          let result = await client.importCredential(service, name, document, flags['allow-duplicate'] === true, folder);
           if (result.status === 'duplicate') {
             out(`${yellow('!')} ${result.warning}\n`);
             if (!await confirm('Save a copy anyway?', flags)) { return 1; }
-            result = await client.importCredential(service, name, document, true);
+            result = await client.importCredential(service, name, document, true, folder);
             if (result.status === 'duplicate') { return 1; }
           }
           if (json) { printJson(result); return 0; }
-          out(`${green('✓')} ${TITLES[service]} credential imported as “${result.profile.name}”. Activate it with: ai-usage use ${service} "${result.profile.name}"\n`);
+          out(`${green('✓')} ${TITLES[service]} credential imported as “${result.profile.name}”${folder ? ` in project ${path.basename(folder)}` : ''}. Activate it with: ai-usage use ${service} "${result.profile.name}"\n`);
           return 0;
-        });
+        }, flags);
       }
       case 'rename': {
         const service = provider(rest[0]);
@@ -329,7 +365,7 @@ export async function main(argv: string[], io?: CliOutput): Promise<number> {
           const renamed = await client.rename(service, { ref: rest[1] }, rest.slice(2).join(' '));
           if (json) { printJson(renamed); } else { out(`${green('✓')} Renamed to “${renamed.name}”.\n`); }
           return 0;
-        });
+        }, flags);
       }
       case 'delete': case 'remove': case 'rm': {
         const service = provider(rest[0]);
@@ -342,7 +378,7 @@ export async function main(argv: string[], io?: CliOutput): Promise<number> {
           const deleted = await client.delete(service, target.id);
           if (json) { printJson(deleted); } else { out(`${green('✓')} Deleted “${deleted.profile.name}”.\n`); }
           return 0;
-        });
+        }, flags);
       }
       case 'login': case 'signin': case 'sign-in': {
         const service = provider(rest[0]);
@@ -378,7 +414,7 @@ export async function main(argv: string[], io?: CliOutput): Promise<number> {
           }
           if (json) { printJson(result); } else { out(`${green('✓')} ${result.message}\n`); }
           return 0;
-        });
+        }, flags);
       }
       case 'keepalive': case 'keep-alive': case 'ka': {
         const service = provider(rest[0]);
@@ -387,14 +423,26 @@ export async function main(argv: string[], io?: CliOutput): Promise<number> {
           const targets = flags.all || !rest[1] ? view.profiles : view.profiles.filter((candidate) => matches(candidate, rest.slice(1).join(' ')));
           if (!targets.length) { throw new UsageError(rest[1] ? `No ${TITLES[service]} profile matches "${rest.slice(1).join(' ')}".` : `No ${TITLES[service]} profiles are saved.`); }
           if (!rest[1] && !flags.all && targets.length > 1 && !await confirm(`Send the keep-alive to all ${targets.length} ${TITLES[service]} accounts?`, flags)) { return 1; }
-          let failed = 0;
-          for (const [index, target] of targets.entries()) {
-            // Space the calls so a sweep of every account does not burst the provider's usage endpoint.
-            if (index > 0) { await new Promise((resolve) => setTimeout(resolve, 3_000)); }
-            if (!await keepAliveOne(client, service, target)) { failed++; }
-          }
-          return failed ? 1 : 0;
-        });
+          const token = `cli-${process.pid}-${Date.now()}`;
+          const onInterrupt = () => { void client.cancel(token).catch(() => undefined); };
+          process.once('SIGINT', onInterrupt);
+          client.on('event', (event: ServiceEvent) => {
+            if (event.event === 'waiting' && event.token === token) { err(dim(`waiting for a running ${TITLES[service]} account check…\n`)); }
+            if (event.event === 'keepAliveProgress' && event.token === token) { err(dim(`${event.index + 1}/${event.total}: “${event.name}”…\n`)); }
+          });
+          try {
+            if (targets.length === 1) { return await keepAliveOne(client, service, targets[0], token) ? 0 : 1; }
+            const sweep = await client.keepAliveAll(service, targets.map((target) => target.id), { token });
+            let failed = 0;
+            for (const result of sweep.results) {
+              if (result.error) { out(`${red('✗')} ${TITLES[service]} keep-alive for “${result.name}” not sent: ${readableProblem(result.error)}\n`); failed++; continue; }
+              if (!reportKeepAlive(service, result.name, result)) { failed++; }
+            }
+            const notSent = sweep.total - sweep.done;
+            if (notSent) { out(`${yellow('!')} ${notSent} of ${sweep.total} not sent: ${sweep.cancelled ? 'cancelled' : sweep.blocked ?? 'the sweep stopped'}.\n`); }
+            return failed || notSent ? 1 : 0;
+          } finally { process.off('SIGINT', onInterrupt); }
+        }, flags);
       }
       case 'rotate': {
         const service = provider(rest[0]);
@@ -405,7 +453,7 @@ export async function main(argv: string[], io?: CliOutput): Promise<number> {
             ? `${green('✓')} ${TITLES[service]} rotated to “${result.activeProfileName ?? result.activeProfileId}”.\n`
             : `${yellow('–')} ${TITLES[service]} not rotated: ${result.reason}.\n`);
           return 0;
-        });
+        }, flags);
       }
       case 'export': {
         const target = rest[0] ?? path.join(os.homedir(), 'ai-usage-profiles.json');
@@ -418,7 +466,7 @@ export async function main(argv: string[], io?: CliOutput): Promise<number> {
           if (process.platform !== 'win32') { try { fs.chmodSync(target, 0o600); } catch { /* A file system without modes. */ } }
           out(`${green('✓')} Exported ${result.entries.length} profile${result.entries.length === 1 ? '' : 's'} to ${target}. ${yellow('The file holds login tokens in plain text: import it on the other computer, then delete it.')}${result.missing.length ? ` Skipped, no login saved: ${result.missing.join(', ')}.` : ''}\n`);
           return 0;
-        });
+        }, flags);
       }
       case 'import-profiles': {
         const file = rest[0];

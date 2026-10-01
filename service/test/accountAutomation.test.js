@@ -189,8 +189,13 @@ test('all exhausted accounts leave the active login unchanged and throttle repea
   await f.service.tick();
   assert.equal(f.calls.length, 2);
   assert.deepEqual(f.switches, []);
+  // Their stored readings reset in a day; until then they are not read again, since they cannot have recovered.
   f.advance(600001);
   f.values.b = [2, 2];
+  await f.service.tick();
+  assert.deepEqual(f.switches, []);
+  assert.deepEqual(f.calls.slice(2), [['codex', 'a', false]]);
+  f.advance(86400000);
   await f.service.tick();
   assert.deepEqual(f.switches, [['codex', 'b', true]]);
 });
@@ -508,4 +513,137 @@ test('a hold stops the service\'s sweeps and rotation and refuses hand-run check
   assert.equal(f.service.heldFor('codex'), 'a Codex sign-in is in progress');
   await new Promise(resolve => setTimeout(resolve, 60));
   assert.equal(f.service.heldFor('codex'), undefined);
+});
+
+test('an account whose last check failed is not switched to, and costs no call, until a later check succeeds', async t => {
+  const failure = 'Keep-alive CLI exited with code 1: workspace routing discovery unavailable';
+  const f = fixture(t, { values: { a: [99.5, 10], b: [10, 10], c: [10, 10] }, keepAliveErrors: { b: failure }, settings: { codex: { autoRotate: true } } });
+  // b's failed keep-alive marks it.
+  await f.service.sendKeepAliveNow('codex', 'b');
+  f.calls.length = 0;
+  f.observe('codex', [99.5, 10]);
+  await f.service.tick();
+  assert.deepEqual(f.switches, [['codex', 'c', true]]);
+  assert.ok(!f.calls.some(call => call[1] === 'b'), JSON.stringify(f.calls));
+  assert.ok(f.messages.some(message => /not rotating to "b": its last check failed/.test(message)), f.messages.join('\n'));
+  // Once a keep-alive of b succeeds, it is a candidate again.
+  delete f.options.keepAliveErrors.b;
+  await f.service.sendKeepAliveNow('codex', 'b');
+  f.values.c = [99.5, 10];
+  f.observe('codex', [99.5, 10], 'c');
+  f.advance(600001);
+  await f.service.tick();
+  assert.deepEqual(f.switches.at(-1), ['codex', 'b', true]);
+});
+
+test('accounts left out for a failed last check are named when no candidate remains', async t => {
+  const f = fixture(t, { ids: ['a', 'b'], values: { a: [99.5, 10], b: [10, 10] },
+    keepAliveErrors: { b: 'Keep-alive CLI exited with code 1: workspace routing discovery unavailable' }, settings: { codex: { autoRotate: true } } });
+  const notices = [];
+  f.service.onNoCandidate = (provider, detail) => notices.push(detail);
+  await f.service.sendKeepAliveNow('codex', 'b');
+  f.observe('codex', [99.5, 10]);
+  await f.service.tick();
+  assert.deepEqual(f.switches, []);
+  assert.equal(notices.length, 1);
+  assert.match(notices[0], /left out for a failed last check: "b" \(.*workspace routing discovery unavailable/);
+});
+
+test('a candidate still at its limit by its stored reading, with the reset ahead, costs a limit sweep nothing until that reset', async t => {
+  const f = fixture(t, { values: { a: [99.5, 10], b: [10, 10], c: [10, 10] }, settings: { codex: { autoRotate: true } } });
+  // b's stored reading: weekly window at the threshold, resetting in 2 hours.
+  f.observe('codex', [['5h', 10, 1], ['7d', 99.5, 2]], 'b');
+  f.observe('codex', [99.5, 10]);
+  await f.service.tick();
+  assert.deepEqual(f.switches, [['codex', 'c', true]]);
+  assert.ok(!f.calls.some(call => call[1] === 'b'), JSON.stringify(f.calls));
+  // Once that reset has passed, b is read again and can be switched to; a's stored reading still blocks it.
+  f.values.c = [99.5, 10];
+  f.observe('codex', [99.5, 10], 'c');
+  f.advance(2 * HOUR + 1);
+  f.calls.length = 0;
+  await f.service.tick();
+  assert.deepEqual(f.switches.at(-1), ['codex', 'b', true]);
+  assert.deepEqual(f.calls.map(call => call[1]), ['c', 'b', 'b']);
+});
+
+test('accounts still at their limit by their last reading are named with their reset when no candidate remains, and nothing is spent', async t => {
+  const f = fixture(t, { ids: ['a', 'b'], values: { a: [99.5, 10], b: [10, 10] }, settings: { codex: { autoRotate: true } } });
+  const notices = [];
+  f.service.onNoCandidate = (provider, detail) => notices.push(detail);
+  f.observe('codex', [['5h', 10, 1], ['7d', 99.5, 48]], 'b');
+  f.observe('codex', [99.5, 10]);
+  await f.service.tick();
+  assert.deepEqual(f.calls, []);
+  assert.deepEqual(f.switches, []);
+  assert.equal(notices.length, 1);
+  assert.match(notices[0], /still at their limit by their last reading: "b" \(resets in 2d\)/);
+});
+
+test('a keep-alive by hand waits for a running sweep, then holds the lock for its whole sweep', async t => {
+  let release;
+  const wait = new Promise(resolve => { release = resolve; });
+  const f = fixture(t, { settings: { claude: { enabled: true } }, beforeProbe: () => wait });
+  const other = f.make();
+  t.after(() => other.dispose());
+  // Another service instance's sweep holds claude's lock while its first probe is blocked.
+  const sweep = other.tick();
+  await assert.rejects(f.service.sendKeepAliveNow('claude', 'b'), /already running/);
+  const events = [];
+  const byHand = f.service.withAccountLock('claude', async () => {
+    events.push('started');
+    await f.service.sendKeepAliveNow('claude', 'b');
+    await f.service.sendKeepAliveNow('claude', 'c');
+  }, { waitMs: 5000, onWait: () => events.push('waiting') });
+  await new Promise(resolve => setTimeout(resolve, 30));
+  assert.deepEqual(events, ['waiting']);
+  release();
+  await sweep;
+  await byHand;
+  assert.deepEqual(events, ['waiting', 'started']);
+  assert.deepEqual(f.calls.map(call => call[1]), ['a', 'b', 'c', 'b', 'c']);
+});
+
+test('a keep-alive by hand gives up on the lock after its wait, and at once when cancelled', async t => {
+  let release;
+  const wait = new Promise(resolve => { release = resolve; });
+  const f = fixture(t, { settings: { claude: { enabled: true } }, beforeProbe: () => wait });
+  const other = f.make();
+  t.after(() => { release(); other.dispose(); });
+  const sweep = other.tick();
+  await assert.rejects(f.service.sendKeepAliveNow('claude', 'b', { wait: { waitMs: 60 } }), /already running/);
+  const abort = new AbortController();
+  const cancelled = assert.rejects(f.service.sendKeepAliveNow('claude', 'b', { wait: { waitMs: 60000, signal: abort.signal } }), /Cancelled/);
+  abort.abort();
+  await cancelled;
+  release();
+  await sweep;
+  // The periodic sweep does not run while a sweep by hand holds the lock, and resumes afterwards.
+  f.calls.length = 0;
+  f.advance(3 * HOUR);
+  await f.service.withAccountLock('claude', async () => {
+    await f.service.tick();
+    assert.deepEqual(f.calls, []);
+  });
+  await f.service.tick();
+  assert.ok(f.calls.some(call => call[1] === 'b'), JSON.stringify(f.calls));
+});
+
+test('a rotation sweep by hand waits for a running sweep too, and reports a hold instead of waiting', async t => {
+  let release;
+  const wait = new Promise(resolve => { release = resolve; });
+  const f = fixture(t, { values: { a: [99.5, 10], b: [10, 10] }, settings: { codex: { enabled: true } }, beforeProbe: () => wait });
+  const other = f.make();
+  t.after(() => other.dispose());
+  const sweep = other.tick();
+  await assert.rejects(f.service.rotateNow('codex'), /already running/);
+  const events = [];
+  const byHand = f.service.rotateNow('codex', { waitMs: 5000, onWait: () => events.push('waiting') });
+  await new Promise(resolve => setTimeout(resolve, 30));
+  release();
+  await sweep;
+  assert.equal((await byHand).switched, true);
+  assert.deepEqual(events, ['waiting']);
+  f.service.hold('codex', 'a Codex sign-in is in progress', 60_000);
+  assert.deepEqual(await f.service.rotateNow('codex'), { switched: false, reason: 'a Codex sign-in is in progress' });
 });

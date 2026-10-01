@@ -187,3 +187,53 @@ test('export and import go through the same plans the extension shows', async (t
   assert.equal(codex.activeProfileId, codex.profiles[0].id);
   assert.equal(codex.nativeUnsaved, false);
 });
+
+test('clients declare project folders; the union is listed while they are connected, and a profile can be saved into one', async (t) => {
+  const f = fixture(t);
+  const project = path.join(f.root, 'project');
+  fs.mkdirSync(project);
+  await f.call('profiles.saveNative', { provider: 'claude', name: 'Work' });
+  await assert.rejects(f.call('session.folders', { folders: [project] }), /Only a connected client/);
+  f.service.declareFolders(7, [project]);
+  let view = await f.call('profiles.list', { provider: 'claude' });
+  assert.deepEqual(view.scopes, { privateEnabled: true, projectEnabled: true, folders: [project] });
+  const saved = await f.call('profiles.importCredential', { provider: 'claude', name: 'Client', credential: claudeLogin('b'), folder: project });
+  assert.equal(saved.profile.folder, project);
+  view = await f.call('profiles.list', { provider: 'claude' });
+  assert.deepEqual(view.profiles.map((profile) => [profile.name, profile.folder]), [['Work', undefined], ['Client', project]]);
+  assert.ok(fs.existsSync(path.join(project, '.ai-usage.profiles.json')));
+  // Another client's folder joins the union; a disconnect removes its folders.
+  const other = path.join(f.root, 'other');
+  fs.mkdirSync(other);
+  await f.service.handle('session.folders', { folders: [other] }, 8);
+  assert.deepEqual((await f.call('profiles.list', { provider: 'claude' })).scopes.folders, [project, other]);
+  f.service.forgetFolders(7);
+  view = await f.call('profiles.list', { provider: 'claude' });
+  assert.deepEqual(view.scopes.folders, [other]);
+  assert.deepEqual(view.profiles.map((profile) => profile.name), ['Work']);
+  assert.ok(f.events.some((event) => event.event === 'stateChanged'));
+});
+
+test('a keep-alive sweep over every account runs in the service, reports progress, and can be cancelled', async (t) => {
+  const f = fixture(t, { keepAliveErrors: { b: 'Keep-alive CLI exited with code 1: out of credits' } });
+  await f.call('profiles.saveNative', { provider: 'claude', name: 'Work' });
+  await f.call('profiles.importCredential', { provider: 'claude', name: 'Backup', credential: claudeLogin('b') });
+  const progress = [];
+  f.service.events.on('event', (event) => { if (event.event === 'keepAliveProgress') { progress.push(`${event.index}/${event.total} ${event.name}`); } });
+  // The sweep pauses between accounts; cancelling during that pause ends it with the first account done.
+  const sweep = f.call('automation.keepAliveAll', { provider: 'claude', token: 't1' });
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  await f.call('automation.cancel', { token: 't1' });
+  const result = await sweep;
+  assert.deepEqual(progress, ['0/2 Work']);
+  assert.equal(result.done, 1);
+  assert.equal(result.total, 2);
+  assert.equal(result.cancelled, true);
+  assert.ok(result.results[0].usage);
+  // Only the chosen accounts, when ids are given.
+  const chosen = await f.call('automation.keepAliveAll', { provider: 'claude', ids: [(await f.call('profiles.list', { provider: 'claude' })).profiles[1].id] });
+  assert.equal(chosen.total, 1);
+  assert.equal(chosen.results[0].name, 'Backup');
+  assert.match(chosen.results[0].keepAliveError, /out of credits/);
+  assert.equal(chosen.cancelled, false);
+});

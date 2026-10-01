@@ -1,6 +1,6 @@
 {
   "name": "ai-usage-service",
-  "version": "0.0.33",
+  "version": "0.0.37",
   "description": "Background service and command line for the AI Usage VS Code extension: saves Claude Code and Codex logins as profiles, switches between them, keeps them warm and rotates them on exhaustion, with VS Code running or not.",
   "license": "GPL-3.0-only",
   "repository": {

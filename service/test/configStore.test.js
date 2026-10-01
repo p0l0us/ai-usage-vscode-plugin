@@ -97,5 +97,5 @@ test('the mcp block is a global setting: off by default, switching on, listed af
   const keys = listConfig(next).map((entry) => entry.key);
   assert.deepEqual(keys.slice(-2), ['mcp.enabled', 'mcp.switching']);
   assert.equal(listConfig(next).find((entry) => entry.key === 'mcp.enabled').value, true);
-  assert.ok(GLOBAL_SETTINGS.every((setting) => setting.type === 'boolean'));
+  assert.ok(GLOBAL_SETTINGS.filter((setting) => setting.key.startsWith('mcp.')).every((setting) => setting.type === 'boolean'));
 });

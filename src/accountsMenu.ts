@@ -48,10 +48,34 @@ function plural(count: number, noun: string): string {
   return `${count} ${count === 1 ? noun : `${noun}s`}`;
 }
 
-/** Menu description: the account email, a duplicate marker, then the active marker. */
+/** Menu description: the account email, the project for a project profile, a duplicate marker, then the active marker. */
 function profileDescription(profile: ProfileView, siblings: ProfileView[] = []): string | undefined {
   const twin = profile.email ? siblings.find((other) => other.id !== profile.id && other.email === profile.email) : undefined;
-  return [profile.email, twin ? `duplicate of “${twin.name}”` : undefined, profile.active ? 'Active' : undefined].filter(Boolean).join(' · ') || undefined;
+  return [profile.email, profile.folder ? `project ${path.basename(profile.folder)}` : undefined,
+    twin ? `duplicate of “${twin.name}”` : undefined, profile.active ? 'Active' : undefined].filter(Boolean).join(' · ') || undefined;
+}
+
+/**
+ * Where a new profile is kept: privately, in the service's profile file, or in one of the open project folders'
+ * files. Asked only when both kinds are enabled and a local folder is open; otherwise the only possible kind is
+ * used. Undefined when cancelled.
+ */
+export async function pickScope(view: ProviderView): Promise<{ folder?: string } | undefined> {
+  const { privateEnabled, projectEnabled, folders } = view.scopes;
+  const projects = projectEnabled ? folders : [];
+  if (!projects.length) { return {}; }
+  if (!privateEnabled && projects.length === 1) { return { folder: projects[0] }; }
+  const items: Array<vscode.QuickPickItem & { folder?: string }> = [];
+  if (privateEnabled) {
+    items.push({ label: '$(account) Private profile', detail: 'Kept by the account service in ~/.ai-usage/profiles.json and listed in every window on this host.' });
+  }
+  items.push(...projects.map((folder) => ({
+    label: `$(root-folder) Project profile${projects.length > 1 ? ` in ${path.basename(folder)}` : ''}`,
+    detail: `Kept, login included, in the profile file of ${folder} and listed whenever that folder is open.`,
+    folder
+  })));
+  const picked = await vscode.window.showQuickPick(items, { title: 'AI Usage · Where to keep the profile', placeHolder: 'Private, or in a project folder' });
+  return picked ? { folder: picked.folder } : undefined;
 }
 
 /** "5h: 41% (2h) · 7d: 7% (5d) · Checked 12:30 · $(warning) Insufficient credits", as the list shows under a profile. */
@@ -220,7 +244,7 @@ export class AccountsMenu {
     }
     items.push({ label: 'Manage', kind: vscode.QuickPickItemKind.Separator });
     items.push({ label: '$(save) Save current login…', detail: `Create a profile or replace an existing profile from ${nativeCredentialPath(provider)}.`, action: 'save' });
-    items.push({ label: '$(file-code) Import credential JSON…', detail: 'Imports a credential file into the account service without activating it.', action: 'import' });
+    items.push({ label: '$(file-code) Import credential JSON…', detail: `Imports a credential file into the account service${view.scopes.projectEnabled && view.scopes.folders.length ? ', privately or into an open project,' : ''} without activating it.`, action: 'import' });
     items.push({ label: '$(arrow-swap) Export or import saved profiles…', detail: 'Moves the saved Claude and Codex profiles, logins included, to or from another computer through a JSON file.', action: 'transfer' });
     if (view.profiles.length) {
       items.push({ label: '$(sign-in) Sign in again…', detail: `Runs the ${TITLES[provider]} CLI login in a terminal with a separate home and stores the new login in a saved profile. The active login is replaced only when that profile is the active one.`, action: 'signIn' });
@@ -284,14 +308,16 @@ export class AccountsMenu {
     }
     const name = await this.askName(view, 'Name the login that is currently active.');
     if (!name) { return false; }
-    let result = await client.saveNative(provider, { name });
+    const scope = await pickScope(view);
+    if (!scope) { return false; }
+    let result = await client.saveNative(provider, { name, folder: scope.folder });
     if (result.status === 'duplicate') {
       const choice = await vscode.window.showWarningMessage(result.warning, { modal: true }, 'Save a copy anyway');
       if (choice !== 'Save a copy anyway') { return false; }
-      result = await client.saveNative(provider, { name, allowDuplicate: true });
+      result = await client.saveNative(provider, { name, allowDuplicate: true, folder: scope.folder });
       if (result.status === 'duplicate') { return false; }
     }
-    void vscode.window.showInformationMessage(`${TITLES[provider]} login saved as “${result.profile.name}”.`);
+    void vscode.window.showInformationMessage(`${TITLES[provider]} login saved as “${result.profile.name}”${scope.folder ? ` in project ${path.basename(scope.folder)}` : ''}.`);
     return true;
   }
 
@@ -312,14 +338,16 @@ export class AccountsMenu {
     }
     const name = await this.askName(view, 'Name the imported login.');
     if (!name) { return; }
-    let result = await client.importCredential(provider, name, credential);
+    const scope = await pickScope(view);
+    if (!scope) { return; }
+    let result = await client.importCredential(provider, name, credential, false, scope.folder);
     if (result.status === 'duplicate') {
       const choice = await vscode.window.showWarningMessage(result.warning, { modal: true }, 'Save a copy anyway');
       if (choice !== 'Save a copy anyway') { return; }
-      result = await client.importCredential(provider, name, credential, true);
+      result = await client.importCredential(provider, name, credential, true, scope.folder);
       if (result.status === 'duplicate') { return; }
     }
-    void vscode.window.showInformationMessage(`${TITLES[provider]} credential imported as “${result.profile.name}”. Choose it from the profile menu to activate it.`);
+    void vscode.window.showInformationMessage(`${TITLES[provider]} credential imported as “${result.profile.name}”${scope.folder ? ` in project ${path.basename(scope.folder)}` : ''}. Choose it from the profile menu to activate it.`);
   }
 
   /** The export and the import behind one Accounts menu item; Back and cancel return to the accounts list. */

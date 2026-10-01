@@ -196,14 +196,19 @@ export async function runTop(options: TopOptions): Promise<number> {
     }
     if (key.sequence === 'K' && view) {
       void act(`sending the ${TITLES[provider]} keep-alive to all ${view.profiles.length} accounts…`, async () => {
-        let failed = 0;
-        for (const [index, target] of view.profiles.entries()) {
-          if (index > 0) { await new Promise((resolve) => setTimeout(resolve, 3_000)); }
-          message = dim(`keep-alive ${index + 1}/${view.profiles.length}: “${target.name}”…`); draw();
-          const result = await client.keepAliveNow(provider, target.id).catch(() => ({ keepAliveError: 'failed' }));
-          if (result.keepAliveError || !('usage' in result && result.usage)) { failed++; }
-        }
-        return failed ? yellow(`keep-alives sent, ${failed} of ${view.profiles.length} reported a problem`) : green(`keep-alives sent to ${view.profiles.length} accounts`);
+        const token = `top-${process.pid}-${Date.now()}`;
+        const progress = (event: ServiceEvent) => {
+          if (event.event === 'keepAliveProgress' && event.token === token) { message = dim(`keep-alive ${event.index + 1}/${event.total}: “${event.name}”…`); draw(); }
+          if (event.event === 'waiting' && event.token === token) { message = dim(`waiting for a running ${TITLES[provider]} account check…`); draw(); }
+        };
+        client.on('event', progress);
+        try {
+          const sweep = await client.keepAliveAll(provider, undefined, { token });
+          const failed = sweep.results.filter((result) => result.error || result.keepAliveError || !result.usage).length;
+          const notSent = sweep.total - sweep.done;
+          if (notSent) { return yellow(`${notSent} of ${sweep.total} not sent: ${sweep.cancelled ? 'cancelled' : sweep.blocked ?? 'the sweep stopped'}`); }
+          return failed ? yellow(`keep-alives sent, ${failed} of ${sweep.total} reported a problem`) : green(`keep-alives sent to ${sweep.total} accounts`);
+        } finally { client.off('event', progress); }
       });
       return;
     }

@@ -222,13 +222,22 @@ These apply to `soonestReset`, `evenPace` and `leastWaste`:
   tried are read again.
 - **Order of groups.** Accounts whose stored reading looks usable come first, best score first. Then usable accounts
   that report no weekly window, then those that look exhausted, then accounts never read. Ties keep saved-profile
-  order. Accounts that look exhausted are still tried, because a fresh reading may show that they have recovered.
+  order.
+- **An exhausted reading with its reset ahead is not read again.** Usage in a window only rises until its reset,
+  so an account whose stored reading is still at a threshold, with that window's reset time still ahead, cannot
+  have recovered: the sweep leaves it out without a call until the reset has passed, then reads it again. An
+  exhausted reading without a known reset time is still tried, since only a fresh reading can tell.
 - **A reset since the reading counts as fresh.** A stored reading of `7d` 97% with a reset time that has since passed
   is ranked as 0% used, with its next reset one week later. The account is still read again before any switch.
 - **Headroom is measured up to the thresholds.** "Allowance left" is the threshold minus the usage, not 100 minus the
   usage.
 - **The 5-hour window only blocks.** It does not change the ranking, except for `leastWaste`'s bonus. It acts through
   its threshold: an account at 5h 96% is never switched to, however good its weekly score.
+- **A failed last check disqualifies.** An account whose last keep-alive failed, whatever the reason, or whose last
+  usage check found a login problem, is not switched to and costs the sweep nothing, until a later check of it
+  succeeds: the next periodic keep-alive, or **Send keep-alive now…**. The notification that no candidate remains
+  names the accounts left out for that reason, and the accounts still at their limit by their last reading, with
+  the time until their reset.
 - **Several weekly windows: the tightest one decides.** When both `7d` and `7d Fable` count, `soonestReset` uses the
   window with the least allowance left, `evenPace` the one furthest ahead of its line, and `leastWaste` the lowest
   rate.
@@ -303,8 +312,8 @@ A proactive switch changes the login mid-session. Claude picks up the new login 
 - A candidate must pass a real keep-alive request before it is activated.
 - The selected account must still match the native login immediately before activation, so a switch made meanwhile
   in another window or by the vendor CLI is not overwritten.
-- There is no memory of past exhaustion: an account that was rotated away from becomes a candidate again as soon as
-  a fresh reading shows it below every threshold, for example after its window has reset.
+- The only memory of past exhaustion is the stored reading itself: an account that was rotated away from becomes a
+  candidate again as soon as that reading's reset has passed, and is read again before any switch.
 
 As with manual switching, Claude picks the new login up on its next request. Open Codex chats follow it on their next
 turn when the Codex account proxy is on, and otherwise need the extension restart described in

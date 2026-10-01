@@ -34,11 +34,15 @@ export async function runDaemon(options: DaemonOptions): Promise<void> {
     socketPath: socket,
     token,
     log: (message) => logger.log(message),
-    onHello: (connection): HelloResult => {
+    onHello: (connection, params): HelloResult => {
       logger.log(`client connected: ${connection.client}${connection.version ? ` ${connection.version}` : ''} (#${connection.id})`);
+      if (Array.isArray(params.folders)) { service.declareFolders(connection.id, params.folders.filter((folder): folder is string => typeof folder === 'string')); }
       return { ok: true, service: { ...service.info(), socket } };
     },
-    onDisconnect: (connection) => logger.log(`client disconnected: ${connection.client} (#${connection.id})`),
+    onDisconnect: (connection) => {
+      service.forgetFolders(connection.id);
+      logger.log(`client disconnected: ${connection.client} (#${connection.id})`);
+    },
     handle: async (method, params, connection) => {
       if (method === 'service.shutdown') {
         logger.log(`shutdown requested by ${connection.client} (#${connection.id})`);
@@ -49,7 +53,7 @@ export async function runDaemon(options: DaemonOptions): Promise<void> {
         const lines = typeof (params as { lines?: unknown })?.lines === 'number' ? (params as { lines: number }).lines : 100;
         return Logger.tail(logFile(home), lines);
       }
-      return service.handle(method, params);
+      return service.handle(method, params, connection.id);
     }
   });
   service.clientCount = () => server.clientCount;

@@ -21,9 +21,9 @@ ai-usage                          live view in a terminal; status elsewhere
 ai-usage status [--json]          active accounts, usage, service state
 ai-usage list [claude|codex]      saved profiles and their last readings
 ai-usage use <service> <profile>  activate a profile (name, number or id)
-ai-usage save <service> <name>    save the current CLI login as a profile
+ai-usage save <service> <name>    save the current CLI login as a profile (--project[=<dir>]: in a project's file)
 ai-usage login <service> <profile>   sign in again with the vendor CLI
-ai-usage keepalive <service> [<profile>|--all]
+ai-usage keepalive <service> [<profile>|--all]   one sweep in the service; waits for a running check
 ai-usage rotate <service>         run a rotation sweep now
 ai-usage export [file]            write the saved profiles, logins included
 ai-usage import-profiles <file>   read them elsewhere
@@ -34,7 +34,13 @@ ai-usage mcp                      MCP server for AI agents on stdin/stdout (expe
 ```
 
 `ai-usage --help` lists everything. Names of settings are `claude.<setting>` and `codex.<setting>`, for example
-`claude.autoRotate.strategy`; `ai-usage config` prints them all with a line of explanation each.
+`claude.autoRotate.strategy`, plus the global `privateProfiles.enabled`, `projectProfiles.enabled`,
+`projectProfiles.file`, `mcp.enabled` and `mcp.switching`; `ai-usage config` prints them all with a line of
+explanation each.
+
+A project's profiles (its `.ai-usage.profiles.json`, or the file named by `projectProfiles.file`) are listed
+while a VS Code window has the folder open, or when `ai-usage` runs with `--project[=<dir>]` or from a directory
+that holds such a file.
 
 ## AI agents
 

@@ -1,10 +1,10 @@
 import { EventEmitter } from 'events';
 import * as fs from 'fs';
 import * as path from 'path';
-import { ApiCallBudget } from './apiBudget';
+import { ApiCallBudget, sleep } from './apiBudget';
 import { AuthProvider, StoredCredential, parseCredentialJson, readNativeCredential } from './authFiles';
 import { activateClaudeAccountMetadata, claudeAccountFileConfirms, CredentialIdentity } from './accountIdentity';
-import { AccountAutomation, AutomationProfiles, KeepAliveNowResult } from './accountAutomation';
+import { AccountAutomation, AutomationProfiles, KeepAliveNowResult, LockWait } from './accountAutomation';
 import {
   explainAccountProblem, isolatedEnvironment, loginArgs, loginHome, probeAccount, readableProblem, stagedCredentialPath
 } from './accountProbe';
@@ -14,7 +14,7 @@ import { LiveUsage, resolveCli, verifyCodexNativeAccount } from './live';
 import { ExportedProfile, ImportPlan, parseProfileExport, serializeProfileExport } from './profileTransfer';
 import { ActivationOutcome, ProfileMetadata, ProfileStore, PROVIDERS, TITLES, importOutcome } from './profileStore';
 import {
-  ActivationResult, ExportResult, ImportPlanView, ImportSummary, ProfileView, ProviderView, SaveNativeResult, ServiceEvent, ServiceInfo,
+  ActivationResult, ExportResult, ImportPlanView, ImportSummary, KeepAliveAllResult, ProfileView, ProviderView, SaveNativeResult, ServiceEvent, ServiceInfo,
   SerializedUsage, SignInPreparation, SignInResult, Snapshot, UsageReadResult, serializeKeepAlive
 } from './protocol';
 import { profilesFile, stateDir } from './paths';
@@ -25,6 +25,10 @@ const CLAUDE_METADATA_RETRY_MS = 60_000;
 const CLAUDE_METADATA_RETRY_LIMIT = 10;
 /** Sweeps, keep-alives and the other periodic work run this often. */
 export const TICK_MS = 60_000;
+/** How long a check requested by hand waits for a running sweep of the service, unless the request says otherwise. */
+export const MANUAL_CHECK_WAIT_MS = 3 * 60_000;
+/** Pause between accounts when a keep-alive is sent to all of them at once. */
+export const KEEP_ALIVE_ALL_SPACING_MS = 3_000;
 
 export type AccountServiceOptions = {
   home: string;
@@ -81,6 +85,10 @@ export class AccountService {
   private disposed = false;
   /** Set while a switched Claude login still has to be confirmed against the OAuth profile endpoint. */
   private claudeMetadataRetry?: { nextAttemptAt: number; attempts: number };
+  /** The project folders each connected client declared; their union is what the store reads. */
+  private readonly foldersByClient = new Map<number, string[]>();
+  /** Checks requested by hand that may be cancelled, by the token the client chose. */
+  private readonly cancels = new Map<string, AbortController>();
 
   constructor(private readonly options: AccountServiceOptions) {
     this.log = options.log;
@@ -88,7 +96,12 @@ export class AccountService {
     this.configFile = configFileOf(options.home);
     this.config = loadConfig(this.configFile);
     this.configStamp = this.stampOfConfigFile();
-    this.store = new ProfileStore(profilesFile(options.home), this.log, options.identityOf);
+    this.store = new ProfileStore(profilesFile(options.home), this.log, options.identityOf, {
+      projectFileName: () => this.config.projectProfiles.file,
+      projectProfilesEnabled: () => this.config.projectProfiles.enabled,
+      privateProfilesEnabled: () => this.config.privateProfiles.enabled,
+      notice: (message) => this.emit({ event: 'notice', level: 'info', message })
+    });
     this.store.verifyActivation = (provider, credential, expected) => this.verifyActivation(provider, credential, expected);
     const states = stateDir(options.home);
     this.claudeBudget = new ApiCallBudget(path.join(states, 'claude-api-budget.json'),
@@ -136,6 +149,74 @@ export class AccountService {
     this.events.emit('event', event);
   }
 
+  // --- project folders of the connected clients -----------------------------------------------------------------
+
+  /** Replaces the folders a client declared (at its hello, or later); the store lists the union of all clients'. */
+  declareFolders(clientId: number, folders: string[]): void {
+    this.foldersByClient.set(clientId, folders);
+    this.applyFolders();
+  }
+
+  forgetFolders(clientId: number): void {
+    if (this.foldersByClient.delete(clientId)) { this.applyFolders(); }
+  }
+
+  private applyFolders(): void {
+    const union = [...new Set([...this.foldersByClient.values()].flat())];
+    if (this.store.setProjectFolders(union)) {
+      this.log(`project folders: ${union.length ? union.join(', ') : 'none'}`);
+      for (const provider of PROVIDERS) { this.emit({ event: 'stateChanged', provider }); }
+    }
+  }
+
+  // --- checks requested by hand -------------------------------------------------------------------------------------
+
+  /** The lock wait a request asked for; a request with a token can be cancelled through `automation.cancel`. */
+  private waitFor(provider: AuthProvider, params: Record<string, unknown>): LockWait & { token?: string } {
+    const token = typeof params.token === 'string' && params.token ? params.token : undefined;
+    const controller = new AbortController();
+    if (token) { this.cancels.get(token)?.abort(); this.cancels.set(token, controller); }
+    const waitMs = typeof params.waitMs === 'number' && Number.isFinite(params.waitMs) ? Math.max(0, params.waitMs) : MANUAL_CHECK_WAIT_MS;
+    return { token, waitMs, signal: controller.signal, onWait: () => this.emit({ event: 'waiting', provider, token }) };
+  }
+
+  private releaseWait(wait: { token?: string; signal?: AbortSignal }): void {
+    if (wait.token && this.cancels.get(wait.token)?.signal === wait.signal) { this.cancels.delete(wait.token); }
+  }
+
+  /** One keep-alive sweep over `profiles` under one lock, spaced, stopping on cancel or on a sign-in's hold. */
+  private async keepAliveAll(provider: AuthProvider, profiles: ProfileMetadata[], wait: LockWait & { token?: string }): Promise<KeepAliveAllResult> {
+    const result: KeepAliveAllResult = { results: [], done: 0, total: profiles.length, cancelled: false };
+    const signal = wait.signal;
+    try {
+      await this.automation.withAccountLock(provider, async () => {
+        for (const [index, profile] of profiles.entries()) {
+          if (signal?.aborted) { result.cancelled = true; break; }
+          // Space the calls so a sweep of every account does not burst the provider's usage endpoint.
+          if (index > 0) { await sleep(KEEP_ALIVE_ALL_SPACING_MS, signal); }
+          if (signal?.aborted) { result.cancelled = true; break; }
+          this.emit({ event: 'keepAliveProgress', provider, token: wait.token, index, total: profiles.length, id: profile.id, name: profile.name });
+          try {
+            const outcome = await this.automation.sendKeepAliveNow(provider, profile.id);
+            result.results.push({ id: profile.id, name: profile.name, ...serializeKeepAlive(outcome) });
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            // A sign-in started meanwhile holds every check of this service; the rest of the sweep would only fail the same way.
+            if (/sign-in is in progress/i.test(message)) { result.blocked = message.replace(/\.$/, ''); break; }
+            result.results.push({ id: profile.id, name: profile.name, error: message });
+          }
+          result.done++;
+        }
+      }, wait);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (signal?.aborted) { result.cancelled = true; }
+      else if (/already running/i.test(message)) { result.blocked = `another ${TITLES[provider]} account check was still running after ${Math.round((wait.waitMs ?? 0) / 60_000)} minutes`; }
+      else { throw error; }
+    }
+    return result;
+  }
+
   /** One round of the periodic work: follow outside switches, sweep, retry the Claude identity sync. */
   async tick(): Promise<void> {
     if (this.disposed) { return; }
@@ -171,7 +252,8 @@ export class AccountService {
       nativeUnsaved: this.store.nativeIsUnsaved(provider),
       checkingActive: this.automation.isCheckingActive(provider),
       keepAlive: settings.enabled, autoRotate: settings.autoRotate,
-      strategySummary: strategySummary(this.config, provider)
+      strategySummary: strategySummary(this.config, provider),
+      scopes: this.store.scopes()
     };
   }
 
@@ -191,7 +273,8 @@ export class AccountService {
       problems,
       limit: this.automation.limitState(provider, profile.id),
       loginProblem: this.automation.loginProblem(provider, profile.id),
-      hasCredential: this.store.hasCredential(provider, profile.id)
+      hasCredential: this.store.hasCredential(provider, profile.id),
+      folder: profile.folder
     };
   }
 
@@ -370,13 +453,18 @@ export class AccountService {
 
   // --- the method dispatcher -----------------------------------------------------------------------------------
 
-  async handle(method: string, rawParams: unknown): Promise<unknown> {
+  async handle(method: string, rawParams: unknown, clientId?: number): Promise<unknown> {
     const params = objectParams(rawParams);
     const paused = <T>(operation: () => Promise<T>) => this.automation.withPaused(operation);
     switch (method) {
       case 'service.info': return this.info();
       case 'snapshot': return this.snapshot();
       case 'profiles.list': return this.providerView(providerParam(params));
+      case 'session.folders': {
+        if (clientId === undefined) { throw new Error('Only a connected client can declare project folders.'); }
+        this.declareFolders(clientId, Array.isArray(params.folders) ? params.folders.filter((folder): folder is string => typeof folder === 'string') : []);
+        return { ok: true };
+      }
       case 'profiles.activate': {
         const provider = providerParam(params);
         const profile = this.resolveParam(provider, params);
@@ -391,14 +479,16 @@ export class AccountService {
         const outcome = await paused(() => this.store.saveNative(provider, {
           name: typeof params.name === 'string' ? params.name : undefined,
           id: typeof params.id === 'string' ? params.id : undefined,
-          allowDuplicate: params.allowDuplicate === true
+          allowDuplicate: params.allowDuplicate === true,
+          folder: typeof params.folder === 'string' && params.folder ? params.folder : undefined
         }));
         if (outcome.status !== 'duplicate') { this.emit({ event: 'stateChanged', provider }); void this.automation.tick(); }
         return outcome as SaveNativeResult;
       }
       case 'profiles.importCredential': {
         const provider = providerParam(params);
-        const outcome = await paused(() => this.store.importCredential(provider, stringParam(params, 'name'), params.credential, params.allowDuplicate === true));
+        const outcome = await paused(() => this.store.importCredential(provider, stringParam(params, 'name'), params.credential, params.allowDuplicate === true,
+          typeof params.folder === 'string' && params.folder ? params.folder : undefined));
         if (outcome.status !== 'duplicate') { this.emit({ event: 'stateChanged', provider }); void this.automation.tick(); }
         return outcome as SaveNativeResult;
       }
@@ -448,15 +538,39 @@ export class AccountService {
       case 'automation.keepAliveNow': {
         const provider = providerParam(params);
         const profile = this.resolveParam(provider, params);
-        const result = await this.automation.sendKeepAliveNow(provider, profile.id, { callerReports: params.callerReports === true });
-        this.emit({ event: 'stateChanged', provider });
-        return serializeKeepAlive(result);
+        const wait = this.waitFor(provider, params);
+        try {
+          const result = await this.automation.sendKeepAliveNow(provider, profile.id, { callerReports: params.callerReports === true, wait });
+          this.emit({ event: 'stateChanged', provider });
+          return serializeKeepAlive(result);
+        } finally { this.releaseWait(wait); }
+      }
+      case 'automation.keepAliveAll': {
+        const provider = providerParam(params);
+        const saved = this.store.profiles(provider);
+        const profiles = Array.isArray(params.ids)
+          ? (params.ids as unknown[]).flatMap((id) => { const profile = saved.find((candidate) => candidate.id === id); return profile ? [profile] : []; })
+          : saved;
+        const wait = this.waitFor(provider, params);
+        try {
+          const result = await this.keepAliveAll(provider, profiles, wait);
+          this.emit({ event: 'stateChanged', provider });
+          return result;
+        } finally { this.releaseWait(wait); }
+      }
+      case 'automation.cancel': {
+        const token = stringParam(params, 'token');
+        this.cancels.get(token)?.abort();
+        return { ok: true };
       }
       case 'automation.rotateNow': {
         const provider = providerParam(params);
-        const outcome = await this.automation.rotateNow(provider);
-        this.emit({ event: 'stateChanged', provider });
-        return { ...outcome, activeProfileId: this.store.activeProfileId(provider), activeProfileName: this.store.activeProfileName(provider) };
+        const wait = this.waitFor(provider, params);
+        try {
+          const outcome = await this.automation.rotateNow(provider, wait);
+          this.emit({ event: 'stateChanged', provider });
+          return { ...outcome, activeProfileId: this.store.activeProfileId(provider), activeProfileName: this.store.activeProfileName(provider) };
+        } finally { this.releaseWait(wait); }
       }
       case 'automation.tick': await this.tick(); return { ok: true };
       case 'usage.read': {

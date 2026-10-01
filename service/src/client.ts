@@ -5,7 +5,7 @@ import type { AuthProvider } from './authFiles';
 import type { ServiceConfig } from './configStore';
 import type {
   ActivationResult, EventName, ExportResult, HelloResult, ImportPlanView, ImportSummary, KeepAliveResult, ProviderView, SaveNativeResult,
-  SerializedUsage, ServiceEvent, ServiceInfo, SignInPreparation, SignInResult, Snapshot, UsageReadResult
+  CheckWait, KeepAliveAllResult, SerializedUsage, ServiceEvent, ServiceInfo, SignInPreparation, SignInResult, Snapshot, UsageReadResult
 } from './protocol';
 
 /** Why a connection could not be made, so a caller can install, start or just report. */
@@ -21,6 +21,8 @@ export type ClientOptions = {
   client: string;
   version?: string;
   subscribe?: EventName[] | 'all';
+  /** Project folders open at the client, whose profile files the service lists while the client is connected. */
+  folders?: string[];
   timeoutMs?: number;
 };
 
@@ -41,7 +43,7 @@ export class ServiceClient extends EventEmitter {
     if (!token) { throw new ServiceUnavailableError('The account service has never run here: no service token was found.', 'not-installed'); }
     try {
       const { client, hello } = await RpcClient.connect({ socketPath: socketPath(options.home), token, client: options.client, version: options.version,
-        subscribe: options.subscribe, timeoutMs: options.timeoutMs });
+        subscribe: options.subscribe, folders: options.folders, timeoutMs: options.timeoutMs });
       return new ServiceClient(client, (hello as HelloResult).service);
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
@@ -66,12 +68,15 @@ export class ServiceClient extends EventEmitter {
   activate(provider: AuthProvider, target: string | { ref: string }): Promise<ActivationResult> {
     return this.call('profiles.activate', { provider, ...(typeof target === 'string' ? { id: target } : target) });
   }
-  saveNative(provider: AuthProvider, options: { name?: string; id?: string; allowDuplicate?: boolean }): Promise<SaveNativeResult> {
+  /** `folder`: keep the new profile in that declared project folder's file instead of privately. */
+  saveNative(provider: AuthProvider, options: { name?: string; id?: string; allowDuplicate?: boolean; folder?: string }): Promise<SaveNativeResult> {
     return this.call('profiles.saveNative', { provider, ...options });
   }
-  importCredential(provider: AuthProvider, name: string, credential: unknown, allowDuplicate = false): Promise<SaveNativeResult> {
-    return this.call('profiles.importCredential', { provider, name, credential, allowDuplicate });
+  importCredential(provider: AuthProvider, name: string, credential: unknown, allowDuplicate = false, folder?: string): Promise<SaveNativeResult> {
+    return this.call('profiles.importCredential', { provider, name, credential, allowDuplicate, folder });
   }
+  /** Replaces the project folders this connection declared; their profile files are listed while it stays connected. */
+  setFolders(folders: string[]): Promise<unknown> { return this.call('session.folders', { folders }); }
   rename(provider: AuthProvider, target: string | { ref: string }, name: string): Promise<{ id: string; name: string }> {
     return this.call('profiles.rename', { provider, ...(typeof target === 'string' ? { id: target } : target), name });
   }
@@ -94,11 +99,18 @@ export class ServiceClient extends EventEmitter {
     return this.call('profiles.signIn.finish', { provider, ...(typeof target === 'string' ? { id: target } : target), allowOtherAccount });
   }
   cancelSignIn(provider: AuthProvider): Promise<unknown> { return this.call('profiles.signIn.cancel', { provider }); }
-  keepAliveNow(provider: AuthProvider, target: string | { ref: string }, callerReports = false): Promise<KeepAliveResult> {
-    return this.call('automation.keepAliveNow', { provider, ...(typeof target === 'string' ? { id: target } : target), callerReports });
+  keepAliveNow(provider: AuthProvider, target: string | { ref: string }, options: boolean | ({ callerReports?: boolean } & CheckWait) = false): Promise<KeepAliveResult> {
+    const settings = typeof options === 'boolean' ? { callerReports: options } : options;
+    return this.call('automation.keepAliveNow', { provider, ...(typeof target === 'string' ? { id: target } : target), ...settings });
   }
-  rotateNow(provider: AuthProvider): Promise<{ switched: boolean; reason?: string; activeProfileId?: string; activeProfileName?: string }> {
-    return this.call('automation.rotateNow', { provider });
+  /** One sweep over `ids` (every saved profile when omitted) under one lock; progress arrives as `keepAliveProgress` events. */
+  keepAliveAll(provider: AuthProvider, ids?: string[], wait: CheckWait = {}): Promise<KeepAliveAllResult> {
+    return this.call('automation.keepAliveAll', { provider, ids, ...wait });
+  }
+  /** Stops the wait, or the sweep, that was requested with `token`. */
+  cancel(token: string): Promise<unknown> { return this.call('automation.cancel', { token }, 5_000); }
+  rotateNow(provider: AuthProvider, wait: CheckWait = {}): Promise<{ switched: boolean; reason?: string; activeProfileId?: string; activeProfileName?: string }> {
+    return this.call('automation.rotateNow', { provider, ...wait });
   }
   tick(): Promise<unknown> { return this.call('automation.tick'); }
   /** Reads a profile's usage from the vendor now, without a keep-alive prompt. */

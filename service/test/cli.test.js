@@ -12,6 +12,8 @@ test('arguments: positionals, boolean and value flags, short aliases and --no- f
   assert.deepEqual(parseArgs(['log', '-n', '20', '-f', '--home=/tmp/x']).flags, { lines: '20', follow: true, home: '/tmp/x' });
   assert.deepEqual(parseArgs(['service', 'install', '--no-autostart']).flags, { autostart: false });
   assert.deepEqual(parseArgs(['save', 'codex', '--update', 'Main', '--', '--literal']).positional, ['save', 'codex', '--literal']);
+  assert.deepEqual(parseArgs(['save', 'claude', 'X', '--project']).flags, { project: true });
+  assert.deepEqual(parseArgs(['list', '--project=/work/app']).flags, { project: '/work/app' });
 });
 
 const snapshot = () => ({
@@ -115,6 +117,17 @@ test('the command line drives a running service: save, list, use, config, rotate
   assert.equal(snapshotOut.providers.claude.profiles.length, 2);
   result = await run('rename', 'claude', 'Backup', 'Spare');
   assert.match(result.stdout, /Renamed to “Spare”/);
+  // A project profile: saved into the named folder's file, listed with the project while that folder is declared.
+  const project = path.join(root, 'project');
+  fs.mkdirSync(project);
+  result = await run('save', 'claude', 'Client', `--project=${project}`, '--allow-duplicate');
+  assert.equal(result.code, 0, result.stderr);
+  assert.match(result.stdout, /saved as “Client” in project project/);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(project, '.ai-usage.profiles.json'), 'utf8')).profiles[0].name, 'Client');
+  result = await run('list', 'claude', `--project=${project}`);
+  assert.match(result.stdout, /Client +●  – · project project/);
+  result = await run('list', 'claude');
+  assert.ok(!/Client/.test(result.stdout), 'without the folder declared, its profiles are not listed');
   result = await run('nonsense');
   assert.equal(result.code, 2);
   result = await run('service', 'status');
