@@ -10,7 +10,8 @@ import {
   nativeCredentialPath,
   parseCredentialJson,
   readNativeCredential,
-  writeNativeCredential
+  writeNativeCredential,
+  writeTextAtomically
 } from './authFiles';
 import { claudeAccountFile, CredentialIdentity, resolveCredentialIdentity } from './accountIdentity';
 import { openAiUsageSettings } from './settingsLink';
@@ -22,6 +23,8 @@ const AUTOMATION_STATE_KEY = 'aiUsage.accountAutomation.v1';
 const SECRET_PREFIX = 'aiUsage.authProfile.v1';
 const MAX_PROFILES = 20;
 const PROVIDERS: AuthProvider[] = ['claude', 'codex'];
+/** Default path of a project's profile file, inside the workspace folder; `aiUsage.projectProfiles.file` changes it. */
+export const DEFAULT_PROJECT_PROFILES_FILE = '.ai-usage.profiles.json';
 
 export type ProfileMetadata = {
   id: string;
@@ -32,12 +35,20 @@ export type ProfileMetadata = {
   email?: string;
   /** Stable vendor account id; Claude Team members can share an organization but never this id. */
   accountId?: string;
+  /** The workspace folder a project profile lives in; a private profile has none. Never stored in global state. */
+  folder?: string;
 };
 
-/** Menu description: the account email, a duplicate marker, then the active marker. */
+/** Menu description: the account email, the project for a project profile, a duplicate marker, then the active marker. */
 function profileDescription(profile: ProfileMetadata, active: boolean, siblings: ProfileMetadata[] = []): string | undefined {
   const twin = profile.email ? siblings.find((other) => other.id !== profile.id && other.email === profile.email) : undefined;
-  return [profile.email, twin ? `duplicate of “${twin.name}”` : undefined, active ? 'Active' : undefined].filter(Boolean).join(' · ') || undefined;
+  return [profile.email, profile.folder ? `project ${path.basename(profile.folder)}` : undefined,
+    twin ? `duplicate of “${twin.name}”` : undefined, active ? 'Active' : undefined].filter(Boolean).join(' · ') || undefined;
+}
+
+/** A project entry as the file and the merged list both see it, so an unchanged file is not written again. */
+function projectEntryKey(entry: ExportedProfile): string {
+  return JSON.stringify([entry.provider, entry.id, entry.name, entry.createdAt, entry.updatedAt, entry.email, entry.accountId, entry.credential]);
 }
 
 /**
@@ -189,6 +200,124 @@ export class AuthProfileManager {
 
   /** Set by extension.ts: the login error of a profile's last check, so the list marks it and re-checks it on click. */
   loginProblem: (provider: AuthProvider, id: string) => string | undefined = () => undefined;
+
+  /** Each project profile file as last read, by path, so an unchanged file is neither parsed nor written again. */
+  private readonly projectFiles = new Map<string, { mtimeMs: number; entries: ExportedProfile[]; error?: string }>();
+  /** The folder of every listed project profile and its login, by `provider:id`; rebuilt whenever the files are read. */
+  private readonly projectFolderOf = new Map<string, string>();
+  private readonly projectCredentials = new Map<string, StoredCredential>();
+
+  private key(provider: AuthProvider, id: string): string { return `${provider}:${id}`; }
+
+  /** The configured project profile path, relative to each workspace folder; an absolute path is used as it is. */
+  private projectFileName(): string {
+    const configured = vscode.workspace.getConfiguration().get<string>('aiUsage.projectProfiles.file', DEFAULT_PROJECT_PROFILES_FILE);
+    return (typeof configured === 'string' && configured.trim()) || DEFAULT_PROJECT_PROFILES_FILE;
+  }
+
+  private projectFile(folder: string): string { return path.resolve(folder, this.projectFileName()); }
+
+  /** The open workspace folders that may hold project profiles: local folders, while project profiles are enabled. */
+  private projectFolders(): string[] {
+    if (!vscode.workspace.getConfiguration().get<boolean>('aiUsage.projectProfiles.enabled', true)) { return []; }
+    return (vscode.workspace.workspaceFolders ?? []).filter((folder) => folder.uri.scheme === 'file').map((folder) => folder.uri.fsPath);
+  }
+
+  /**
+   * Reads every open folder's profile file, once per change of the file, and rebuilds the index of project profiles
+   * from them. The profiles of every folder open in the window are merged into one list: the extension is one per
+   * window, so a project can be used with another open project's profiles; that is a known limitation.
+   */
+  private loadProjectProfiles(): Record<AuthProvider, ProfileMetadata[]> {
+    const loaded: Record<AuthProvider, ProfileMetadata[]> = { claude: [], codex: [] };
+    this.projectFolderOf.clear();
+    this.projectCredentials.clear();
+    for (const folder of this.projectFolders()) {
+      const file = this.projectFile(folder);
+      let mtimeMs: number;
+      try { mtimeMs = fs.statSync(file).mtimeMs; } catch { this.projectFiles.delete(file); continue; }
+      let cached = this.projectFiles.get(file);
+      if (!cached || cached.mtimeMs !== mtimeMs) {
+        try {
+          cached = { mtimeMs, entries: parseProfileExport(fs.readFileSync(file, 'utf8')) };
+        } catch (error) {
+          cached = { mtimeMs, entries: [], error: errorMessage(error) };
+          this.log(`project profiles in ${file} were not loaded: ${cached.error}`);
+        }
+        this.projectFiles.set(file, cached);
+      }
+      for (const entry of cached.entries) {
+        const key = this.key(entry.provider, entry.id);
+        // A profile listed in two folders is taken from the first one.
+        if (this.projectFolderOf.has(key)) { continue; }
+        this.projectFolderOf.set(key, folder);
+        this.projectCredentials.set(key, entry.credential);
+        loaded[entry.provider].push({ id: entry.id, name: entry.name, createdAt: entry.createdAt, updatedAt: entry.updatedAt,
+          ...(entry.email ? { email: entry.email } : {}), ...(entry.accountId ? { accountId: entry.accountId } : {}), folder });
+      }
+    }
+    return loaded;
+  }
+
+  /** Writes a folder's project profiles, unless the file already holds exactly them or could not be read. */
+  private writeProjectFile(folder: string, entries: ExportedProfile[], force = false): void {
+    const file = this.projectFile(folder);
+    const cached = this.projectFiles.get(file);
+    // A file that could not be read is never overwritten: the user has to fix or remove it.
+    if (cached?.error) { return; }
+    if (!force && cached && cached.entries.length === entries.length &&
+      cached.entries.every((entry, index) => projectEntryKey(entry) === projectEntryKey(entries[index]))) { return; }
+    writeTextAtomically(file, serializeProfileExport(entries));
+    this.projectFiles.set(file, { mtimeMs: fs.statSync(file).mtimeMs, entries });
+    this.log(`wrote ${entries.length} project profiles to ${file}`);
+    if (!cached) { this.ignoreInGit(folder); }
+  }
+
+  /** Project profiles hold login tokens in plain text; a Git repository must not commit them. */
+  private ignoreInGit(folder: string): void {
+    if (!fs.existsSync(path.join(folder, '.git'))) { return; }
+    const relative = path.relative(folder, this.projectFile(folder)).split(path.sep).join('/');
+    // A file outside the folder is not the repository's to ignore.
+    if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) { return; }
+    const ignoreFile = path.join(folder, '.gitignore');
+    let text = '';
+    try { text = fs.readFileSync(ignoreFile, 'utf8'); } catch { /* No .gitignore yet. */ }
+    // The file itself, or any directory above it, may be ignored already.
+    const covered = new Set<string>();
+    const parts = relative.split('/');
+    for (let depth = 1; depth <= parts.length; depth++) {
+      const candidate = parts.slice(0, depth).join('/');
+      for (const form of depth < parts.length ? [candidate, `${candidate}/`] : [candidate]) { covered.add(form); covered.add(`/${form}`); }
+    }
+    if (text.split(/\r?\n/).some((line) => covered.has(line.trim()))) { return; }
+    fs.appendFileSync(ignoreFile, `${text && !text.endsWith('\n') ? '\n' : ''}# AI Usage project profiles hold login tokens\n${relative}\n`);
+    this.log(`added ${relative} to ${ignoreFile}`);
+    void vscode.window.showInformationMessage(
+      `AI Usage: added ${relative} to ${path.basename(folder)}/.gitignore, because project profiles hold login tokens in plain text.`);
+  }
+
+  /**
+   * Where a new profile is kept: private, in this VS Code client's SecretStorage, or in an open project's folder.
+   * Asked only when both kinds are enabled and a local folder is open; otherwise the only possible kind is used.
+   * Undefined when cancelled.
+   */
+  async pickScope(): Promise<{ folder?: string } | undefined> {
+    const privateEnabled = vscode.workspace.getConfiguration().get<boolean>('aiUsage.privateProfiles.enabled', true);
+    const folders = this.projectFolders();
+    if (!folders.length) { return {}; }
+    if (!privateEnabled && folders.length === 1) { return { folder: folders[0] }; }
+    const items: Array<vscode.QuickPickItem & { folder?: string }> = [];
+    if (privateEnabled) {
+      items.push({ label: '$(account) Private profile', detail: 'Kept in this VS Code client\'s SecretStorage and listed in every window, as before.' });
+    }
+    items.push(...folders.map((folder) => ({
+      label: `$(root-folder) Project profile${folders.length > 1 ? ` in ${path.basename(folder)}` : ''}`,
+      detail: `Kept, login included, in ${this.projectFile(folder)} and listed whenever that folder is open.`,
+      folder
+    })));
+    const picked = await vscode.window.showQuickPick(items, { title: 'AI Usage · Where to keep the profile', placeHolder: 'Private, or in a project folder' });
+    return picked ? { folder: picked.folder } : undefined;
+  }
 
   profiles(provider: AuthProvider): ProfileMetadata[] {
     return this.state()[provider].profiles;
@@ -460,26 +589,48 @@ export class AuthProfileManager {
     }
   }
 
+  /** The private profiles from global state, then the project profiles of every open folder. */
   private state(): ProfileState {
     const stored = this.context.globalState.get<Partial<ProfileState>>(STATE_KEY);
     const fallback = emptyState();
-    for (const provider of ['claude', 'codex'] as const) {
+    const project = this.loadProjectProfiles();
+    for (const provider of PROVIDERS) {
       const value = stored?.[provider];
-      if (!value || !Array.isArray(value.profiles)) {
-        continue;
-      }
+      const own = value && Array.isArray(value.profiles)
+        ? value.profiles.filter((profile) => profile && typeof profile.id === 'string' && typeof profile.name === 'string').slice(0, MAX_PROFILES)
+        : [];
+      const ids = new Set(own.map((profile) => profile.id));
       fallback[provider] = {
-        profiles: value.profiles.filter((profile) =>
-          profile && typeof profile.id === 'string' && typeof profile.name === 'string'
-        ).slice(0, MAX_PROFILES),
-        activeProfileId: typeof value.activeProfileId === 'string' ? value.activeProfileId : undefined
+        profiles: [...own, ...project[provider].filter((profile) => !ids.has(profile.id))],
+        activeProfileId: value && typeof value.activeProfileId === 'string' ? value.activeProfileId : undefined
       };
     }
     return fallback;
   }
 
+  /** Private profiles go to global state; project profiles go back to their folders' files, logins included. */
   private async updateState(state: ProfileState): Promise<void> {
-    await this.context.globalState.update(STATE_KEY, state);
+    const stored = emptyState();
+    const perFolder = new Map<string, ExportedProfile[]>();
+    for (const provider of PROVIDERS) {
+      stored[provider] = { profiles: state[provider].profiles.filter((profile) => !profile.folder), activeProfileId: state[provider].activeProfileId };
+      for (const profile of state[provider].profiles) {
+        if (!profile.folder) { continue; }
+        const credential = this.projectCredentials.get(this.key(provider, profile.id))
+          ?? this.projectFiles.get(this.projectFile(profile.folder))?.entries.find((entry) => entry.provider === provider && entry.id === profile.id)?.credential;
+        if (!credential) { continue; }
+        const entries = perFolder.get(profile.folder) ?? [];
+        entries.push({ provider, id: profile.id, name: profile.name, createdAt: profile.createdAt, updatedAt: profile.updatedAt,
+          ...(profile.email ? { email: profile.email } : {}), ...(profile.accountId ? { accountId: profile.accountId } : {}), credential });
+        perFolder.set(profile.folder, entries);
+      }
+    }
+    await this.context.globalState.update(STATE_KEY, stored);
+    // A folder whose file exists but has no profile left gets an empty list, so a deleted profile is gone from it.
+    for (const folder of new Set([...perFolder.keys(), ...this.projectFolders()])) {
+      const entries = perFolder.get(folder) ?? [];
+      if (entries.length || this.projectFiles.has(this.projectFile(folder))) { this.writeProjectFile(folder, entries); }
+    }
     // A saved, renamed or activated profile can change who owns the native login; check again next time.
     this.nativeChecked = {};
   }
@@ -489,6 +640,7 @@ export class AuthProfileManager {
   }
 
   private async readSecret(provider: AuthProvider, id: string): Promise<StoredCredential | undefined> {
+    if (this.projectFolderOf.has(this.key(provider, id))) { return this.projectCredentials.get(this.key(provider, id)); }
     const value = await this.context.secrets.get(this.secretKey(provider, id));
     if (!value) {
       return undefined;
@@ -501,6 +653,15 @@ export class AuthProfileManager {
   }
 
   private async storeSecret(provider: AuthProvider, id: string, credential: StoredCredential): Promise<void> {
+    const folder = this.projectFolderOf.get(this.key(provider, id));
+    if (folder) {
+      // A project profile's login lives in its folder's file; the file is rewritten with the new one right away.
+      this.projectCredentials.set(this.key(provider, id), credential);
+      const entries = (this.projectFiles.get(this.projectFile(folder))?.entries ?? [])
+        .map((entry) => entry.provider === provider && entry.id === id ? { ...entry, credential } : entry);
+      this.writeProjectFile(folder, entries, true);
+      return;
+    }
     await this.context.secrets.store(this.secretKey(provider, id), JSON.stringify(credential));
   }
 
@@ -614,7 +775,8 @@ export class AuthProfileManager {
     return value?.trim() || undefined;
   }
 
-  private async saveProfile(provider: AuthProvider, name: string, credential: StoredCredential, active: boolean): Promise<void> {
+  /** `folder`: the project to keep the profile in; without it the profile is private. */
+  private async saveProfile(provider: AuthProvider, name: string, credential: StoredCredential, active: boolean, folder?: string): Promise<void> {
     const state = this.state();
     const providerState = state[provider];
     if (providerState.profiles.length >= MAX_PROFILES) {
@@ -622,15 +784,21 @@ export class AuthProfileManager {
       return;
     }
     const now = new Date().toISOString();
-    const profile: ProfileMetadata = { id: randomUUID(), name, createdAt: now, updatedAt: now };
-    await this.storeSecret(provider, profile.id, credential);
+    const profile: ProfileMetadata = { id: randomUUID(), name, createdAt: now, updatedAt: now, ...(folder ? { folder } : {}) };
+    if (folder) {
+      // The login is written together with the profile when the state is saved below.
+      this.projectFolderOf.set(this.key(provider, profile.id), folder);
+      this.projectCredentials.set(this.key(provider, profile.id), credential);
+    } else {
+      await this.storeSecret(provider, profile.id, credential);
+    }
     providerState.profiles.push(profile);
     if (active) {
       providerState.activeProfileId = profile.id;
     }
     await this.updateState(state);
     await this.recordIdentity(provider, profile.id, credential);
-    this.log(`${provider}: saved authentication profile "${name}"${active ? ' (active)' : ''}`);
+    this.log(`${provider}: saved authentication profile "${name}"${active ? ' (active)' : ''}${folder ? ` in project ${folder}` : ''}`);
   }
 
   private async saveCurrent(provider: AuthProvider): Promise<boolean> {
@@ -687,8 +855,12 @@ export class AuthProfileManager {
     if (!name) {
       return false;
     }
-    await this.saveProfile(provider, name, credential, true);
-    void vscode.window.showInformationMessage(`${TITLES[provider]} login saved as “${name}”.`);
+    const scope = await this.pickScope();
+    if (!scope) {
+      return false;
+    }
+    await this.saveProfile(provider, name, credential, true, scope.folder);
+    void vscode.window.showInformationMessage(`${TITLES[provider]} login saved as “${name}”${scope.folder ? ` in project ${path.basename(scope.folder)}` : ''}.`);
     return true;
   }
 
@@ -736,8 +908,12 @@ export class AuthProfileManager {
     if (!name) {
       return;
     }
-    await this.saveProfile(provider, name, credential, false);
-    void vscode.window.showInformationMessage(`${TITLES[provider]} credential imported as “${name}”. Choose it from the profile menu to activate it.`);
+    const scope = await this.pickScope();
+    if (!scope) {
+      return;
+    }
+    await this.saveProfile(provider, name, credential, false, scope.folder);
+    void vscode.window.showInformationMessage(`${TITLES[provider]} credential imported as “${name}”${scope.folder ? ` in project ${path.basename(scope.folder)}` : ''}. Choose it from the profile menu to activate it.`);
   }
 
   /** The export and the import behind one Accounts menu item; Back and cancel return to the accounts list. */
@@ -1096,7 +1272,8 @@ export class AuthProfileManager {
     if (choice !== 'Delete') {
       return;
     }
-    await this.context.secrets.delete(this.secretKey(provider, profile.id));
+    // A project profile's login goes with its entry when the file is written without it below.
+    if (!profile.folder) { await this.context.secrets.delete(this.secretKey(provider, profile.id)); }
     const state = this.state();
     state[provider].profiles = state[provider].profiles.filter((candidate) => candidate.id !== profile.id);
     if (state[provider].activeProfileId === profile.id) {

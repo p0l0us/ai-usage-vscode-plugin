@@ -13,6 +13,7 @@ const quickPickResponses = [];
 const saveDialogResponses = [];
 const openDialogResponses = [];
 const openedDocuments = [];
+const workspaceFolders = [];
 const uri = (fsPath) => ({ scheme: 'file', fsPath, toString: () => `file://${fsPath}` });
 const settings = new Map();
 // This suite exercises SecretStorage/native-file behavior without a running VS Code host.
@@ -39,6 +40,7 @@ Module._load = function(id, ...args) {
     ConfigurationTarget: { Global: 1, Workspace: 2, WorkspaceFolder: 3 },
     commands: { executeCommand: async () => undefined },
     workspace: {
+      get workspaceFolders() { return workspaceFolders; },
       fs: {
         readFile: async (target) => fs.readFileSync(target.fsPath),
         writeFile: async (target, bytes) => fs.writeFileSync(target.fsPath, bytes)
@@ -65,6 +67,7 @@ function fixture(t, verify) {
   saveDialogResponses.length = 0;
   openDialogResponses.length = 0;
   openedDocuments.length = 0;
+  workspaceFolders.length = 0;
   settings.clear();
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-profile-'));
   const previous = process.env.CLAUDE_CONFIG_DIR;
@@ -526,4 +529,92 @@ test('export and import share one Accounts menu item that opens a picker of the 
   await f.manager.show('claude');
   assert.deepEqual(JSON.parse(fs.readFileSync(target, 'utf8')).profiles.map(p => [p.provider, p.id]), [['claude', 'a'], ['codex', 'x']]);
   assert.equal(quickPickResponses.length, 0);
+});
+
+function projectFolder(t, options = {}) {
+  const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-project-'));
+  t.after(() => fs.rmSync(folder, { recursive: true, force: true }));
+  if (options.git) fs.mkdirSync(path.join(folder, '.git'));
+  workspaceFolders.push({ uri: { scheme: 'file', fsPath: folder }, name: path.basename(folder) });
+  return folder;
+}
+
+test('project profiles in an open folder are listed with the private ones, keep their login in the file, and are written back', async t => {
+  const f = fixture(t);
+  const project = projectFolder(t);
+  // The file's path is a setting, relative to the folder.
+  settings.set('aiUsage.projectProfiles.file', 'config/ai-usage.json');
+  const file = path.join(project, 'config', 'ai-usage.json');
+  fs.mkdirSync(path.dirname(file));
+  const login = { claudeAiOauth: { accessToken: 'project', refreshToken: 'r-project' } };
+  fs.writeFileSync(file, JSON.stringify({ aiUsageProfiles: 1, profiles: [{ provider: 'claude', id: 'p1', name: 'Client', email: 'client@example.com', accountId: 'acc-c',
+    createdAt: '2026-09-01T00:00:00.000Z', updatedAt: '2026-09-01T00:00:00.000Z', credential: login }] }));
+  assert.deepEqual(f.manager.profiles('claude').map(p => [p.id, p.name, p.folder]), [['a', 'A', undefined], ['p1', 'Client', project]]);
+  assert.match(f.manager.items('claude').find(item => item.profile?.id === 'p1').description, /^client@example.com · project ai-usage-project-/);
+  assert.deepEqual(await f.manager.credential('claude', 'p1'), login);
+  assert.equal(f.secrets.has('aiUsage.authProfile.v1.claude.p1'), false);
+  // A refreshed token goes back to the project file; the private list in global state is untouched.
+  const refreshed = { claudeAiOauth: { accessToken: 'project2', refreshToken: 'r-project2' } };
+  await f.manager.refreshedCredential('claude', 'p1', login, refreshed);
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')).profiles[0].credential, refreshed);
+  assert.deepEqual(await f.manager.credential('claude', 'p1'), refreshed);
+  assert.deepEqual(f.globalValues.get('aiUsage.authProfiles.v1').claude.profiles.map(p => p.id), ['a']);
+  // With project profiles turned off the folder is left alone and its profiles are not listed.
+  settings.set('aiUsage.projectProfiles.enabled', false);
+  assert.deepEqual(f.manager.profiles('claude').map(p => p.id), ['a']);
+  settings.set('aiUsage.projectProfiles.enabled', true);
+  // Deleting a project profile removes it from the file.
+  quickPickResponses.push(items => items.find(item => item.profile?.id === 'p1'));
+  warningResponses.push('Delete');
+  await f.manager.delete('claude');
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')).profiles, []);
+  assert.deepEqual(f.manager.profiles('claude').map(p => p.id), ['a']);
+});
+
+test('saving the current login asks where to keep it and writes a project profile to the folder, ignored by Git', async t => {
+  const f = fixture(t);
+  const project = projectFolder(t, { git: true });
+  fs.writeFileSync(path.join(project, '.gitignore'), 'node_modules/');
+  // A native login that is not the saved profile's, so it is not a duplicate.
+  fs.writeFileSync(f.file, JSON.stringify({ claudeAiOauth: { accessToken: 'external', refreshToken: 'r-ext' } }));
+  quickPickResponses.push(items => items.find(item => item.create));
+  inputBoxResponses.push('Client');
+  quickPickResponses.push(items => {
+    assert.deepEqual(items.map(item => item.label), ['$(account) Private profile', '$(root-folder) Project profile']);
+    return items[1];
+  });
+  assert.equal(await f.manager.saveCurrent('claude'), true);
+  assert.match(informationMessages.at(-1), /login saved as “Client” in project ai-usage-project-/);
+  const file = path.join(project, '.ai-usage.profiles.json');
+  const written = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.deepEqual(written.profiles.map(p => [p.provider, p.name, p.email, p.accountId, p.credential.claudeAiOauth.accessToken]),
+    [['claude', 'Client', 'other@example.com', 'account-other', 'external']]);
+  if (process.platform !== 'win32') assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  assert.equal(fs.readFileSync(path.join(project, '.gitignore'), 'utf8'), 'node_modules/\n# AI Usage project profiles hold login tokens\n.ai-usage.profiles.json\n');
+  assert.ok(informationMessages.some(message => /added \.ai-usage\.profiles\.json to .*\.gitignore/.test(message)));
+  const state = f.globalValues.get('aiUsage.authProfiles.v1');
+  assert.deepEqual(state.claude.profiles.map(p => p.id), ['a']);
+  assert.equal(state.claude.activeProfileId, written.profiles[0].id);
+  assert.equal([...f.secrets.keys()].some(key => key.includes(written.profiles[0].id)), false);
+  assert.deepEqual(f.manager.profiles('claude').map(p => [p.name, p.folder]), [['A', undefined], ['Client', project]]);
+  // With one kind possible there is nothing to choose.
+  settings.set('aiUsage.projectProfiles.enabled', false);
+  assert.deepEqual(await f.manager.pickScope(), {});
+  settings.set('aiUsage.projectProfiles.enabled', true);
+  settings.set('aiUsage.privateProfiles.enabled', false);
+  assert.deepEqual(await f.manager.pickScope(), { folder: project });
+});
+
+test('a project file in a subfolder is not added to .gitignore again when its folder is already ignored', async t => {
+  const f = fixture(t);
+  const project = projectFolder(t, { git: true });
+  settings.set('aiUsage.projectProfiles.file', 'secrets/ai-usage.json');
+  fs.writeFileSync(path.join(project, '.gitignore'), 'secrets/\n');
+  fs.writeFileSync(f.file, JSON.stringify({ claudeAiOauth: { accessToken: 'external', refreshToken: 'r-ext' } }));
+  quickPickResponses.push(items => items.find(item => item.create));
+  inputBoxResponses.push('Client');
+  quickPickResponses.push(items => items[1]);
+  assert.equal(await f.manager.saveCurrent('claude'), true);
+  assert.ok(fs.existsSync(path.join(project, 'secrets', 'ai-usage.json')));
+  assert.equal(fs.readFileSync(path.join(project, '.gitignore'), 'utf8'), 'secrets/\n');
 });

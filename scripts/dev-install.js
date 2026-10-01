@@ -40,8 +40,9 @@ function findCli() {
     const which = spawnSync(process.platform === 'win32' ? 'where' : 'which', [name], { encoding: 'utf8' });
     if (which.status === 0) {
       const bin = which.stdout.trim().split(/\r?\n/)[0];
-      // The standalone `code` CLI (no desktop install) cannot install extensions; skip it.
-      const probe = spawnSync(bin, ['--list-extensions'], { encoding: 'utf8' });
+      // The standalone `code` CLI (no desktop install) cannot install extensions; skip it. A remote server's
+      // `code` waits for its window's IPC socket forever when run from a shell without one, so the probe is bounded.
+      const probe = spawnSync(bin, ['--list-extensions'], { encoding: 'utf8', timeout: 15_000 });
       if (probe.status === 0) {
         candidates.push(bin);
       }

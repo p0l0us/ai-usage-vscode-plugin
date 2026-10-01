@@ -486,3 +486,59 @@ test('a keep-alive sweep rotates as soon as the active account reaches its limit
   // b was read and verified for the switch before c's keep-alive; a sweep that only rotated at its end would do c first.
   assert.ok(order.indexOf('c:ka') > order.lastIndexOf('b:ka'), order.join(' '));
 });
+
+test('a hold stops the service\'s sweeps and rotation and refuses hand-run keep-alives until it is resumed or runs out', async t => {
+  const f = fixture(t, { values: { a: [99.5, 10], b: [10, 10] }, settings: { codex: { enabled: true, autoRotate: true } } });
+  f.service.hold('codex', 'a Codex sign-in is in progress', 60_000);
+  f.observe('codex', [99.5, 10]);
+  await f.service.tick();
+  assert.deepEqual(f.calls, []);
+  assert.deepEqual(f.switches, []);
+  await assert.rejects(f.service.sendKeepAliveNow('codex', 'b'), /A Codex sign-in is in progress; keep-alives wait until it finishes\./);
+  // The other service is not held.
+  f.settings.claude.enabled = true;
+  await f.service.tick();
+  assert.ok(f.calls.length > 0 && f.calls.every(call => call[0] === 'claude'), JSON.stringify(f.calls));
+  f.service.resume('codex');
+  await f.service.tick();
+  assert.deepEqual(f.switches, [['codex', 'b', true]]);
+  // A hold whose window never lifts it runs out by itself.
+  f.service.hold('codex', 'a Codex sign-in is in progress', 20);
+  assert.equal(f.service.heldFor('codex'), 'a Codex sign-in is in progress');
+  await new Promise(resolve => setTimeout(resolve, 60));
+  assert.equal(f.service.heldFor('codex'), undefined);
+});
+
+test('an account whose last check failed is not switched to, and costs no call, until a later check succeeds', async t => {
+  const failure = 'Keep-alive CLI exited with code 1: workspace routing discovery unavailable';
+  const f = fixture(t, { values: { a: [99.5, 10], b: [10, 10], c: [10, 10] }, keepAliveErrors: { b: failure }, settings: { codex: { autoRotate: true } } });
+  // b's failed keep-alive marks it.
+  await f.service.sendKeepAliveNow('codex', 'b');
+  f.calls.length = 0;
+  f.observe('codex', [99.5, 10]);
+  await f.service.tick();
+  assert.deepEqual(f.switches, [['codex', 'c', true]]);
+  assert.ok(!f.calls.some(call => call[1] === 'b'), JSON.stringify(f.calls));
+  assert.ok(f.messages.some(message => /not rotating to "b": its last check failed/.test(message)), f.messages.join('\n'));
+  // Once a keep-alive of b succeeds, it is a candidate again.
+  delete f.options.keepAliveErrors.b;
+  await f.service.sendKeepAliveNow('codex', 'b');
+  f.values.c = [99.5, 10];
+  f.observe('codex', [99.5, 10], 'c');
+  f.advance(600001);
+  await f.service.tick();
+  assert.deepEqual(f.switches.at(-1), ['codex', 'b', true]);
+});
+
+test('accounts left out for a failed last check are named when no candidate remains', async t => {
+  const f = fixture(t, { ids: ['a', 'b'], values: { a: [99.5, 10], b: [10, 10] },
+    keepAliveErrors: { b: 'Keep-alive CLI exited with code 1: workspace routing discovery unavailable' }, settings: { codex: { autoRotate: true } } });
+  const notices = [];
+  f.service.onNoCandidate = (provider, detail) => notices.push(detail);
+  await f.service.sendKeepAliveNow('codex', 'b');
+  f.observe('codex', [99.5, 10]);
+  await f.service.tick();
+  assert.deepEqual(f.switches, []);
+  assert.equal(notices.length, 1);
+  assert.match(notices[0], /left out for a failed last check: "b" \(.*workspace routing discovery unavailable/);
+});

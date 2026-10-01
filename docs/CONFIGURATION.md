@@ -125,6 +125,30 @@ JSON file, rename/delete profiles, or activate one of up to 20 profiles per serv
 profile id are non-secret extension metadata; credential bodies are stored individually in VS Code
 `SecretStorage`.
 
+### Private and project profiles
+
+A profile is either **private** or a **project** profile. Private profiles are the ones described above: their names
+in the extension's global state and their logins in VS Code `SecretStorage`, with the VS Code client. Project
+profiles live in the workspace folder, in `.ai-usage.profiles.json` by default (`aiUsage.projectProfiles.file` sets
+another path, relative to the folder), name and login together (mode `0600` on Linux and macOS; the file has the
+format of a profile export), and are listed whenever that folder is open, on any computer that opens it. Both kinds appear in the same Accounts menu; a project profile shows `project <folder>` beside its
+email. Refreshed tokens, renames and deletions are written back to the file, and a file edited by hand is read again
+when it changes.
+
+**Save current login…** and **Import credential JSON…** ask which kind to create when both kinds are enabled and a
+local folder is open; with only one kind possible, that kind is used without asking. `aiUsage.privateProfiles.enabled`
+and `aiUsage.projectProfiles.enabled`, both on by default, are the switches; turning one off only stops new profiles
+of that kind, and existing ones stay listed (project profiles are not loaded at all while their switch is off).
+**Import saved profiles…** always adds private profiles; to make project profiles from an export, copy the export
+file to the folder's `.ai-usage.profiles.json`.
+
+Known limitation: the extension is one per window, so the project profiles of every folder open in a window are
+merged into one list, and a project can be used with another open project's profiles. Keeping them apart per folder
+may come later.
+
+The file holds login tokens in plain text. When the folder is a Git repository, the first project profile saved
+there adds the file's path to the folder's `.gitignore`, and a notification says so. Do not commit the file.
+
 Each saved profile shows the login email beside its name, so the same account saved twice is easy to spot. Codex
 emails come from the saved id token; Claude credentials carry no identity, so the email is read from the Claude
 OAuth profile endpoint (or the local Claude Code account file when offline) when a login is saved, replaced or
@@ -154,7 +178,9 @@ is captured before switching away. If a saved profile stops working with "Login 
 keep-alive instead of being activated, and when the login cannot be refreshed the failure notification offers
 **Sign in again**. The sign-in runs the vendor CLI's login in a terminal whose home is a folder inside the keep-alive
 home, so the active login is not touched; the new login is stored in the profile, and written to the native file
-only when that profile is the active one. A keep-alive or usage check that finds a login revoked, or expired and not
+only when that profile is the active one. While the sign-in is pending, that service's keep-alives and rotation
+wait for it, and a keep-alive started by hand says that a sign-in is in progress; the wait ends with the sign-in,
+or after 20 minutes at most. A keep-alive or usage check that finds a login revoked, or expired and not
 refreshable, says so once in a notification with the same **Sign in again** action. Signing in natively and using
 **Save current login** to replace the profile still works too.
 

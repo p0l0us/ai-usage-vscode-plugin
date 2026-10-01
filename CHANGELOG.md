@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.0.34 (2026-10-01)
+
+- Rotation never switches to an account whose last check failed. A failed keep-alive, whatever the reason, or a
+  usage check that found a login problem leaves the account out of the sweep, without spending a call on it, until a
+  later check of it succeeds (the next periodic keep-alive, or **Send keep-alive now…**). The notification that no
+  candidate remains names the accounts left out for that reason.
+- **Project profiles.** Besides the private profiles kept with the VS Code client, a profile can now live in the
+  workspace folder, in `.ai-usage.profiles.json` by default (`aiUsage.projectProfiles.file` sets another path; the
+  format of a profile export, mode `0600`), login included, and
+  is listed whenever that folder is open on any computer. **Save current login…** and **Import credential JSON…**
+  ask whether to create a private or a project profile when both kinds are enabled (`aiUsage.privateProfiles.enabled`
+  and `aiUsage.projectProfiles.enabled`, both on by default) and a local folder is open; otherwise the only possible
+  kind is used. Refreshed tokens, renames and deletions go back to the file. Known limitation: the project profiles
+  of every folder open in a window are merged into one list, so a project can be used with another open project's
+  profiles. The first project profile saved in a Git repository adds the file to its `.gitignore`.
+- A pending sign-in no longer competes with the automation. From **Sign in again…** until the new login is stored or
+  the sign-in is cancelled, that service's keep-alives and rotation wait, a running sweep stops at its next account,
+  and a keep-alive started by hand says that a sign-in is in progress; the **All accounts** keep-alive stops there
+  and says how many accounts were not sent. The wait ends with the sign-in, or after 20 minutes at most.
+
 ## 0.0.33 (2026-09-29)
 
 - **Export or import saved profiles…** in the Claude and Codex Accounts menus opens a picker with **Export saved

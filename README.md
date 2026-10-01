@@ -65,8 +65,11 @@ log and settings actions in one picker. A service's **Accounts** row opens its A
 Run **AI Usage: Manage Claude/Codex Authentication Profiles** from the Command Palette, click the Claude or Codex
 status bar item, or choose a service's **Accounts** row in the AI Usage menu, to open that service's **Accounts**
 menu. You can save and name the current login, import a credential JSON file, export every saved profile to a file
-and import it on another computer, and switch among up to 20 profiles per service. Every saved profile is listed with its login email, its last usage reading and check time, and the
-active one is marked:
+and import it on another computer, and switch among up to 20 profiles per service. A profile is **private**, kept in
+this VS Code client's SecretStorage, or a **project** profile, kept with its login in the workspace folder's
+`.ai-usage.profiles.json` and listed whenever that folder is open; see
+[Private and project profiles](docs/CONFIGURATION.md#private-and-project-profiles). Every saved profile is listed
+with its login email, its last usage reading and check time, and the active one is marked:
 
 ![Claude Accounts menu with five saved profiles, their usage and the manage and account feature actions](images/screenshots/accounts-claude.png)
 

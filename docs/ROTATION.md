@@ -229,6 +229,10 @@ These apply to `soonestReset`, `evenPace` and `leastWaste`:
   usage.
 - **The 5-hour window only blocks.** It does not change the ranking, except for `leastWaste`'s bonus. It acts through
   its threshold: an account at 5h 96% is never switched to, however good its weekly score.
+- **A failed last check disqualifies.** An account whose last keep-alive failed, whatever the reason, or whose last
+  usage check found a login problem, is not switched to and costs the sweep nothing, until a later check of it
+  succeeds: the next periodic keep-alive, or **Send keep-alive now…**. The notification that no candidate remains
+  names the accounts left out for that reason.
 - **Several weekly windows: the tightest one decides.** When both `7d` and `7d Fable` count, `soonestReset` uses the
   window with the least allowance left, `evenPace` the one furthest ahead of its line, and `leastWaste` the lowest
   rate.

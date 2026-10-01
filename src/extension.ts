@@ -630,6 +630,9 @@ export function activate(context: vscode.ExtensionContext): void {
     if (!profile) { return false; }
     const title = provider === 'claude' ? 'Claude' : 'Codex';
     const who = `“${profile.name}”${profile.email ? ` (${profile.email})` : ''}`;
+    // The user is about to attend a browser sign-in; this service's keep-alives and rotation wait until it is over,
+    // so no check competes with it and no notification about another account interrupts it.
+    automation.hold(provider, `a ${title} sign-in is in progress`);
     try {
       const credential = await signInIsolated(provider, automationSettings(provider, authProfiles), `${title} ${who}`);
       if (!credential) {
@@ -648,6 +651,7 @@ export function activate(context: vscode.ExtensionContext): void {
         if (replace !== 'Replace') { return false; }
       }
       const active = await automation.withPaused(() => authProfiles.replaceCredential(provider, id, credential));
+      automation.resume(provider);
       if (active) { await afterProfileActivated(provider, { kind: 'saved', accountChanged: false }); }
       // The login is saved either way; a busy check elsewhere only delays the usage reading.
       const result = await automation.credentialReplaced(provider, id).catch((error: unknown) =>
@@ -662,7 +666,7 @@ export function activate(context: vscode.ExtensionContext): void {
       log(`${provider}: signing in again for "${profile.name}" failed: ${message}`);
       void vscode.window.showErrorMessage(`AI Usage: could not sign in again for the ${title} account ${who}: ${message}`);
       return false;
-    }
+    } finally { automation.resume(provider); }
   };
   /** A broken saved login is reported by name and email; one that needs a new sign-in is offered it right away. */
   const reportAccountProblem = async (provider: AuthProvider, id: string, reason: string, revoked: boolean) => {
@@ -747,6 +751,7 @@ export function activate(context: vscode.ExtensionContext): void {
         }, async (progress, token) => {
           const failed: string[] = [];
           let done = 0;
+          let blocked: string | undefined;
           for (const [index, profile] of profiles.entries()) {
             if (token.isCancellationRequested) { break; }
             // Space the calls so a sweep of every account does not burst the provider's usage endpoint.
@@ -758,12 +763,15 @@ export function activate(context: vscode.ExtensionContext): void {
               const problem = result.keepAliveError ?? (result.usage ? undefined : result.usageError ?? 'usage statistics could not be updated');
               if (problem) { failed.push(`“${profile.name}”: ${readableProblem(problem)}`); }
             } catch (error) {
-              failed.push(`“${profile.name}”: ${readableProblem(error instanceof Error ? error.message : String(error))}`);
+              const message = error instanceof Error ? error.message : String(error);
+              // A sign-in started meanwhile holds every check of this service; the rest of the sweep would only fail the same way.
+              if (/sign-in is in progress/i.test(message)) { blocked = message.replace(/\.$/, ''); break; }
+              failed.push(`“${profile.name}”: ${readableProblem(message)}`);
             }
             done++;
           }
           const skipped = profiles.length - done;
-          const summary = `AI Usage: ${title} keep-alive sent to ${done - failed.length} of ${profiles.length} accounts${skipped ? ` (${skipped} cancelled)` : ''}.`;
+          const summary = `AI Usage: ${title} keep-alive sent to ${done - failed.length} of ${profiles.length} accounts${skipped ? ` (${skipped} ${blocked ? `not sent: ${blocked}` : 'cancelled'})` : ''}.`;
           if (failed.length) {
             void vscode.window.showWarningMessage(`${summary} Problems: ${failed.join('; ')}`);
           } else {
