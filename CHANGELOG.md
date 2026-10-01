@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.0.36 (2026-10-01)
+
+- Rotation no longer re-reads an account whose stored reading is still at a threshold with that window's reset
+  ahead: usage only rises until the reset, so the call could not show it recovered. While every account is at its
+  limit, a sweep now costs nothing and ends at once instead of spending an endpoint call per account every check
+  interval and holding the account lock for minutes. The notification that no candidate remains names those
+  accounts with the time until their reset.
+- **Send keep-alive now…** waits for an account check running in another window instead of failing at once with
+  "Another claude account check is already running" for every account. The progress notification says that it is
+  waiting and can be cancelled; after 3 minutes the accounts are reported as not sent. **All accounts** keeps the
+  lock for the whole sweep, so a periodic check cannot cut in between two of its accounts, and a check requested
+  meanwhile in the same window, such as the re-read after a sign-in, runs after the sweep instead of being refused.
+
 ## 0.0.35 (2026-10-01)
 
 - `aiUsage.claude.checkIntervalMinutes` accepts fractional minutes down to 0.25 (15 seconds) instead of stopping at

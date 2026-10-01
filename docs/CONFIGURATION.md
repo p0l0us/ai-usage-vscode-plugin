@@ -337,6 +337,11 @@ Save or import each subscription login in **AI Usage: Manage Claude/Codex Authen
 provider's **Accounts** menu you can switch accounts manually and send a keep-alive on demand; both features are
 turned on in Settings, per provider, and default to off. The menu shows their current state and links to Settings.
 
+Account checks of one service run one at a time across all windows. A keep-alive sent by hand that finds a check
+running in another window waits for it, up to 3 minutes, and says so in its progress notification, which can be
+cancelled; **All accounts** then keeps its turn for the whole sweep, so a periodic check cannot cut in between two
+accounts. Once the wait runs out, the notification says that the accounts were not sent.
+
 ![Send keep-alive now… item under Account features](../images/screenshots/accounts-keep-alive-now.png)
 ![Claude Keep-alive and rotation settings… item: keep-alive on, rotation on with leastWaste and proactive](../images/screenshots/accounts-keep-alive-settings-claude.png)
 ![Codex Keep-alive and rotation settings… item: keep-alive off, rotation on at 7d ≥ 99%](../images/screenshots/accounts-keep-alive-settings-codex.png)

@@ -7,7 +7,7 @@ import { registerBridgeModels } from './bridgeModels';
 import { AuthProvider, readNativeCredential } from './authFiles';
 import { ActivationChange, AuthProfileManager } from './authProfiles';
 import { activateClaudeAccountMetadata, claudeAccountFileConfirms } from './accountIdentity';
-import { AccountAutomation, AutomationSettings, modelWindowFilter, RotationStrategy, RotationTrigger } from './accountAutomation';
+import { AccountAutomation, AutomationSettings, KeepAliveNowResult, LockWait, modelWindowFilter, RotationStrategy, RotationTrigger } from './accountAutomation';
 import { signInIsolated } from './accountLogin';
 import { explainAccountProblem, needsSignIn, probeAccount } from './accountProbe';
 import { SharedCache, deserializeUsage } from './cache';
@@ -191,6 +191,8 @@ function formatInterval(ms: number): string {
 const STALE_AFTER_MS = 15 * 60_000;
 /** Pause between accounts when a keep-alive is sent to all of them at once. */
 const KEEP_ALIVE_ALL_SPACING_MS = 3_000;
+/** How long a keep-alive sent by hand waits for an account check running in another window to finish. */
+const MANUAL_CHECK_LOCK_WAIT_MS = 3 * 60_000;
 const GITHUB_ACCESS_REQUESTED_KEY = 'aiUsage.githubAccessRequested';
 /** Last Codex profile switch, shared by every window so each can check its own Codex process (non-secret). */
 const CODEX_SWITCH_KEY = 'aiUsage.codexSwitch.v1';
@@ -718,11 +720,23 @@ export function activate(context: vscode.ExtensionContext): void {
           const [profile] = profiles;
           // This one notification reports the outcome, a dead login included, so the automation must not announce
           // the same failure a second time; it only records the login as reported.
-          const result = await vscode.window.withProgress({
-            location: vscode.ProgressLocation.Notification,
-            title: `AI Usage: sending ${title} keep-alive for “${profile.name}”…`,
-            cancellable: false
-          }, () => automation.sendKeepAliveNow(provider, profile.id, { callerReports: true }));
+          const abort = new AbortController();
+          let result: KeepAliveNowResult;
+          try {
+            result = await vscode.window.withProgress({
+              location: vscode.ProgressLocation.Notification,
+              title: `AI Usage: sending ${title} keep-alive for “${profile.name}”…`,
+              cancellable: true
+            }, (progress, token) => {
+              token.onCancellationRequested(() => abort.abort());
+              return automation.sendKeepAliveNow(provider, profile.id, { callerReports: true, wait: manualLockWait(title, progress, abort.signal) });
+            });
+          } catch (error) {
+            if (abort.signal.aborted) { return; }
+            const message = error instanceof Error ? error.message : String(error);
+            void vscode.window.showWarningMessage(`AI Usage: ${title} keep-alive for “${profile.name}” not sent: ${readableProblem(message)}`);
+            return;
+          }
           // Revoked, or expired and not refreshable, found by the keep-alive or by the usage read: only a new sign-in helps.
           const dead = [result.keepAliveError, result.usageError].find(needsSignIn);
           let message: string;
@@ -755,23 +769,36 @@ export function activate(context: vscode.ExtensionContext): void {
           const failed: string[] = [];
           let done = 0;
           let blocked: string | undefined;
-          for (const [index, profile] of profiles.entries()) {
-            if (token.isCancellationRequested) { break; }
-            // Space the calls so a sweep of every account does not burst the provider's usage endpoint.
-            if (index > 0) { await new Promise((resolve) => setTimeout(resolve, KEEP_ALIVE_ALL_SPACING_MS)); }
-            if (token.isCancellationRequested) { break; }
-            progress.report({ message: `${index + 1}/${profiles.length}: “${profile.name}”…`, increment: index ? 100 / profiles.length : 0 });
-            try {
-              const result = await automation.sendKeepAliveNow(provider, profile.id);
-              const problem = result.keepAliveError ?? (result.usage ? undefined : result.usageError ?? 'usage statistics could not be updated');
-              if (problem) { failed.push(`“${profile.name}”: ${readableProblem(problem)}`); }
-            } catch (error) {
-              const message = error instanceof Error ? error.message : String(error);
-              // A sign-in started meanwhile holds every check of this service; the rest of the sweep would only fail the same way.
-              if (/sign-in is in progress/i.test(message)) { blocked = message.replace(/\.$/, ''); break; }
-              failed.push(`“${profile.name}”: ${readableProblem(message)}`);
-            }
-            done++;
+          const abort = new AbortController();
+          token.onCancellationRequested(() => abort.abort());
+          try {
+            // One lock for the whole sweep, so a periodic check in another window cannot cut in between two accounts.
+            await automation.withAccountLock(provider, async () => {
+              for (const [index, profile] of profiles.entries()) {
+                if (token.isCancellationRequested) { break; }
+                // Space the calls so a sweep of every account does not burst the provider's usage endpoint.
+                if (index > 0) { await new Promise((resolve) => setTimeout(resolve, KEEP_ALIVE_ALL_SPACING_MS)); }
+                if (token.isCancellationRequested) { break; }
+                progress.report({ message: `${index + 1}/${profiles.length}: “${profile.name}”…`, increment: index ? 100 / profiles.length : 0 });
+                try {
+                  const result = await automation.sendKeepAliveNow(provider, profile.id);
+                  const problem = result.keepAliveError ?? (result.usage ? undefined : result.usageError ?? 'usage statistics could not be updated');
+                  if (problem) { failed.push(`“${profile.name}”: ${readableProblem(problem)}`); }
+                } catch (error) {
+                  const message = error instanceof Error ? error.message : String(error);
+                  // A sign-in started meanwhile holds every check of this service; the rest of the sweep would only fail the same way.
+                  if (/sign-in is in progress/i.test(message)) { blocked = message.replace(/\.$/, ''); break; }
+                  failed.push(`“${profile.name}”: ${readableProblem(message)}`);
+                }
+                done++;
+              }
+            }, manualLockWait(title, progress, abort.signal));
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            if (abort.signal.aborted) { /* The summary counts every account as cancelled. */ }
+            else if (/already running/i.test(message)) {
+              blocked = `another ${title} account check was still running after ${Math.round(MANUAL_CHECK_LOCK_WAIT_MS / 60_000)} minutes`;
+            } else { throw error; }
           }
           const skipped = profiles.length - done;
           const summary = `AI Usage: ${title} keep-alive sent to ${done - failed.length} of ${profiles.length} accounts${skipped ? ` (${skipped} ${blocked ? `not sent: ${blocked}` : 'cancelled'})` : ''}.`;
@@ -1612,6 +1639,12 @@ export function deactivate(): void {
 }
 
 /** A keep-alive or usage-check error for a notification: "Insufficient credits. <what to do>", else the vendor's text. */
+/** The wait a keep-alive sent by hand gives an account check running in another window, told in its progress. */
+function manualLockWait(title: string, progress: vscode.Progress<{ message?: string }>, signal: AbortSignal): LockWait {
+  return { waitMs: MANUAL_CHECK_LOCK_WAIT_MS, signal,
+    onWait: () => progress.report({ message: `waiting for a running ${title} account check…` }) };
+}
+
 function readableProblem(raw: string): string {
   const problem = explainAccountProblem(raw);
   const text = problem.advice ? `${problem.label}. ${problem.advice}` : problem.label;
