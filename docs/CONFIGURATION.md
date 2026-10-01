@@ -62,7 +62,9 @@ for details.
 ## Intervals
 
 - `aiUsage.<service>.checkIntervalMinutes` (Claude 10, Codex 5, Copilot 5): how often that service's source is
-  called and the result stored in the shared on-disk cache. One call serves every open window.
+  called and the result stored in the shared on-disk cache. One call serves every open window. Claude's accepts
+  fractional minutes down to 0.25 (15 seconds); its endpoint calls are still spaced by
+  `aiUsage.claude.api.minIntervalSeconds` and by any limit the endpoint advertises.
 - `aiUsage.updateIntervalMinutes` (1): how often every window re-reads the cache and redraws the status bar and
   chat chip details. Applies to all sources.
 

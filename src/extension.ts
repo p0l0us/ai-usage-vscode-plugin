@@ -124,6 +124,9 @@ const SOURCE_LABELS: Record<SourceId, string> = {
   both: 'local file, service API when stale'
 };
 const DEFAULT_CHECK_MINUTES: Record<ProviderId, number> = { claude: 10, codex: 5, copilot: 5 };
+/** Floors for `checkIntervalMinutes`. Claude accepts a quarter minute: with `both` the local account file
+ *  answers most checks, and every endpoint call is spaced by the shared budget regardless. */
+const MIN_CHECK_MINUTES: Record<ProviderId, number> = { claude: 0.25, codex: 1, copilot: 1 };
 /** Default and floor for `aiUsage.claude.accountFile.checkIntervalSeconds`; this source is a plain
  *  local file read, so it can be polled far more often than the rate-limited API. */
 const ACCOUNT_FILE_DEFAULT_SECONDS = 15;
@@ -135,7 +138,7 @@ function settingsFor(provider: ProviderId) {
   const legacy = config.get<number>('aiUsage.refreshIntervalMinutes');
   const check = config.get<number>(`aiUsage.${provider}.checkIntervalMinutes`);
   /** How often the service endpoint may be called, and the spacing `both` gives its fallback. */
-  const apiCheckIntervalMs = Math.max(1, check ?? legacy ?? DEFAULT_CHECK_MINUTES[provider]) * 60_000;
+  const apiCheckIntervalMs = Math.max(MIN_CHECK_MINUTES[provider], check ?? legacy ?? DEFAULT_CHECK_MINUTES[provider]) * 60_000;
   if (provider === 'claude' && (source === 'accountFile' || source === 'both')) {
     const seconds = config.get<number>('aiUsage.claude.accountFile.checkIntervalSeconds', ACCOUNT_FILE_DEFAULT_SECONDS);
     return {

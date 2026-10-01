@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.0.35 (2026-10-01)
+
+- `aiUsage.claude.checkIntervalMinutes` accepts fractional minutes down to 0.25 (15 seconds) instead of stopping at
+  a whole minute. Every call to Anthropic's usage endpoint is still spaced by `aiUsage.claude.api.minIntervalSeconds`
+  (30 seconds by default) and by any limit the endpoint advertises; lower that setting too to call more often than
+  every 30 seconds.
+
 ## 0.0.34 (2026-10-01)
 
 - Rotation never switches to an account whose last check failed. A failed keep-alive, whatever the reason, or a
