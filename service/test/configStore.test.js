@@ -99,3 +99,13 @@ test('the mcp block is a global setting: off by default, switching on, listed af
   assert.equal(listConfig(next).find((entry) => entry.key === 'mcp.enabled').value, true);
   assert.ok(GLOBAL_SETTINGS.filter((setting) => setting.key.startsWith('mcp.')).every((setting) => setting.type === 'boolean'));
 });
+
+test('the history block is a global setting: on by default, a year of retention, directory empty', () => {
+  const config = defaultConfig();
+  assert.deepEqual(config.history, { enabled: true, retentionDays: 365, directory: '' });
+  const next = setConfigValue(setConfigValue(config, 'history.retentionDays', '30'), 'history.directory', '~/ai-usage-history');
+  assert.equal(next.history.retentionDays, 30);
+  assert.equal(next.history.directory, '~/ai-usage-history');
+  assert.throws(() => setConfigValue(config, 'history.retentionDays', 0), /at least 1/);
+  assert.deepEqual(listConfig(config).map((entry) => entry.key).filter((key) => key.startsWith('history.')), ['history.enabled', 'history.retentionDays', 'history.directory']);
+});

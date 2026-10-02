@@ -53,7 +53,15 @@ export type ProfileScopesConfig = {
   projectProfiles: { enabled: boolean; file: string };
 };
 
-export type ServiceConfig = { version: 1; claude: ProviderConfig; codex: ProviderConfig; mcp: McpConfig } & ProfileScopesConfig;
+/** The usage history: readings, switches and sweeps appended to month files for later analysis. */
+export type HistoryConfig = {
+  enabled: boolean;
+  retentionDays: number;
+  /** Where the files go; empty is `usage-history` under the service home. */
+  directory: string;
+};
+
+export type ServiceConfig = { version: 1; claude: ProviderConfig; codex: ProviderConfig; mcp: McpConfig; history: HistoryConfig } & ProfileScopesConfig;
 
 import { DEFAULT_PROJECT_PROFILES_FILE, PROVIDERS, TITLES } from './profileStore';
 
@@ -93,6 +101,9 @@ export const GLOBAL_SETTINGS: SettingSchema[] = [
   { key: 'privateProfiles.enabled', type: 'boolean', description: 'Keep new profiles privately in the service home (profiles.json). Off only stops new private profiles; saved ones stay.' },
   { key: 'projectProfiles.enabled', type: 'boolean', description: 'Also load and save profiles in each open project folder\'s profile file, login included, so they travel with the project.' },
   { key: 'projectProfiles.file', type: 'string', description: 'Path of a project\'s profile file, relative to the folder (default .ai-usage.profiles.json); it has the format of a profile export.' },
+  { key: 'history.enabled', type: 'boolean', description: 'Record every reading, switch, rotation sweep, exhausted stretch and check change to month files for later analysis.' },
+  { key: 'history.retentionDays', type: 'number', min: 1, max: 36500, description: 'Delete a month\'s history file once the whole month is older than this many days.' },
+  { key: 'history.directory', type: 'string', description: 'Where the history files go; empty is usage-history under the service home. ~ is expanded.' },
   { key: 'mcp.enabled', type: 'boolean', description: 'Experimental. Serve the MCP tools that let an AI agent read every profile\'s usage and switch profiles (ai-usage mcp, and the server VS Code offers to its agents).' },
   { key: 'mcp.switching', type: 'boolean', description: 'Let agents change the active account through MCP (switch_account, rotate_account); off leaves them the usage tools only.' }
 ];
@@ -119,7 +130,8 @@ export function defaultProviderConfig(provider: AuthProvider): ProviderConfig {
 
 export function defaultConfig(): ServiceConfig {
   return { version: 1, claude: defaultProviderConfig('claude'), codex: defaultProviderConfig('codex'), mcp: { enabled: false, switching: true },
-    privateProfiles: { enabled: true }, projectProfiles: { enabled: true, file: DEFAULT_PROJECT_PROFILES_FILE } };
+    privateProfiles: { enabled: true }, projectProfiles: { enabled: true, file: DEFAULT_PROJECT_PROFILES_FILE },
+    history: { enabled: true, retentionDays: 365, directory: '' } };
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {

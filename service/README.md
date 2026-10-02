@@ -27,6 +27,7 @@ ai-usage keepalive <service> [<profile>|--all]   one sweep in the service; waits
 ai-usage rotate <service>         run a rotation sweep now
 ai-usage export [file]            write the saved profiles, logins included
 ai-usage import-profiles <file>   read them elsewhere
+ai-usage history [--days <n>|--all]   summary of the usage history; "history export readings|events|jsonl", "history path"
 ai-usage config [<key> [<value>]] show or change a setting
 ai-usage service status|install|uninstall|start|stop|restart|run
 ai-usage log [-n <lines>] [-f]
@@ -35,8 +36,8 @@ ai-usage mcp                      MCP server for AI agents on stdin/stdout (expe
 
 `ai-usage --help` lists everything. Names of settings are `claude.<setting>` and `codex.<setting>`, for example
 `claude.autoRotate.strategy`, plus the global `privateProfiles.enabled`, `projectProfiles.enabled`,
-`projectProfiles.file`, `mcp.enabled` and `mcp.switching`; `ai-usage config` prints them all with a line of
-explanation each.
+`projectProfiles.file`, `history.enabled`, `history.retentionDays`, `history.directory`, `mcp.enabled` and
+`mcp.switching`; `ai-usage config` prints them all with a line of explanation each.
 
 A project's profiles (its `.ai-usage.profiles.json`, or the file named by `projectProfiles.file`) are listed
 while a VS Code window has the folder open, or when `ai-usage` runs with `--project[=<dir>]` or from a directory
@@ -55,7 +56,8 @@ the same server to the agents of its window while the setting is on. Details:
 ## Where things are
 
 Everything is under `~/.ai-usage` (mode 0700): `profiles.json` holds the saved profiles with their logins (mode
-0600), `config.json` the settings, `state/` the per-account readings and call ledgers, `service.log` the log,
+0600), `config.json` the settings, `state/` the per-account readings and call ledgers, `usage-history/` the
+month files of readings, switches and sweeps (`ai-usage history`), `service.log` the log,
 `service.sock` (a named pipe on Windows) the connection clients use, and `service/` the installed package.
 
 Only the service writes these files; the command line and the extension go through it. Clients present the token

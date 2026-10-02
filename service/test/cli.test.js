@@ -14,6 +14,7 @@ test('arguments: positionals, boolean and value flags, short aliases and --no- f
   assert.deepEqual(parseArgs(['save', 'codex', '--update', 'Main', '--', '--literal']).positional, ['save', 'codex', '--literal']);
   assert.deepEqual(parseArgs(['save', 'claude', 'X', '--project']).flags, { project: true });
   assert.deepEqual(parseArgs(['list', '--project=/work/app']).flags, { project: '/work/app' });
+  assert.deepEqual(parseArgs(['history', '--days', '7']).flags, { days: '7' });
 });
 
 const snapshot = () => ({
@@ -128,6 +129,17 @@ test('the command line drives a running service: save, list, use, config, rotate
   assert.match(result.stdout, /Client +●  – · project project/);
   result = await run('list', 'claude');
   assert.ok(!/Client/.test(result.stdout), 'without the folder declared, its profiles are not listed');
+  // The usage history: the switches above were recorded, and the summary and the files are reachable.
+  result = await run('history', '--days', '7');
+  assert.equal(result.code, 0, result.stderr);
+  assert.match(result.stdout, /^# AI Usage history · the last 7 days/);
+  assert.match(result.stdout, /by hand 1/);
+  result = await run('history', 'path');
+  assert.ok(result.stdout.includes(path.join(home, 'usage-history')), result.stdout);
+  result = await run('history', 'export', 'events', '-');
+  assert.match(result.stdout, /^time,provider,type,reason/);
+  result = await run('history', 'nonsense');
+  assert.equal(result.code, 2);
   result = await run('nonsense');
   assert.equal(result.code, 2);
   result = await run('service', 'status');

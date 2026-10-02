@@ -237,3 +237,43 @@ test('a keep-alive sweep over every account runs in the service, reports progres
   assert.match(chosen.results[0].keepAliveError, /out of credits/);
   assert.equal(chosen.cancelled, false);
 });
+
+test('switches by hand and switches followed from outside are recorded, and the history is summarized and exported', async (t) => {
+  const f = fixture(t);
+  const work = await f.call('profiles.saveNative', { provider: 'claude', name: 'Work' });
+  const backup = await f.call('profiles.importCredential', { provider: 'claude', name: 'Backup', credential: claudeLogin('b') });
+  await f.call('profiles.activate', { provider: 'claude', id: backup.profile.id });
+  // The native login is switched back outside the service, which follows it on the next list.
+  fs.writeFileSync(path.join(f.claudeHome, '.credentials.json'), JSON.stringify(claudeLogin('a')));
+  await f.call('profiles.list', { provider: 'claude' });
+  const events = [...f.service.history.events()].filter((event) => event.type === 'switch');
+  assert.deepEqual(events.map((event) => [event.reason, event.from?.id, event.to.id, event.automatic]),
+    [['manual', work.profile.id, backup.profile.id, false], ['external', backup.profile.id, work.profile.id, false]]);
+  assert.equal(events[0].to.email, 'b@example.com');
+  const info = await f.call('history.info');
+  assert.equal(info.enabled, true);
+  assert.equal(info.location, path.join(f.home, 'usage-history'));
+  assert.equal(info.files.length, 1);
+  assert.equal(info.retentionDays, 365);
+  const summary = await f.call('history.summary', { days: 7 });
+  assert.match(summary.markdown, /^# AI Usage history · the last 7 days/);
+  assert.match(summary.markdown, /\*\*Switches:\*\* 2 \(automatic 0: 0 at a limit, 0 proactive; by hand 1; outside this window 1\)/);
+  assert.equal(summary.summary.providers[0].switches.total, 2);
+  const everything = await f.call('history.summary', {});
+  assert.equal(everything.label, 'everything kept');
+  const exported = await f.call('history.export', { kind: 'events' });
+  assert.equal(exported.extension, 'csv');
+  assert.match(exported.text, /^time,provider,type,reason,from,to/);
+  assert.equal(exported.text.trim().split('\n').length, 3);
+  assert.equal((await f.call('history.export', { kind: 'jsonl' })).text.trim().split('\n').length, 2);
+  await assert.rejects(f.call('history.export', { kind: 'pdf' }), /readings, events or jsonl/);
+  // Turning the history off stops the recording; a directory setting moves the next events.
+  await f.call('config.set', { values: { 'history.enabled': false } });
+  await f.call('profiles.activate', { provider: 'claude', id: backup.profile.id });
+  assert.equal([...f.service.history.events()].filter((event) => event.type === 'switch').length, 2);
+  const elsewhere = path.join(f.root, 'elsewhere');
+  await f.call('config.set', { values: { 'history.enabled': true, 'history.directory': elsewhere } });
+  await f.call('profiles.activate', { provider: 'claude', id: work.profile.id });
+  assert.equal((await f.call('history.info')).location, elsewhere);
+  assert.equal(fs.readdirSync(elsewhere).filter((name) => name.startsWith('history-')).length, 1);
+});

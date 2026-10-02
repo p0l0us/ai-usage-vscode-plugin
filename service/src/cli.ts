@@ -50,6 +50,12 @@ Accounts
   import-profiles <file> [--replace] [-y]
                                   Import a profile export made elsewhere; --replace also replaces differing logins
 
+History
+  history [--days <n>|--all]      Summary of the usage history (the last 30 days by default) as Markdown
+  history export readings|events|jsonl [file]
+                                  Readings or the other events as CSV, or every kept line as JSON Lines
+  history path                    Where the history files are
+
 Settings
   config                          List every setting with its value
   config <key>                    Show one value, e.g. claude.autoRotate.strategy
@@ -80,7 +86,7 @@ Options
 type Flags = { [name: string]: string | boolean | undefined };
 type Parsed = { positional: string[]; flags: Flags };
 
-const VALUE_FLAGS = new Set(['home', 'name', 'provider', 'lines', 'n', 'update']);
+const VALUE_FLAGS = new Set(['home', 'name', 'provider', 'lines', 'n', 'update', 'days']);
 /** Flags that may stand alone or carry a value with "=", such as `--project` and `--project=/path`. */
 const OPTIONAL_VALUE_FLAGS = new Set(['project']);
 const ALIASES: Record<string, string> = { y: 'yes', h: 'help', v: 'version', f: 'follow', n: 'lines' };
@@ -521,6 +527,35 @@ export async function main(argv: string[], io?: CliOutput): Promise<number> {
           err(`${error instanceof Error ? error.message : String(error)}\n`);
         }
         return runMcpStdio({ input: process.stdin, output: process.stdout, version: serviceVersion(), log: (message) => err(`${message}\n`), connect });
+      }
+      case 'history': {
+        const action = rest[0];
+        return withClient(home, [], async (client) => {
+          if (action === 'path') {
+            const info = await client.historyInfo();
+            if (json) { printJson(info); return 0; }
+            out(`${info.location}${info.enabled ? '' : dim(' (recording is off: history.enabled)')}\n`);
+            out(dim(`${info.files.length} month file${info.files.length === 1 ? '' : 's'}, kept ${info.retentionDays} days${info.oldestAt ? `, oldest from ${info.oldestAt.slice(0, 7)}` : ''}\n`));
+            return 0;
+          }
+          if (action === 'export') {
+            const kind = rest[1];
+            if (kind !== 'readings' && kind !== 'events' && kind !== 'jsonl') { throw new UsageError('Usage: ai-usage history export readings|events|jsonl [file]'); }
+            const exported = await client.historyExport(kind);
+            const target = rest[2] ?? path.join(os.homedir(), `ai-usage-${kind}-${new Date().toISOString().slice(0, 10)}.${exported.extension}`);
+            if (target === '-') { out(exported.text); return 0; }
+            fs.writeFileSync(target, exported.text);
+            out(`${green('✓')} Exported the usage history ${kind} to ${target}.\n`);
+            return 0;
+          }
+          if (action !== undefined && !/^\d+$/.test(action)) { throw new UsageError(`Unknown history action "${action}": use a number of days, --all, export or path.`); }
+          const days = flags.all ? undefined : Number(flags.days ?? action ?? 30);
+          if (days !== undefined && !(Number.isFinite(days) && days > 0)) { throw new UsageError('--days expects a positive number.'); }
+          const result = await client.historySummary(days);
+          if (json) { printJson(result.summary); return 0; }
+          out(`${result.markdown}\n`);
+          return 0;
+        }, flags);
       }
       case 'service': return serviceCommand(home, rest, flags);
       case 'daemon': {

@@ -1,4 +1,5 @@
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { registerBridgeIntegration } from './bridgeIntegration';
@@ -744,6 +745,8 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(vscode.commands.registerCommand('aiUsage.installAccountService', () => services.install()));
   context.subscriptions.push(vscode.commands.registerCommand('aiUsage.accountService', () => services.showMenu()));
   context.subscriptions.push(vscode.commands.registerCommand('aiUsage.openLog', () => output?.show(true)));
+  context.subscriptions.push(vscode.commands.registerCommand('aiUsage.showUsageHistory', () => showUsageHistory(services)
+    .catch((error: unknown) => vscode.window.showErrorMessage(`AI Usage: could not show the usage history: ${error instanceof Error ? error.message : String(error)}`))));
   context.subscriptions.push(vscode.commands.registerCommand('aiUsage.openAgentsWindowSetup', () =>
     vscode.commands.executeCommand('workbench.action.openWalkthrough', `${context.extension.id}#${AGENTS_WINDOW_WALKTHROUGH}`, false)
   ));
@@ -904,7 +907,8 @@ export function activate(context: vscode.ExtensionContext): void {
     if (event.affectsConfiguration('aiUsage.claudeConfig')) {
       syncClaudeSettings();
     }
-    if (event.affectsConfiguration('aiUsage.claude') || event.affectsConfiguration('aiUsage.codex') || event.affectsConfiguration('aiUsage.mcp')) {
+    if (event.affectsConfiguration('aiUsage.claude') || event.affectsConfiguration('aiUsage.codex') || event.affectsConfiguration('aiUsage.mcp') ||
+      event.affectsConfiguration('aiUsage.history') || event.affectsConfiguration('aiUsage.privateProfiles') || event.affectsConfiguration('aiUsage.projectProfiles')) {
       void services.pushSettings(event);
     }
     if (event.affectsConfiguration('aiUsage.accountService')) {
@@ -970,6 +974,61 @@ export function activate(context: vscode.ExtensionContext): void {
 
   void services.ensure({ promptInstall: true }).then(() => refreshLive());
   void refreshAll().then(maybeRequestGitHubAccess).then(() => maybeOfferAgentsWindowSetup(context));
+}
+
+const HISTORY_PERIODS: Array<{ label: string; days?: number }> = [
+  { label: 'Summary of the last 7 days', days: 7 },
+  { label: 'Summary of the last 30 days', days: 30 },
+  { label: 'Summary of the last 90 days', days: 90 },
+  { label: 'Summary of everything kept' }
+];
+
+/** The usage history menu: a summary of a period as a Markdown document, exports, the files and the settings; all from the service. */
+async function showUsageHistory(services: ServiceManager): Promise<void> {
+  const client = services.require();
+  const info = await client.historyInfo();
+  type Item = vscode.QuickPickItem & { action?: 'summary' | 'readings' | 'events' | 'jsonl' | 'file' | 'settings'; days?: number };
+  const items: Item[] = [
+    { label: 'Summary', kind: vscode.QuickPickItemKind.Separator },
+    ...HISTORY_PERIODS.map((period): Item => ({ label: `$(graph) ${period.label}`, action: 'summary', days: period.days })),
+    { label: 'Export', kind: vscode.QuickPickItemKind.Separator },
+    { label: '$(export) Readings as CSV…', description: 'one row per account, reading and window', action: 'readings' },
+    { label: '$(export) Switches, sweeps and check failures as CSV…', action: 'events' },
+    { label: '$(json) Everything as JSON Lines…', description: 'the kept month files in one', action: 'jsonl' },
+    { label: 'Files', kind: vscode.QuickPickItemKind.Separator },
+    { label: '$(file) Open the newest month file', description: info.location, action: 'file' },
+    { label: '$(gear) History settings', description: `aiUsage.history.* · ${info.enabled ? `on, kept ${info.retentionDays} days` : 'off'}`, action: 'settings' }
+  ];
+  const picked = await vscode.window.showQuickPick(items, {
+    title: 'AI Usage · Usage history', matchOnDescription: true,
+    placeHolder: `${info.files.length} month file${info.files.length === 1 ? '' : 's'} in ${info.location}`
+  });
+  if (!picked?.action) { return; }
+  if (picked.action === 'summary') {
+    const result = await client.historySummary(picked.days);
+    const document = await vscode.workspace.openTextDocument({ language: 'markdown', content: result.markdown });
+    try { await vscode.commands.executeCommand('markdown.showPreview', document.uri); }
+    catch { await vscode.window.showTextDocument(document); }
+    return;
+  }
+  if (picked.action === 'file') {
+    const newest = info.files[info.files.length - 1];
+    if (!newest) { void vscode.window.showInformationMessage('AI Usage: no usage history has been recorded yet.'); return; }
+    await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(vscode.Uri.file(newest)));
+    return;
+  }
+  if (picked.action === 'settings') { await openAiUsageSettings('aiUsage.history'); return; }
+  const kind = picked.action;
+  const exported = await client.historyExport(kind);
+  const target = await vscode.window.showSaveDialog({
+    title: 'Export usage history',
+    defaultUri: vscode.Uri.file(path.join(os.homedir(), `ai-usage-${kind}-${new Date().toISOString().slice(0, 10)}.${exported.extension}`)),
+    filters: kind === 'jsonl' ? { 'JSON Lines': ['jsonl'] } : { CSV: ['csv'] }
+  });
+  if (!target) { return; }
+  await vscode.workspace.fs.writeFile(target, Buffer.from(exported.text, 'utf8'));
+  const choice = await vscode.window.showInformationMessage(`AI Usage: usage history exported to ${target.fsPath}.`, 'Open');
+  if (choice === 'Open') { await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(target)); }
 }
 
 /** A reading as the service takes it: ISO dates, nothing else changed. */
@@ -1344,7 +1403,7 @@ function buildTooltip(usage: LiveUsage, refreshError?: string, activeProfile?: s
 }
 
 type DetailItem = vscode.QuickPickItem & {
-  action?: 'refresh' | 'refreshProvider' | 'log' | 'settings' | 'connect' | 'all' | 'profiles';
+  action?: 'refresh' | 'refreshProvider' | 'log' | 'history' | 'settings' | 'connect' | 'all' | 'profiles';
   providerId?: ProviderId;
 };
 
@@ -1481,6 +1540,7 @@ async function showDetailsPanel(providers: LiveProvider[], refreshAll: () => Pro
     }
     items.push({ label: '$(refresh) Refresh now', action: 'refresh' });
     items.push({ label: '$(output) Open log', description: 'Output → AI Usage', action: 'log' });
+    items.push({ label: '$(history) Usage history', description: 'readings, switches, how well rotation works', action: 'history' });
     items.push(focused
       ? { label: `$(gear) ${titleFor(focused)} settings`, description: `aiUsage.${focused.id}.*`, action: 'settings', providerId: focused.id }
       : { label: '$(gear) Settings', description: 'aiUsage.*', action: 'settings' });
@@ -1530,6 +1590,8 @@ async function showDetailsPanel(providers: LiveProvider[], refreshAll: () => Pro
       await vscode.commands.executeCommand('aiUsage.manageAuthProfiles', picked.providerId);
     } else if (picked.action === 'log') {
       output?.show(true);
+    } else if (picked.action === 'history') {
+      await vscode.commands.executeCommand('aiUsage.showUsageHistory');
     } else {
       await openAiUsageSettings(picked.providerId && `aiUsage.${picked.providerId}`);
     }

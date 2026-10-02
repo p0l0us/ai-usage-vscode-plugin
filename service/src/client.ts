@@ -5,7 +5,8 @@ import type { AuthProvider } from './authFiles';
 import type { ServiceConfig } from './configStore';
 import type {
   ActivationResult, EventName, ExportResult, HelloResult, ImportPlanView, ImportSummary, KeepAliveResult, ProviderView, SaveNativeResult,
-  CheckWait, KeepAliveAllResult, SerializedUsage, ServiceEvent, ServiceInfo, SignInPreparation, SignInResult, Snapshot, UsageReadResult
+  CheckWait, HistoryExportKind, HistoryInfo, HistorySummaryResult, KeepAliveAllResult, SerializedUsage, ServiceEvent, ServiceInfo, SignInPreparation,
+  SignInResult, Snapshot, UsageReadResult
 } from './protocol';
 
 /** Why a connection could not be made, so a caller can install, start or just report. */
@@ -122,6 +123,11 @@ export class ServiceClient extends EventEmitter {
   getConfig(): Promise<ServiceConfig> { return this.call('config.get'); }
   setConfig(values: Record<string, unknown>): Promise<ServiceConfig> { return this.call('config.set', { values }); }
   tailLog(lines: number): Promise<string[]> { return this.call('log.tail', { lines }); }
+  historyInfo(): Promise<HistoryInfo> { return this.call('history.info'); }
+  /** The last `days` days, or everything kept when `days` is omitted. */
+  historySummary(days?: number): Promise<HistorySummaryResult> { return this.call('history.summary', { days }); }
+  /** Readings or the other events as CSV, or every kept line as JSON Lines. */
+  historyExport(kind: HistoryExportKind): Promise<{ text: string; extension: string }> { return this.call('history.export', { kind }, 60_000); }
   shutdown(): Promise<unknown> { return this.call('service.shutdown', undefined, 5_000); }
 }
 

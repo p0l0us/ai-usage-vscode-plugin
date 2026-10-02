@@ -1,5 +1,6 @@
 import { EventEmitter } from 'events';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import { ApiCallBudget, sleep } from './apiBudget';
 import { AuthProvider, StoredCredential, parseCredentialJson, readNativeCredential } from './authFiles';
@@ -18,6 +19,9 @@ import {
   SerializedUsage, SignInPreparation, SignInResult, Snapshot, UsageReadResult, serializeKeepAlive
 } from './protocol';
 import { profilesFile, stateDir } from './paths';
+import { HistoryExportKind, HistoryInfo, HistorySummaryResult } from './protocol';
+import { UsageHistory, eventsCsv, historyFileStart, readingsCsv, usageSnapshot } from './usageHistory';
+import { Thresholds, renderHistoryReport, summarizeHistory } from './usageHistoryReport';
 
 /** Shortest gap between background attempts to confirm the activated Claude login. */
 const CLAUDE_METADATA_RETRY_MS = 60_000;
@@ -70,6 +74,8 @@ function isoOrUndefined(value: number | undefined): string | undefined {
 export class AccountService {
   readonly store: ProfileStore;
   readonly automation: AccountAutomation;
+  /** Readings, switches and rotation sweeps, appended to month files for later analysis (`history.*`). */
+  readonly history: UsageHistory;
   readonly events = new EventEmitter();
   config: ServiceConfig;
   readonly startedAt = new Date();
@@ -129,6 +135,84 @@ export class AccountService {
       this.emit({ event: 'stateChanged', provider });
     };
     this.automation.onNoCandidate = (provider, detail) => this.emit({ event: 'noCandidate', provider, detail });
+    this.history = new UsageHistory(this.historyDirectory(), this.historyOptions(), this.log, this.now);
+    this.automation.history = this.history;
+    this.history.prune();
+    this.log(`usage history: ${this.history.enabled ? this.history.location : 'off'}`);
+  }
+
+  // --- usage history -----------------------------------------------------------------------------------------
+
+  /** `history.directory`, with `~` expanded and relative paths resolved from the user home; empty is `usage-history` in the service home. */
+  private historyDirectory(): string {
+    const configured = (this.config.history?.directory ?? '').trim();
+    if (!configured) { return path.join(this.options.home, 'usage-history'); }
+    const expanded = configured === '~' ? os.homedir()
+      : configured.startsWith('~/') || configured.startsWith('~\\') ? path.join(os.homedir(), configured.slice(2)) : configured;
+    return path.resolve(os.homedir(), expanded);
+  }
+
+  private historyOptions(): { enabled: boolean; retentionMs: number } {
+    const days = this.config.history?.retentionDays ?? 365;
+    return { enabled: this.config.history?.enabled !== false, retentionMs: (Number.isFinite(days) ? Math.max(1, days) : 365) * 86_400_000 };
+  }
+
+  private applyHistoryConfig(): void {
+    this.history.configure(this.historyDirectory(), this.historyOptions());
+    this.history.prune();
+    this.log(`usage history: ${this.history.enabled ? this.history.location : 'off'}`);
+  }
+
+  /** A switch made by hand or followed from outside; rotation records its own switches with more detail. */
+  private recordSwitch(provider: AuthProvider, previous: string | undefined, id: string, reason: 'manual' | 'external'): void {
+    if (previous === id) { return; }
+    const stayedMs = previous ? this.automation.stayed(provider, previous) : undefined;
+    this.history.record({ type: 'switch', provider, reason, automatic: false,
+      ...(previous ? { from: this.automation.account(provider, previous) } : {}), to: this.automation.account(provider, id),
+      ...(stayedMs !== undefined ? { stayedMs } : {}),
+      fromUsage: previous ? usageSnapshot(this.automation.usage(provider, previous)) : undefined,
+      toUsage: usageSnapshot(this.automation.usage(provider, id)) });
+  }
+
+  /** Follows a native login switched outside the service and records it; returns whether the active profile changed. */
+  private async followNative(provider: AuthProvider): Promise<boolean> {
+    const previous = this.store.activeProfileId(provider);
+    const changed = await this.store.followNative(provider);
+    if (changed) {
+      const current = this.store.activeProfileId(provider);
+      if (current) { this.recordSwitch(provider, previous, current, 'external'); }
+    }
+    return changed;
+  }
+
+  historyInfo(): HistoryInfo {
+    const files = this.history.files();
+    const oldest = files.length ? historyFileStart(path.basename(files[0])) : undefined;
+    return { enabled: this.history.enabled, location: this.history.location, retentionDays: Math.round(this.history.retentionMs / 86_400_000), files,
+      ...(oldest !== undefined ? { oldestAt: new Date(oldest).toISOString() } : {}) };
+  }
+
+  /** The last `days` days, or everything kept, summarized with the rotation thresholds in effect. */
+  historySummary(days?: number): HistorySummaryResult {
+    const files = this.history.files();
+    const now = this.now();
+    const oldest = files.length ? historyFileStart(path.basename(files[0])) : undefined;
+    const since = days ? now - days * 86_400_000 : oldest ?? now;
+    const thresholds: Partial<Record<AuthProvider, Thresholds>> = {};
+    for (const provider of PROVIDERS) {
+      const settings = automationSettings(this.config, provider);
+      thresholds[provider] = { fiveHourThresholdPercent: settings.fiveHourThresholdPercent, weeklyThresholdPercent: settings.weeklyThresholdPercent };
+    }
+    const summary = summarizeHistory(this.history.events(since), { since, until: now, thresholds });
+    const label = days ? `the last ${days} days` : 'everything kept';
+    const markdown = renderHistoryReport(summary, { label, location: this.history.location, files: files.length, retentionDays: Math.round(this.history.retentionMs / 86_400_000) });
+    return { markdown, since: new Date(since).toISOString(), until: new Date(now).toISOString(), label, summary };
+  }
+
+  historyExport(kind: HistoryExportKind): { text: string; extension: string } {
+    if (kind === 'readings') { return { text: readingsCsv(this.history.events()), extension: 'csv' }; }
+    if (kind === 'events') { return { text: eventsCsv(this.history.events()), extension: 'csv' }; }
+    return { text: this.history.files().map((file) => { try { return fs.readFileSync(file, 'utf8'); } catch { return ''; } }).join(''), extension: 'jsonl' };
   }
 
   /** Starts the periodic work; `tick` runs at once and then every minute. */
@@ -223,11 +307,12 @@ export class AccountService {
     this.reloadConfigIfChanged();
     for (const provider of PROVIDERS) {
       try {
-        if (await this.store.followNative(provider)) { this.emit({ event: 'stateChanged', provider }); }
+        if (await this.followNative(provider)) { this.emit({ event: 'stateChanged', provider }); }
       } catch (error) { this.log(`${provider}: could not follow the native login: ${error instanceof Error ? error.message : String(error)}`); }
     }
     await this.automation.tick();
     await this.retryClaudeAccountMetadata();
+    this.history.pruneIfDue();
   }
 
   info(): ServiceInfo {
@@ -242,7 +327,7 @@ export class AccountService {
   }
 
   async providerView(provider: AuthProvider): Promise<ProviderView> {
-    try { if (await this.store.followNative(provider)) { this.emit({ event: 'stateChanged', provider }); } } catch { /* Reported by tick. */ }
+    try { if (await this.followNative(provider)) { this.emit({ event: 'stateChanged', provider }); } } catch { /* Reported by tick. */ }
     const activeProfileId = this.store.activeProfileId(provider);
     const profiles = this.store.profiles(provider).map((profile, index) => this.profileView(provider, profile, index + 1, profile.id === activeProfileId));
     const settings = automationSettings(this.config, provider);
@@ -281,7 +366,10 @@ export class AccountService {
   // --- activation and its verification -------------------------------------------------------------------
 
   private async activate(provider: AuthProvider, id: string, automatic: boolean): Promise<ActivationOutcome> {
+    const previous = this.store.activeProfileId(provider);
     const outcome = await this.store.activateProfile(provider, id, automatic);
+    // Rotation records its switches itself, with the candidates it considered.
+    if (!automatic) { this.recordSwitch(provider, previous, id, 'manual'); }
     this.emit({ event: 'activated', provider, id: outcome.profile.id, name: outcome.profile.name, email: outcome.profile.email, automatic,
       accountChanged: outcome.accountChanged, level: outcome.level, message: outcome.message });
     this.emit({ event: 'stateChanged', provider });
@@ -360,6 +448,7 @@ export class AccountService {
     if (JSON.stringify(next) === JSON.stringify(this.config)) { return; }
     this.config = next;
     this.log('config: reloaded config.json after it changed on disk');
+    this.applyHistoryConfig();
     this.emit({ event: 'configChanged', config: this.config });
   }
 
@@ -373,6 +462,7 @@ export class AccountService {
     const changed = Object.keys(values).filter((key) => JSON.stringify(getValue(this.config, key)) !== JSON.stringify(getValue(next, key)));
     this.config = next;
     this.log(`config: changed ${changed.map((key) => `${key} = ${JSON.stringify(getValue(next, key))}`).join(', ')}`);
+    if (changed.some((key) => key.startsWith('history.'))) { this.applyHistoryConfig(); }
     this.emit({ event: 'configChanged', config: this.config });
     // A switch that was just turned on should act now, not in a minute.
     void this.automation.tick();
@@ -596,6 +686,13 @@ export class AccountService {
         const usage = deserializeUsage({ usage: params.usage as SerializedUsage });
         if (usage) { this.automation.hintLimit(provider, usage as LiveUsage); }
         return { ok: true };
+      }
+      case 'history.info': return this.historyInfo();
+      case 'history.summary': return this.historySummary(typeof params.days === 'number' && params.days > 0 ? params.days : undefined);
+      case 'history.export': {
+        const kind = params.kind;
+        if (kind !== 'readings' && kind !== 'events' && kind !== 'jsonl') { throw new Error('Choose what to export: readings, events or jsonl.'); }
+        return this.historyExport(kind);
       }
       case 'config.get': return this.config;
       case 'config.set': return this.setConfig(objectParams(params.values));

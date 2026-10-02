@@ -71,6 +71,10 @@
         "title": "AI Usage: Open Log"
       },
       {
+        "command": "aiUsage.showUsageHistory",
+        "title": "AI Usage: Show Usage History…"
+      },
+      {
         "command": "aiUsage.manageAuthProfiles",
         "title": "AI Usage: Manage Claude/Codex Authentication Profiles"
       },
@@ -7672,8 +7676,34 @@
         }
       },
       {
-        "title": "AI agents (experimental)",
+        "title": "Usage history",
         "order": 8,
+        "properties": {
+          "aiUsage.history.enabled": {
+            "type": "boolean",
+            "default": true,
+            "order": 1,
+            "markdownDescription": "**Usage history.** The account service records every reading of every saved Claude and Codex account, every account switch (by hand, or by rotation together with the accounts it considered and what it did with each), the rotation sweeps that switched nothing, the stretches with every account at its limit, and checks that start or stop failing, so account use and the rotation rules can be analysed later. **AI Usage: Show Usage History…** and `ai-usage history` summarize a period and export CSV or JSON Lines. One file per month in `#aiUsage.history.directory#`, kept for `#aiUsage.history.retentionDays#`. No login material is recorded. Mirrored to the service's `history.enabled` setting."
+          },
+          "aiUsage.history.retentionDays": {
+            "type": "number",
+            "default": 365,
+            "minimum": 1,
+            "order": 2,
+            "markdownDescription": "**How long usage history is kept, in days.** A month's file is deleted once the whole month is older than this; 365 keeps a year. Mirrored to the service's `history.retentionDays` setting."
+          },
+          "aiUsage.history.directory": {
+            "type": "string",
+            "default": "",
+            "order": 3,
+            "scope": "machine",
+            "markdownDescription": "**Where usage history is written.** Empty: `usage-history` under the account service's home (`~/.ai-usage` on the computer the service runs on, the remote host in a remote session); the history menu shows the path. Supports `~`; a relative path resolves from your user home. Point it at a synced or shared folder to analyse the files elsewhere. A changed directory is used from the next event on; existing files are not moved. Mirrored to the service's `history.directory` setting."
+          }
+        }
+      },
+      {
+        "title": "AI agents (experimental)",
+        "order": 9,
         "properties": {
           "aiUsage.mcp.enabled": {
             "type": "boolean",
@@ -7697,7 +7727,7 @@
       },
       {
         "title": "Advanced",
-        "order": 9,
+        "order": 10,
         "properties": {
           "aiUsage.chatChips.debug": {
             "type": "boolean",

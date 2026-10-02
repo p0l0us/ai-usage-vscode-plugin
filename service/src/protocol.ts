@@ -164,6 +164,14 @@ export type KeepAliveAllResult = {
   cancelled: boolean;
 };
 
+/** `history.info`: where the usage history is and how much of it there is. */
+export type HistoryInfo = { enabled: boolean; location: string; retentionDays: number; files: string[]; oldestAt?: string };
+
+/** `history.summary`: the period summarized as a Markdown document, with the figures behind it. */
+export type HistorySummaryResult = { markdown: string; since: string; until: string; label: string; summary: unknown };
+
+export type HistoryExportKind = 'readings' | 'events' | 'jsonl';
+
 /** `usage.read`: a fresh reading of one profile, without a keep-alive prompt. */
 export type UsageReadResult = KeepAliveResult & { profile: { id: string; name: string; email?: string } };
 

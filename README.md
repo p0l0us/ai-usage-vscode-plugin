@@ -167,6 +167,14 @@ home and stores the new login in the profile, replacing the active login only wh
 ![Active Claude profile row with its 5h, 7d and 7d Fable usage and reset countdowns](images/screenshots/accounts-row-active.png)
 ![Claude profile row whose last keep-alive failed, marked with a warning](images/screenshots/accounts-row-warning.png)
 
+**Usage history.** Every reading of every saved account, every switch (by hand, or by rotation with the accounts it
+considered and why it did or did not pick them), the sweeps that switched nothing and the stretches with every
+account at its limit are kept by the service for a year in one file per month, so you can see how much of each
+account you use and how well rotation works. **AI Usage: Show Usage History…** (also **Usage history** in the
+details panel) and `ai-usage history` summarize a period, with an estimate of how many accounts your weekly use
+needs, and export CSV or JSON Lines. Settings: `aiUsage.history.*`; file format and figures in
+[Usage history](docs/CONFIGURATION.md#usage-history).
+
 Models, keep-alive periods, rotation thresholds, CLI paths, dedicated homes and usage sources are configurable
 under `aiUsage.claude.*` and `aiUsage.codex.*`; see
 [account automation settings](docs/CONFIGURATION.md#account-automation).
