@@ -14,6 +14,7 @@ import {
   writeTextAtomically
 } from './authFiles';
 import { claudeAccountFile, CredentialIdentity, resolveCredentialIdentity } from './accountIdentity';
+import { explainAccountProblem } from './accountProbe';
 import { openAiUsageSettings } from './settingsLink';
 import { ExportedProfile, ImportKind, ImportPlan, parseProfileExport, planImport, serializeProfileExport, uniqueName } from './profileTransfer';
 import type { ProfileLimitState } from './accountAutomation';
@@ -77,7 +78,7 @@ type ProfileItem = vscode.QuickPickItem & {
   profile?: ProfileMetadata;
   /** Set when the profile has nothing left in any window; selecting it is a no-op warning, not an activation. */
   readOnly?: boolean;
-  /** The login error of the profile's last check; selecting it sends a keep-alive instead of activating. */
+  /** The login error of the profile's last check; selecting it offers to renew the login, check it again or activate it anyway. */
   loginProblem?: string;
   action?: 'save' | 'import' | 'transfer' | 'signIn' | 'rename' | 'delete' | 'keepAliveNow' | 'settings' | 'serviceSettings' | 'back';
 };
@@ -200,6 +201,12 @@ export class AuthProfileManager {
 
   /** Set by extension.ts: the login error of a profile's last check, so the list marks it and re-checks it on click. */
   loginProblem: (provider: AuthProvider, id: string) => string | undefined = () => undefined;
+
+  /**
+   * Set by extension.ts: told after the active profile changed, by an activation here (by hand, or `automatic` by
+   * rotation) or by following a switch made outside this window (`external`: another window or the vendor CLI).
+   */
+  onActivated?: (provider: AuthProvider, change: { previous?: ProfileMetadata; profile: ProfileMetadata; automatic: boolean; external: boolean }) => void;
 
   /** Each project profile file as last read, by path, so an unchanged file is neither parsed nor written again. */
   private readonly projectFiles = new Map<string, { mtimeMs: number; entries: ExportedProfile[]; error?: string }>();
@@ -476,6 +483,7 @@ export class AuthProfileManager {
       providerState.activeProfileId = owner.id;
       await this.updateState(state);
       this.log(`${provider}: the native login was switched outside this window to profile "${owner.name}"${previous ? ` (was "${previous.name}")` : ''}; following it`);
+      this.onActivated?.(provider, { previous, profile: owner, automatic: false, external: true });
     }
     // Set after updateState, which forgets the last check.
     this.nativeChecked[provider] = nativeKey;
@@ -542,10 +550,13 @@ export class AuthProfileManager {
             continue;
           }
           if (item.loginProblem) {
-            // A login whose last check failed to authenticate is checked again rather than activated: the keep-alive
-            // refreshes an expired token, and when the login is dead the hook offers a new sign-in instead.
-            await hooks?.sendKeepAlive?.(provider, [item.profile]);
-            continue;
+            // A login whose last check failed to authenticate is not activated right away; the user chooses between
+            // renewing it with a new sign-in, checking it again with a keep-alive, which refreshes an expired
+            // token, and activating it as it is.
+            const choice = await this.loginProblemMenu(provider, item.profile, item.loginProblem);
+            if (choice === 'renew') { await hooks?.signIn?.(provider, item.profile); continue; }
+            if (choice === 'keepAlive') { await hooks?.sendKeepAlive?.(provider, [item.profile]); continue; }
+            if (choice !== 'select') { continue; }
           }
           // Re-selecting the login that is already active and already written changes nothing for running processes.
           const unchanged = this.activeProfileId(provider) === item.profile.id && await this.matchesNative(provider, item.profile.id);
@@ -1117,9 +1128,11 @@ export class AuthProfileManager {
       return false;
     }
     const state = this.state();
+    const previous = state[provider].profiles.find((candidate) => candidate.id === state[provider].activeProfileId);
     state[provider].activeProfileId = profile.id;
     await this.updateState(state);
     this.log(`${provider}: activated authentication profile "${profile.name}"`);
+    this.onActivated?.(provider, { previous, profile, automatic, external: false });
     // The file is written and the profile is active either way; verification only decides what to tell the user.
     let verification: ActivationVerification | undefined;
     try {
@@ -1218,6 +1231,39 @@ export class AuthProfileManager {
     items.push({ label: '$(arrow-left) Back', description: `${TITLES[provider]} accounts` });
     const picked = await vscode.window.showQuickPick(items, { title });
     return picked?.profile;
+  }
+
+  /**
+   * What to do about a profile whose last check failed to authenticate: renew the login by signing in again in a
+   * folder inside the keep-alive home, send a keep-alive to check it again, activate it as it is, or go back to
+   * the accounts list. Undefined on Back or when the menu was dismissed.
+   */
+  private async loginProblemMenu(provider: AuthProvider, profile: ProfileMetadata, problem: string): Promise<'renew' | 'keepAlive' | 'select' | undefined> {
+    const explained = explainAccountProblem(problem);
+    const items: Array<vscode.QuickPickItem & { choice?: 'renew' | 'keepAlive' | 'select' }> = [
+      {
+        label: '$(sign-in) Renew the login…',
+        detail: `Runs the ${TITLES[provider]} CLI login in a terminal with a separate home inside the keep-alive home and stores the new login in “${profile.name}”. The active login is replaced only when this profile is the active one.`,
+        choice: 'renew'
+      },
+      {
+        label: '$(play) Try a keep-alive',
+        detail: 'Sends the configured keep-alive prompt now and refreshes usage statistics. An expired token is refreshed when it still can be; a dead login is reported with a sign-in offer.',
+        choice: 'keepAlive'
+      },
+      {
+        label: '$(check) Select anyway',
+        detail: `Makes “${profile.name}” the active ${TITLES[provider]} login as it is. Its last check failed to authenticate, so the CLI may refuse it until the login is renewed.`,
+        choice: 'select'
+      },
+      { label: '', kind: vscode.QuickPickItemKind.Separator },
+      { label: '$(arrow-left) Back', description: `${TITLES[provider]} accounts` }
+    ];
+    const picked = await vscode.window.showQuickPick(items, {
+      title: `AI Usage · ${TITLES[provider]} account “${profile.name}” · Login problem`,
+      placeHolder: explained.advice ? `${explained.label}. ${explained.advice}` : explained.label
+    });
+    return picked?.choice;
   }
 
   /** Like `pickSaved`, with an extra "All accounts" entry on top; empty when nothing was picked. */

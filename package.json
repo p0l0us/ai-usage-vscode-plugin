@@ -2,7 +2,7 @@
   "name": "ai-usage-vscode-plugin",
   "displayName": "AI subscription management and usage",
   "description": "Manage your Claude Code, Codex and GitHub Copilot subscriptions and see what is left of them: switch between saved accounts without signing in again, keep them warm, rotate on exhaustion, and read live 5h/7d windows, premium requests and org billing in the status bar and chat input. Open source, contributions welcome.",
-  "version": "0.0.36",
+  "version": "0.0.37",
   "publisher": "p0l0us",
   "license": "GPL-3.0-only",
   "repository": {
@@ -69,6 +69,10 @@
       {
         "command": "aiUsage.openLog",
         "title": "AI Usage: Open Log"
+      },
+      {
+        "command": "aiUsage.showUsageHistory",
+        "title": "AI Usage: Show Usage History…"
       },
       {
         "command": "aiUsage.manageAuthProfiles",
@@ -7658,8 +7662,34 @@
         }
       },
       {
-        "title": "Advanced",
+        "title": "Usage history",
         "order": 8,
+        "properties": {
+          "aiUsage.history.enabled": {
+            "type": "boolean",
+            "default": true,
+            "order": 1,
+            "markdownDescription": "**Usage history.** Record every reading of every saved Claude and Codex account, every account switch (by hand, or by rotation together with the accounts it considered and what it did with each), the rotation sweeps that switched nothing, the stretches with every account at its limit, and checks that start or stop failing, so account use and the rotation rules can be analysed later. **AI Usage: Show Usage History…** summarizes a period and exports CSV or JSON Lines. One file per month in `#aiUsage.history.directory#`, kept for `#aiUsage.history.retentionDays#`. No login material is recorded."
+          },
+          "aiUsage.history.retentionDays": {
+            "type": "number",
+            "default": 365,
+            "minimum": 1,
+            "order": 2,
+            "markdownDescription": "**How long usage history is kept, in days.** A month's file is deleted once the whole month is older than this; 365 keeps a year."
+          },
+          "aiUsage.history.directory": {
+            "type": "string",
+            "default": "",
+            "order": 3,
+            "scope": "machine",
+            "markdownDescription": "**Where usage history is written.** Empty: `usage-history` under the extension's global storage on the computer the extension runs on (the remote host in a remote session); the history menu shows the path. Supports `~`; a relative path resolves from your user home. Point it at a synced or shared folder to analyse the files elsewhere. A changed directory is used from the next event on; existing files are not moved."
+          }
+        }
+      },
+      {
+        "title": "Advanced",
+        "order": 9,
         "properties": {
           "aiUsage.chatChips.debug": {
             "type": "boolean",

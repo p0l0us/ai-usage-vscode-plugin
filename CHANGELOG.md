@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.0.37 (2026-10-03)
+
+- **Usage history.** Every reading of every saved Claude and Codex account, every account switch (by hand, or by
+  rotation together with the accounts it considered and what it did with each: skipped for a failed check, still at
+  its limit, not clearly better, exhausted on a fresh reading, failed its keep-alive, or chosen), the rotation sweeps
+  that spent endpoint calls without switching, the stretches with every account at its limit and when they ended, and
+  checks that start or stop failing are appended to one JSON Lines file per month under the extension's global storage
+  (`aiUsage.history.directory` moves them; `~` is supported), kept for a year by default
+  (`aiUsage.history.retentionDays`) and on by default (`aiUsage.history.enabled`). No login material is written.
+  **AI Usage: Show Usage History…**, also **Usage history** in the details panel, summarizes the last 7, 30 or 90 days
+  or everything kept as a Markdown document: per account the time as the active login, the weekly cycles seen with
+  their mean peak, how many weeks and 5-hour cycles reached the limit, readings and failed checks; per service the
+  switches by reason with the median stay, how long every account was at its limit at once, and the sweeps that
+  switched nothing; and an estimate of how many accounts the observed weekly use needs. The same menu exports the
+  readings, or the switches and sweeps, as CSV, and everything as JSON Lines. Details:
+  [Usage history](docs/CONFIGURATION.md#usage-history).
+- The stretch with every account at its limit now also ends when the active account's status bar reading drops below
+  its thresholds, not only when a sweep reads it again, so the next such stretch is reported again.
+- Choosing a profile marked **Login problem** in the Accounts menu no longer sends a keep-alive straight away. It
+  opens a menu that names the problem and offers **Renew the login…**, which runs the CLI login in a terminal with a
+  separate home inside the keep-alive home and stores the new login in that profile, **Try a keep-alive**, which is
+  what choosing the profile did before, **Select anyway**, which activates the login as it is, and **Back**.
+
 ## 0.0.36 (2026-10-01)
 
 - Rotation no longer re-reads an account whose stored reading is still at a threshold with that window's reset

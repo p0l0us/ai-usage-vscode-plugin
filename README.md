@@ -131,13 +131,22 @@ the menu shows what each one is set to.
 
 Each profile row carries the outcome of its last check: usage per window with the reset countdown, the check time,
 and a warning when the keep-alive or the usage check failed. An account whose login failed (expired or revoked) is
-marked **Login problem**; choosing it sends a keep-alive instead of activating it, which refreshes an expired token,
-and when the login cannot be refreshed the failure notification offers **Sign in again**. The same sign-in is
-available for any profile as **Sign in again…** under Manage: it runs the CLI login in a terminal with a separate
-home and stores the new login in the profile, replacing the active login only when that profile is the active one.
+marked **Login problem**; choosing it opens a small menu instead of activating it: **Renew the login…** runs the CLI
+login in a terminal with a separate home inside the keep-alive home and stores the new login in the profile,
+**Try a keep-alive** sends a keep-alive, which refreshes an expired token and, when the login cannot be refreshed,
+offers **Sign in again** in its failure notification, **Select anyway** activates the login as it is, and **Back**
+returns to the accounts. The same sign-in is available for any profile as **Sign in again…** under Manage; either
+way the active login is replaced only when that profile is the active one.
 
 ![Active Claude profile row with its 5h, 7d and 7d Fable usage and reset countdowns](images/screenshots/accounts-row-active.png)
 ![Claude profile row whose last keep-alive failed, marked with a warning](images/screenshots/accounts-row-warning.png)
+
+**Usage history.** Every reading of every saved account, every switch (by hand, or by rotation with the accounts it
+considered and why it did or did not pick them), the sweeps that switched nothing and the stretches with every
+account at its limit are kept for a year in one file per month, so you can see how much of each account you use and
+how well rotation works. **AI Usage: Show Usage History…** (also **Usage history** in the details panel) summarizes
+a period, with an estimate of how many accounts your weekly use needs, and exports CSV or JSON Lines. Settings:
+`aiUsage.history.*`; file format and figures in [Usage history](docs/CONFIGURATION.md#usage-history).
 
 Models, keep-alive periods, rotation thresholds, CLI paths, dedicated homes and usage sources are configurable
 under `aiUsage.claude.*` and `aiUsage.codex.*`; see

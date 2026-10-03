@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { AccountAutomation, atLimit, eligibleAccount, modelWindowFilter, rotationScore } = require('../out/accountAutomation');
+const { UsageHistory } = require('../out/usageHistory');
 
 const HOUR = 3600000;
 // A window is a plain percentage ("5h", then "7d") or [label, percent, hours until reset].
@@ -49,11 +50,17 @@ function fixture(t, options = {}) {
   const make = () => {
     const service = new AccountAutomation(directory, profiles, p => settings[p], async () => {}, m => messages.push(m), probe, () => now);
     service.onAccountProblem = (...args) => problems.push(args);
+    // With `history`, every instance appends to one history under the state directory, as the windows of a host do.
+    if (options.history) {
+      service.history = new UsageHistory(path.join(directory, 'history'), { enabled: true, retentionMs: 365 * 86400000 }, m => messages.push(m), () => now);
+    }
     return service;
   };
   const service = make();
   t.after(() => service.dispose());
   return { service, make, options, active, values, calls, switches, refreshed, settings, messages, problems,
+    /** Every recorded history event, oldest first. */
+    events: () => service.history ? [...service.history.events()] : [],
     observe: (provider, percents, id = active[provider]) => service.observe(provider, id, usage(provider, percents, now)),
     /** Cache every account's configured reading, as a keep-alive sweep would. */
     observeAll: provider => Object.entries(values).forEach(([id, percents]) =>
@@ -626,4 +633,102 @@ test('a keep-alive by hand gives up on the lock after its wait, and at once when
   });
   await f.service.tick();
   assert.ok(f.calls.some(call => call[1] === 'b'), JSON.stringify(f.calls));
+});
+
+test('the history records the readings of a sweep and the switch with every candidate and its outcome', async t => {
+  const f = fixture(t, { history: true, values: { a: [10, 99.5], b: [99.5, 5] }, settings: { codex: { autoRotate: true } } });
+  f.observe('codex', [10, 99.5]);
+  await f.service.tick();
+  assert.deepEqual(f.switches, [['codex', 'c', true]]);
+  const events = f.events();
+  // c was read and then verified with a keep-alive; the second reading showed the same figures and is not repeated.
+  assert.deepEqual(events.map(e => [e.type, e.type === 'reading' ? `${e.account.id}:${e.source}:${e.active}` : e.reason]),
+    [['reading', 'a:status:true'], ['reading', 'b:rotation:false'], ['reading', 'c:rotation:false'], ['switch', 'limit']]);
+  const sw = events[3];
+  assert.deepEqual([sw.from, sw.to, sw.automatic, sw.calls, sw.stayedMs], [{ id: 'a', name: 'a' }, { id: 'c', name: 'c' }, true, 3, undefined]);
+  assert.deepEqual(sw.settings, { strategy: 'sequential', trigger: 'limit', fiveHourThresholdPercent: 99.5, weeklyThresholdPercent: 99.5 });
+  assert.deepEqual(sw.fromUsage.windows.map(w => w.usedPercent), [10, 99.5]);
+  assert.deepEqual(sw.toUsage.windows.map(w => w.usedPercent), [20, 20]);
+  assert.deepEqual(sw.candidates.map(c => [c.account.id, c.usable, c.outcome, c.usage?.windows.map(w => w.usedPercent)]),
+    [['b', false, 'ineligible', [99.5, 5]], ['c', false, 'chosen', [20, 20]]]);
+});
+
+test('the history gets one exhausted event per stretch with every account at its limit, and its recovery', async t => {
+  const f = fixture(t, { history: true, values: { a: [10, 97], b: [10, 98], c: [10, 100] },
+    settings: { codex: { autoRotate: true, fiveHourThresholdPercent: 100, weeklyThresholdPercent: 90 } } });
+  const notices = [];
+  f.service.onNoCandidate = () => notices.push(1);
+  f.observeAll('codex');
+  await f.service.tick();
+  let events = f.events().filter(e => e.type !== 'reading');
+  assert.equal(events.length, 1);
+  assert.deepEqual([events[0].type, events[0].active.id, events[0].reached, typeof events[0].nextCandidateAt],
+    ['exhausted', 'a', [{ label: '7d', usedPercent: 97, threshold: 90 }], 'string']);
+  // Both candidates were still at their limit by their stored readings, so nothing was spent on them.
+  assert.deepEqual(events[0].candidates.map(c => [c.account.id, c.outcome]), [['b', 'limited'], ['c', 'limited']]);
+  // Another sweep in the same stretch adds nothing; the stretch ends when the active account reads below its thresholds.
+  f.advance(20 * 60000);
+  f.observe('codex', [10, 97]);
+  await f.service.tick();
+  assert.equal(f.events().filter(e => e.type !== 'reading').length, 1);
+  f.advance(60 * 60000);
+  f.observe('codex', [10, 50]);
+  await f.service.tick();
+  events = f.events().filter(e => e.type !== 'reading');
+  assert.deepEqual(events.map(e => e.type), ['exhausted', 'recovered']);
+  assert.deepEqual([events[1].by, events[1].afterMs, events[1].active.id], ['reset', 80 * 60000, 'a']);
+  // Reaching the limit again starts a new stretch, which is reported again.
+  f.advance(60 * 60000);
+  f.observe('codex', [10, 97]);
+  await f.service.tick();
+  assert.equal(f.events().filter(e => e.type === 'exhausted').length, 2);
+  assert.equal(notices.length, 2);
+});
+
+test('the history records a check when it starts failing and when it works again', async t => {
+  const f = fixture(t, { history: true, values: { a: [10, 10], b: [10, 10], c: [10, 10] },
+    keepAliveErrors: { b: 'Keep-alive CLI exited with code 1: Your workspace is out of credits.' }, settings: { codex: { enabled: true } } });
+  await f.service.tick();
+  f.options.keepAliveErrors = {};
+  f.advance(6 * 3600000);
+  await f.service.tick();
+  const checks = f.events().filter(e => e.type === 'check');
+  assert.deepEqual(checks.map(c => [c.account.id, c.ok, c.keepAlive, c.problem]), [['b', false, true, 'Insufficient credits'], ['b', true, true, undefined]]);
+  assert.equal(checks[0].error, 'Keep-alive CLI exited with code 1: Your workspace is out of credits.');
+  // Three accounts read twice, six hours apart: unchanged figures are repeated after an hour.
+  assert.equal(f.events().filter(e => e.type === 'reading').length, 6);
+});
+
+test('a sweep that spends calls without switching is recorded with what it found', async t => {
+  const f = fixture(t, { history: true, ids: ['a', 'b', 'c', 'd', 'e'], values: afternoon,
+    settings: { claude: { autoRotate: true, strategy: 'evenPace', trigger: 'proactive', minStayMs: 0 } } });
+  f.active.claude = 'c';
+  f.observeAll('claude');
+  f.values.e = [['5h', 53, 4], ['7d', 95, 96], ['7d Fable', 95, 96]];
+  await f.service.tick();
+  assert.deepEqual(f.switches, []);
+  const sweeps = f.events().filter(e => e.type === 'sweep');
+  assert.equal(sweeps.length, 1);
+  assert.deepEqual([sweeps[0].outcome, sweeps[0].active.id, sweeps[0].calls, sweeps[0].settings.strategy, sweeps[0].settings.minStayMinutes],
+    ['noBetterCandidate', 'c', 1, 'evenPace', 0]);
+  const e = sweeps[0].candidates.find(c => c.account.id === 'e');
+  assert.deepEqual([e.outcome, e.usable, typeof e.score, typeof e.freshScore, e.usage.windows[1].usedPercent], ['notBetter', true, 'number', 'number', 95]);
+  assert.ok(sweeps[0].candidates.filter(c => c.account.id !== 'e').every(c => c.outcome === 'notBetter' && c.usage === undefined));
+});
+
+test('a proactive switch is recorded with the stay it ended', async t => {
+  const f = fixture(t, { history: true, ids: ['a', 'b', 'c', 'd', 'e'], values: afternoon,
+    settings: { claude: { autoRotate: true, strategy: 'evenPace', trigger: 'proactive', minStayMs: 30 * 60000 } } });
+  f.active.claude = 'c';
+  f.observeAll('claude');
+  await f.service.tick();
+  f.advance(31 * 60000);
+  f.observeAll('claude');
+  await f.service.tick();
+  assert.deepEqual(f.switches, [['claude', 'e', true]]);
+  const sw = f.events().find(e => e.type === 'switch');
+  assert.deepEqual([sw.reason, sw.from.id, sw.to.id, sw.stayedMs, sw.settings.trigger, sw.settings.minStayMinutes],
+    ['proactive', 'c', 'e', 31 * 60000, 'proactive', 30]);
+  assert.equal(sw.candidates.find(c => c.account.id === 'e').outcome, 'chosen');
+  assert.equal(f.service.stayed('claude', 'e'), 0);
 });

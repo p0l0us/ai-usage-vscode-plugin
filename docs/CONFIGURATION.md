@@ -176,9 +176,11 @@ user-profile directory's ACL on Windows. For Claude only the `claudeAiOauth` obj
 entries remain untouched. Codex `auth.json` is replaced as a unit. When the native active login can be matched
 safely to its saved profile (Codex account id, Claude organization, or an identical refresh token), refreshed token data
 is captured before switching away. If a saved profile stops working with "Login expired" or "Invalid token", use
-**Sign in again…** in its Accounts menu, or choose the profile itself: an account marked **Login problem** is sent a
-keep-alive instead of being activated, and when the login cannot be refreshed the failure notification offers
-**Sign in again**. The sign-in runs the vendor CLI's login in a terminal whose home is a folder inside the keep-alive
+**Sign in again…** in its Accounts menu, or choose the profile itself: an account marked **Login problem** is not
+activated but opens a menu with **Renew the login…** (the same sign-in), **Try a keep-alive** (a keep-alive refreshes
+an expired token, and when the login cannot be refreshed its failure notification offers **Sign in again**),
+**Select anyway** (activates the login as it is) and **Back**. The sign-in runs the vendor CLI's login in a
+terminal whose home is a folder inside the keep-alive
 home, so the active login is not touched; the new login is stored in the profile, and written to the native file
 only when that profile is the active one. While the sign-in is pending, that service's keep-alives and rotation
 wait for it, and a keep-alive started by hand says that a sign-in is in progress; the wait ends with the sign-in,
@@ -403,6 +405,45 @@ Full description with worked examples: **[Account rotation: strategies and thres
 
 CLI behavior references: [OpenAI Docs: noninteractive Codex](https://learn.chatgpt.com/docs/non-interactive-mode)
 and [Claude CLI reference](https://code.claude.com/docs/en/cli-reference).
+
+## Usage history
+
+On by default (`aiUsage.history.enabled`), the extension appends what it learns about the saved Claude and Codex
+accounts to one JSON Lines file per month, `history-YYYY-MM.jsonl`, in `usage-history` under its global storage on
+the computer it runs on (the remote host in a remote session; **AI Usage: Show Usage History…** shows the path), or
+in `aiUsage.history.directory` (`~` and paths relative to your home work). A file is deleted once its whole month is
+older than `aiUsage.history.retentionDays` (365). No login material is written: an account appears as its profile
+id, name and email. Every window on the host appends to the same files; an `index.json` beside them keeps the last
+recorded reading per account and the last switch per service, so the windows do not each write the same reading.
+
+Each line is one event with `t` (when it was written, ISO 8601), `provider` and `type`:
+
+| `type` | When | What it holds |
+| --- | --- | --- |
+| `reading` | A saved account was read by the status bar (`source: status`), a keep-alive (`keepAlive`), a rotation sweep (`rotation`) or another check (`check`), and its figures changed, or an hour passed since the last recorded reading of that account | `account`, `active` (whether it was the active login), `usage` with the vendor's `at`, `plan` and `windows` (`label`, `usedPercent`, `resetsAt`) |
+| `switch` | The active account changed | `from`, `to`, `reason` (`limit`, `proactive`, `manual`, or `external` for a switch made in another window or with the vendor CLI), `automatic`, `stayedMs` (how long `from` had been active), `fromUsage`, `toUsage`; for rotation also `settings` (strategy, trigger, thresholds, minimum stay), `calls` (endpoint calls the sweep spent) and `candidates`: every other account in the order the strategy preferred them, with its stored `score`, whether it looked `usable`, its fresh `usage` and `freshScore` when it was read, and its `outcome`: `chosen`, `problem` (its last check failed), `limited` (still at a threshold with the reset ahead), `notBetter` (not clearly better for a proactive switch), `ineligible` (at a threshold on the fresh reading, or a window missing), `keepAliveFailed`, `notReached` |
+| `sweep` | A rotation sweep spent endpoint calls and switched nothing | `outcome` (`activeRecovered`: the stored reading was out of date; `noBetterCandidate`; `noCandidate`), `usage`, `candidates`, `calls`, `settings` |
+| `exhausted` | The active account reached a threshold and no saved account could take over; once per such stretch | `active`, `usage`, `reached` (the windows at their threshold), `candidates`, `nextCandidateAt` (the earliest reset among the candidates still at their limit) |
+| `recovered` | That stretch ended | `by` (`reset`: the active account read below its thresholds again; `switch`), `afterMs` |
+| `check` | An account check started failing, failed differently, or works again | `account`, `ok`, `keepAlive`, `error`, `problem` (the error in a few words) |
+
+**AI Usage: Show Usage History…** (also **Usage history** in the details panel) summarizes the last 7, 30 or 90 days
+or everything kept as a Markdown document: per account the time as the active login (measured between switches),
+the weekly cycles seen (one per reset; a cycle is complete once its reset has passed) with their mean peak and how
+many reached the limit, 5-hour cycles at the limit, readings and failed checks; per service the switches by reason
+with the median stay, the time with every account at its limit at once, the sweeps that switched nothing and the
+endpoint calls rotation spent; and an estimate of how many accounts the observed weekly use needs: the accounts'
+mean weekly peaks add up to the weekly demand in account-weeks, an account counts as full at 85%, and one more
+account than saved is needed whenever every account was at its limit at once. The estimate uses weekly windows only;
+5-hour bursts can still force switches, and a proactive strategy spreads use over accounts, so each account's peak
+understates what a single account would have used. The menu also exports the readings (one row per account, reading
+and window) or the other events as CSV, everything as JSON Lines, and opens the newest file.
+
+| Setting | Default | Purpose |
+| --- | --- | --- |
+| `aiUsage.history.enabled` | `true` | Record readings, switches, sweeps, exhausted stretches and check changes. |
+| `aiUsage.history.retentionDays` | `365` | Delete a month's file once the whole month is older than this. |
+| `aiUsage.history.directory` | *(empty)* | Where the files go; empty is `usage-history` under the extension's global storage. A changed directory is used from the next event on; existing files are not moved. |
 
 Copilot CLI bridge also exposes per-backend `subagentsEnabled` (default true in VS Code), `requestTimeoutMinutes`, and `toolTimeoutMinutes` (both default 60, range 1–1440). Native children delegate through Copilot’s tool relay. The `list_cli_subagents` tool shows native children and saved branches; `fork_cli_session` runs an analysis branch from a completed saved session.
 

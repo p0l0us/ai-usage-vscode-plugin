@@ -1,13 +1,16 @@
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { ApiCallBudget } from './apiBudget';
 import { registerBridgeIntegration } from './bridgeIntegration';
 import { registerBridgeModels } from './bridgeModels';
 import { AuthProvider, readNativeCredential } from './authFiles';
-import { ActivationChange, AuthProfileManager } from './authProfiles';
+import { ActivationChange, AuthProfileManager, ProfileMetadata } from './authProfiles';
 import { activateClaudeAccountMetadata, claudeAccountFileConfirms } from './accountIdentity';
 import { AccountAutomation, AutomationSettings, KeepAliveNowResult, LockWait, modelWindowFilter, RotationStrategy, RotationTrigger } from './accountAutomation';
+import { UsageHistory, eventsCsv, historyFileStart, readingsCsv, usageSnapshot } from './usageHistory';
+import { Thresholds, renderHistoryReport, summarizeHistory } from './usageHistoryReport';
 import { signInIsolated } from './accountLogin';
 import { explainAccountProblem, needsSignIn, probeAccount } from './accountProbe';
 import { SharedCache, deserializeUsage } from './cache';
@@ -625,6 +628,22 @@ export function activate(context: vscode.ExtensionContext): void {
       return probeAccount(provider, credential, settings, keepAlive, signal, provider === 'claude' ? claudeBudget : undefined);
     });
   context.subscriptions.push(automation);
+  // Readings, switches and rotation sweeps are appended to month files for later analysis (aiUsage.history.*).
+  const history = new UsageHistory(historyDirectory(context), historyOptions(), log);
+  automation.history = history;
+  history.prune();
+  log(`usage history: ${history.enabled ? history.location : 'off'}`);
+  // Switches by hand, and switches followed from outside this window; rotation records its own with more detail.
+  authProfiles.onActivated = (provider, change) => {
+    if (change.automatic || change.previous?.id === change.profile.id) { return; }
+    const account = (profile: ProfileMetadata) => ({ id: profile.id, name: profile.name, ...(profile.email ? { email: profile.email } : {}) });
+    const stayedMs = change.previous ? automation.stayed(provider, change.previous.id) : undefined;
+    history.record({ type: 'switch', provider, reason: change.external ? 'external' : 'manual', automatic: false,
+      ...(change.previous ? { from: account(change.previous) } : {}), to: account(change.profile),
+      ...(stayedMs !== undefined ? { stayedMs } : {}),
+      fromUsage: change.previous ? usageSnapshot(automation.usage(provider, change.previous.id)) : undefined,
+      toUsage: usageSnapshot(automation.usage(provider, change.profile.id)) });
+  };
   /**
    * Runs the vendor's login in a terminal with an isolated home and stores the result in the saved profile, replacing
    * the native login too when that profile is active. Resolves to whether the profile's login was replaced; every
@@ -701,6 +720,7 @@ export function activate(context: vscode.ExtensionContext): void {
     void automation.tick();
     void warnAboutStaleCodexProcesses();
     void retryClaudeAccountMetadata();
+    history.pruneIfDue();
     // Retries a blocked port and takes the proxy over when the window that served it has closed.
     void codexProxy.sync();
   }, 60_000);
@@ -818,6 +838,9 @@ export function activate(context: vscode.ExtensionContext): void {
     if (await automation.withPaused(() => authProfiles.importProfiles())) { void automation.tick(); }
   }));
   context.subscriptions.push(vscode.commands.registerCommand('aiUsage.openLog', () => output?.show(true)));
+  context.subscriptions.push(vscode.commands.registerCommand('aiUsage.showUsageHistory', () =>
+    showUsageHistory(history, () => ({ claude: automationSettings('claude', authProfiles), codex: automationSettings('codex', authProfiles) }))
+      .catch((error: unknown) => vscode.window.showErrorMessage(`AI Usage: could not show the usage history: ${error instanceof Error ? error.message : String(error)}`))));
   context.subscriptions.push(vscode.commands.registerCommand('aiUsage.openAgentsWindowSetup', () =>
     vscode.commands.executeCommand('workbench.action.openWalkthrough', `${context.extension.id}#${AGENTS_WINDOW_WALKTHROUGH}`, false)
   ));
@@ -975,6 +998,11 @@ export function activate(context: vscode.ExtensionContext): void {
     }
     if (event.affectsConfiguration('aiUsage.claudeConfig')) {
       syncClaudeSettings();
+    }
+    if (event.affectsConfiguration('aiUsage.history')) {
+      history.configure(historyDirectory(context), historyOptions());
+      history.prune();
+      log(`usage history: ${history.enabled ? history.location : 'off'}`);
     }
     if (
       event.affectsConfiguration('aiUsage.claude') ||
@@ -1395,7 +1423,7 @@ function buildTooltip(usage: LiveUsage, refreshError?: string, activeProfile?: s
 }
 
 type DetailItem = vscode.QuickPickItem & {
-  action?: 'refresh' | 'refreshProvider' | 'log' | 'settings' | 'connect' | 'all' | 'profiles';
+  action?: 'refresh' | 'refreshProvider' | 'log' | 'history' | 'settings' | 'connect' | 'all' | 'profiles';
   providerId?: ProviderId;
 };
 
@@ -1532,6 +1560,7 @@ async function showDetailsPanel(providers: LiveProvider[], refreshAll: () => Pro
     }
     items.push({ label: '$(refresh) Refresh now', action: 'refresh' });
     items.push({ label: '$(output) Open log', description: 'Output → AI Usage', action: 'log' });
+    items.push({ label: '$(history) Usage history', description: 'readings, switches, how well rotation works', action: 'history' });
     items.push(focused
       ? { label: `$(gear) ${titleFor(focused)} settings`, description: `aiUsage.${focused.id}.*`, action: 'settings', providerId: focused.id }
       : { label: '$(gear) Settings', description: 'aiUsage.*', action: 'settings' });
@@ -1581,6 +1610,8 @@ async function showDetailsPanel(providers: LiveProvider[], refreshAll: () => Pro
       await vscode.commands.executeCommand('aiUsage.manageAuthProfiles', picked.providerId);
     } else if (picked.action === 'log') {
       output?.show(true);
+    } else if (picked.action === 'history') {
+      await vscode.commands.executeCommand('aiUsage.showUsageHistory');
     } else {
       await openAiUsageSettings(picked.providerId && `aiUsage.${picked.providerId}`);
     }
@@ -1652,6 +1683,82 @@ function readableProblem(raw: string): string {
 }
 
 /** Machine-scoped account automation settings; intervals are bounded even for hand-edited JSON. */
+/** Where the usage history is kept: `aiUsage.history.directory`, or `usage-history` under the extension's global storage. */
+function historyDirectory(context: vscode.ExtensionContext): string {
+  const configured = (vscode.workspace.getConfiguration().get<string>('aiUsage.history.directory', '') ?? '').trim();
+  if (!configured) { return path.join(context.globalStorageUri.fsPath, 'usage-history'); }
+  const expanded = configured === '~' ? os.homedir() : configured.startsWith('~/') ? path.join(os.homedir(), configured.slice(2)) : configured;
+  return path.resolve(os.homedir(), expanded);
+}
+
+function historyOptions(): { enabled: boolean; retentionMs: number } {
+  const config = vscode.workspace.getConfiguration();
+  const days = config.get<number>('aiUsage.history.retentionDays', 365);
+  return { enabled: config.get<boolean>('aiUsage.history.enabled', true), retentionMs: (Number.isFinite(days) ? Math.max(1, days) : 365) * 86_400_000 };
+}
+
+const HISTORY_PERIODS: Array<{ label: string; days?: number }> = [
+  { label: 'Summary of the last 7 days', days: 7 },
+  { label: 'Summary of the last 30 days', days: 30 },
+  { label: 'Summary of the last 90 days', days: 90 },
+  { label: 'Summary of everything kept' }
+];
+
+/** The usage history menu: a summary of a period as a Markdown document, exports, the files and the settings. */
+async function showUsageHistory(history: UsageHistory, thresholds: () => Partial<Record<AuthProvider, Thresholds>>): Promise<void> {
+  type Item = vscode.QuickPickItem & { action?: 'summary' | 'readings' | 'events' | 'jsonl' | 'file' | 'settings'; days?: number };
+  const files = history.files();
+  const retentionDays = Math.round(history.retentionMs / 86_400_000);
+  const items: Item[] = [
+    { label: 'Summary', kind: vscode.QuickPickItemKind.Separator },
+    ...HISTORY_PERIODS.map((period): Item => ({ label: `$(graph) ${period.label}`, action: 'summary', days: period.days })),
+    { label: 'Export', kind: vscode.QuickPickItemKind.Separator },
+    { label: '$(export) Readings as CSV…', description: 'one row per account, reading and window', action: 'readings' },
+    { label: '$(export) Switches, sweeps and check failures as CSV…', action: 'events' },
+    { label: '$(json) Everything as JSON Lines…', description: 'the kept month files in one', action: 'jsonl' },
+    { label: 'Files', kind: vscode.QuickPickItemKind.Separator },
+    { label: '$(file) Open the newest month file', description: history.location, action: 'file' },
+    { label: '$(gear) History settings', description: `aiUsage.history.* · ${history.enabled ? `on, kept ${retentionDays} days` : 'off'}`, action: 'settings' }
+  ];
+  const picked = await vscode.window.showQuickPick(items, {
+    title: 'AI Usage · Usage history', matchOnDescription: true,
+    placeHolder: `${files.length} month file${files.length === 1 ? '' : 's'} in ${history.location}`
+  });
+  if (!picked?.action) { return; }
+  const now = Date.now();
+  if (picked.action === 'summary') {
+    const oldest = files.length ? historyFileStart(path.basename(files[0])) : undefined;
+    const since = picked.days ? now - picked.days * 86_400_000 : oldest ?? now;
+    const summary = summarizeHistory(history.events(since), { since, until: now, thresholds: thresholds() });
+    const content = renderHistoryReport(summary, { label: picked.days ? `the last ${picked.days} days` : 'everything kept',
+      location: history.location, files: files.length, retentionDays });
+    const document = await vscode.workspace.openTextDocument({ language: 'markdown', content });
+    try { await vscode.commands.executeCommand('markdown.showPreview', document.uri); }
+    catch { await vscode.window.showTextDocument(document); }
+    return;
+  }
+  if (picked.action === 'file') {
+    const newest = files[files.length - 1];
+    if (!newest) { void vscode.window.showInformationMessage('AI Usage: no usage history has been recorded yet.'); return; }
+    await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(vscode.Uri.file(newest)));
+    return;
+  }
+  if (picked.action === 'settings') { await openAiUsageSettings('aiUsage.history'); return; }
+  const kind = picked.action;
+  const extension = kind === 'jsonl' ? 'jsonl' : 'csv';
+  const target = await vscode.window.showSaveDialog({
+    title: 'Export usage history',
+    defaultUri: vscode.Uri.file(path.join(os.homedir(), `ai-usage-${kind}-${new Date(now).toISOString().slice(0, 10)}.${extension}`)),
+    filters: kind === 'jsonl' ? { 'JSON Lines': ['jsonl'] } : { CSV: ['csv'] }
+  });
+  if (!target) { return; }
+  const content = kind === 'readings' ? readingsCsv(history.events()) : kind === 'events' ? eventsCsv(history.events())
+    : files.map((file) => fs.readFileSync(file, 'utf8')).join('');
+  await vscode.workspace.fs.writeFile(target, Buffer.from(content, 'utf8'));
+  const choice = await vscode.window.showInformationMessage(`AI Usage: usage history exported to ${target.fsPath}.`, 'Open');
+  if (choice === 'Open') { await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(target)); }
+}
+
 function automationSettings(provider: AuthProvider, authProfiles: AuthProfileManager): AutomationSettings {
   const config = vscode.workspace.getConfiguration();
   const prefix = `aiUsage.${provider}`;

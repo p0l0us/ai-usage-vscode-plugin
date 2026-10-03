@@ -28,9 +28,9 @@ Module._load = function(id, ...args) {
       showErrorMessage(message) { errorMessages.push(message); },
       showWarningMessage(message) { warningMessages.push(message); return warningResponses.shift(); },
       showInputBox: async () => inputBoxResponses.shift(),
-      showQuickPick(items) {
+      showQuickPick(items, options) {
         const response = quickPickResponses.shift();
-        return typeof response === 'function' ? response(items) : response;
+        return typeof response === 'function' ? response(items, options) : response;
       },
       showSaveDialog: async () => saveDialogResponses.shift(),
       showOpenDialog: async () => openDialogResponses.shift(),
@@ -346,7 +346,7 @@ test('a read-only profile warns instead of activating', async t => {
   assert.equal(informationMessages.length, 0);
 });
 
-test('a profile with a login problem is marked and checked again instead of activated', async t => {
+test('a profile with a login problem is marked and offers renew, keep-alive or back instead of activating', async t => {
   const f = fixture(t);
   const problem = 'Keep-alive CLI exited with code 1: Failed to authenticate: OAuth session expired and could not be refreshed';
   f.manager.loginProblem = (provider, id) => (provider === 'claude' && id === 'a') ? problem : undefined;
@@ -356,16 +356,54 @@ test('a profile with a login problem is marked and checked again instead of acti
   assert.equal(item.iconPath.color.id, 'editorWarning.foreground');
   assert.equal(item.description, 'Active · Login problem');
   assert.equal(item.loginProblem, problem);
-  const checked = [], changes = [];
-  quickPickResponses.push(items => items.find(item => item.profile?.id === 'a'));
-  quickPickResponses.push(undefined); // close the menu that reopens after the check
-  await f.manager.show('claude', {
+  const checked = [], signedIn = [], changes = [];
+  const hooks = {
     sendKeepAlive: async (provider, profiles) => { checked.push([provider, profiles.map(profile => profile.id)]); },
+    signIn: async (provider, profile) => { signedIn.push([provider, profile.id]); },
     afterActivate: async (provider, change) => { changes.push(change); }
+  };
+  // Choosing the profile opens its menu: renew first, keep-alive second, Back last, the problem as the placeholder.
+  let menu;
+  quickPickResponses.push(items => items.find(item => item.profile?.id === 'a'));
+  quickPickResponses.push((items, options) => {
+    menu = { items, options };
+    return items.find(item => item.choice === 'keepAlive');
   });
+  quickPickResponses.push(undefined); // close the accounts list that reopens after the check
+  await f.manager.show('claude', hooks);
+  assert.deepEqual(menu.items.filter(item => item.kind === undefined).map(item => item.label),
+    ['$(sign-in) Renew the login…', '$(play) Try a keep-alive', '$(check) Select anyway', '$(arrow-left) Back']);
+  assert.match(menu.items[0].detail, /separate home inside the keep-alive home .* “A”/);
+  assert.equal(menu.options.title, 'AI Usage · Claude account “A” · Login problem');
+  assert.equal(menu.options.placeHolder, 'Login expired. The saved login has expired and could not be refreshed. Sign in again for this profile.');
+  assert.deepEqual(checked, [['claude', ['a']]]);
+  assert.deepEqual(signedIn, []);
+
+  // Renew hands the profile to the sign-in hook, which signs in under the keep-alive home.
+  quickPickResponses.push(items => items.find(item => item.profile?.id === 'a'));
+  quickPickResponses.push(items => items.find(item => item.choice === 'renew'));
+  quickPickResponses.push(undefined);
+  await f.manager.show('claude', hooks);
+  assert.deepEqual(signedIn, [['claude', 'a']]);
+  assert.deepEqual(checked, [['claude', ['a']]]);
+
+  // Back returns to the accounts list without doing anything to the login.
+  quickPickResponses.push(items => items.find(item => item.profile?.id === 'a'));
+  quickPickResponses.push(items => items.find(item => /Back/.test(item.label)));
+  quickPickResponses.push(items => { assert.ok(items.some(item => item.profile?.id === 'a')); return undefined; });
+  await f.manager.show('claude', hooks);
+  assert.deepEqual(signedIn, [['claude', 'a']]);
   assert.deepEqual(checked, [['claude', ['a']]]);
   assert.deepEqual(changes, []);
   assert.equal(warningMessages.length, 0);
+
+  // Select anyway activates the login as it is and closes the menu, like choosing a healthy profile.
+  quickPickResponses.push(items => items.find(item => item.profile?.id === 'a'));
+  quickPickResponses.push(items => items.find(item => item.choice === 'select'));
+  await f.manager.show('claude', hooks);
+  assert.deepEqual(changes, [{ kind: 'activated', accountChanged: false }]);
+  assert.equal(quickPickResponses.length, 0);
+  assert.deepEqual(checked, [['claude', ['a']]]);
 
   // An exhausted account is blocked as before; its login trouble is not what stops it.
   f.manager.limitState = (provider, id) => (provider === 'claude' && id === 'a') ? { readOnly: true, dimmed: false } : undefined;
@@ -412,9 +450,12 @@ test('switching to another profile is reported as an account change', async t =>
   f.globalValues.set('aiUsage.authProfiles.v1', state);
   f.secrets.set('aiUsage.authProfile.v1.claude.b', JSON.stringify({ claudeAiOauth: { accessToken: 'b', refreshToken: 'refresh-b' } }));
   const changes = [];
+  const activations = [];
+  f.manager.onActivated = (provider, change) => activations.push([provider, change.previous?.id, change.profile.id, change.automatic, change.external]);
   quickPickResponses.push(items => items.find(item => item.profile?.id === 'b'));
   await f.manager.show('claude', { afterActivate: async (provider, change) => { changes.push(change.accountChanged); } });
   assert.deepEqual(changes, [true]);
+  assert.deepEqual(activations, [['claude', 'a', 'b', false, false]]);
   assert.equal(JSON.parse(fs.readFileSync(f.file)).claudeAiOauth.accessToken, 'b');
 });
 
@@ -425,10 +466,13 @@ test('a native login switched outside this window makes its saved profile active
   f.globalValues.set('aiUsage.authProfiles.v1', state);
   f.secrets.set('aiUsage.authProfile.v1.claude.b', JSON.stringify({ claudeAiOauth: { accessToken: 'b', refreshToken: 'refresh-b' } }));
   assert.equal(f.manager.activeProfileNumber('claude'), 1);
+  const activations = [];
+  f.manager.onActivated = (provider, change) => activations.push([change.previous?.id, change.profile.id, change.automatic, change.external]);
   // The same token as the saved copy.
   fs.writeFileSync(f.file, JSON.stringify({ claudeAiOauth: { accessToken: 'b', refreshToken: 'refresh-b' } }));
   await f.manager.followNative('claude');
   assert.equal(f.manager.activeProfileId('claude'), 'b');
+  assert.deepEqual(activations, [['a', 'b', false, true]]);
   assert.equal(f.manager.activeProfileNumber('claude'), 2);
   // Rotated tokens: the account file's account UUID decides.
   fs.writeFileSync(f.file, JSON.stringify({ claudeAiOauth: { accessToken: 'new', refreshToken: 'refresh-new' } }));

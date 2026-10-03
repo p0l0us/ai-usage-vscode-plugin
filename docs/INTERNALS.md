@@ -140,6 +140,21 @@ send. Every AI Usage `codex app-server` probe passes `-c model_provider="openai"
 provider reports no login and no rate limits. `AuthProfileManager.codexChatsFollowSwitch` and the stale-process
 warning consult the runtime so the switch message and the restart offer match the mode.
 
+## Usage history
+
+`src/usageHistory.ts` appends one JSON object per line to `usage-history/history-YYYY-MM.jsonl` under the global
+storage directory (or `aiUsage.history.directory`), with mode `0600`, and prunes month files older than the
+retention once a day. `AccountAutomation` records readings from the status bar (`observe`) and from every account
+check, a check that starts or stops failing, and in `rotate` the candidates with their outcomes, the switch, the
+sweeps that spent calls without switching, the exhausted stretch and its recovery; `AuthProfileManager.onActivated`
+reports switches by hand and switches followed from outside the window. `index.json` in the same directory remembers
+the last recorded reading per account (its figures and time) and the last switch per provider, so the windows
+sharing the host do not each write the same reading, and a switch followed from another window within two minutes
+of the recorded one is not written twice. `src/usageHistoryReport.ts` turns the events into the summary document
+(per-account cycles keyed by window label and reset, time active from the switch timeline, exhausted episodes from
+`exhausted`/`recovered` pairs, the accounts-needed estimate) and `readingsCsv`/`eventsCsv` into the exports.
+Both modules are plain Node and tested directly.
+
 ## How the chat chip works
 
 VS Code renders an item of the `chat/input/status` menu as its static title (or, if the command has an icon, as the
