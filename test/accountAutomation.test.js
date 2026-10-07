@@ -105,6 +105,26 @@ test('per-account 2h/6h schedule persists across service restarts and includes i
   assert.equal(f.calls.filter(c => c[0] === 'codex').length, 6);
 });
 
+test('the active menu detail can use the status bar reading while inactive profiles keep their own', t => {
+  const f = fixture(t);
+  f.observe('claude', [0, 0], 'a');
+  f.observe('claude', [58, 37], 'b');
+  const displayed = usage('claude', [93, 61], Date.now());
+  assert.match(f.service.usageDetail('claude', 'a', displayed), /5h: 93%.*7d: 61%/);
+  assert.match(f.service.usageDetail('claude', 'b'), /5h: 58%.*7d: 37%/);
+  assert.match(f.service.usageDetail('claude', 'a'), /5h: 0%.*7d: 0%/);
+});
+
+test('a profile reading from before reset cannot block activation or show the old percentage', t => {
+  const f = fixture(t);
+  const expired = usage('claude', [100, 40], Date.now() - 2 * HOUR);
+  expired.windows[0].resetsAt = new Date(Date.now() - HOUR);
+  f.service.observe('claude', 'a', expired);
+  assert.deepEqual(f.service.limitState('claude', 'a'), { readOnly: false, dimmed: false });
+  assert.match(f.service.usageDetail('claude', 'a'), /Usage reset; waiting for a new reading/);
+  assert.doesNotMatch(f.service.usageDetail('claude', 'a'), /100%/);
+});
+
 test('a weekly Codex limit skips exhausted next account and activates the next eligible one', async t => {
   const f = fixture(t, { values: { a: [10, 99.5], b: [99.5, 5] }, settings: { codex: { autoRotate: true } } });
   f.observe('codex', [10, 99.5]);

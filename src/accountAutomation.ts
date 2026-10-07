@@ -3,7 +3,7 @@ import * as path from 'path';
 import { createHash } from 'crypto';
 import { AuthProvider, StoredCredential, writeJsonAtomically } from './authFiles';
 import { CacheEntry, deserializeUsage } from './cache';
-import { formatResetRemaining, LiveUsage, UsageWindow } from './live';
+import { formatResetRemaining, LiveUsage, usageHasExpiredReset, UsageWindow } from './live';
 import { AccountLock, ProbeSettings, ProbeResult, acquireAccountLock, explainAccountProblem, isLoginProblem, needsSignIn, probeAccount } from './accountProbe';
 import { sleep } from './apiBudget';
 import type { ActivationChange } from './authProfiles';
@@ -287,10 +287,12 @@ export class AccountAutomation {
     return this.pending;
   }
 
-  usageDetail(provider: AuthProvider, id: string): string | undefined {
+  usageDetail(provider: AuthProvider, id: string, displayedUsage?: LiveUsage): string | undefined {
     const state = this.read(provider, id);
-    const usage = deserializeUsage(state);
+    const candidate = displayedUsage ?? deserializeUsage(state);
+    const usage = candidate && !usageHasExpiredReset(candidate) ? candidate : undefined;
     const parts: string[] = [];
+    if (candidate && !usage) { parts.push('Usage reset; waiting for a new reading'); }
     if (usage) {
       parts.push(usage.windows.map((window) => {
         const reset = formatResetRemaining(window.resetsAt);
@@ -342,7 +344,8 @@ export class AccountAutomation {
    * model-scoped weekly window (7d Fable) only blocks that model; other models may still work, so it just `dimmed`.
    */
   limitState(provider: AuthProvider, id: string): ProfileLimitState {
-    const usage = deserializeUsage(this.read(provider, id));
+    const candidate = deserializeUsage(this.read(provider, id));
+    const usage = candidate && !usageHasExpiredReset(candidate) ? candidate : undefined;
     let readOnly = false, dimmed = false;
     for (const window of usage?.windows ?? []) {
       if (!Number.isFinite(window.usedPercent) || window.usedPercent < 100) { continue; }

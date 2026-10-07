@@ -96,7 +96,8 @@ a profile whose token has expired is repaired after signing in with that account
 
 ![Save current login picker with Create a new profile… and an existing profile to update](images/screenshots/save-current-login.png)
 
-**Export or import saved profiles…** under Manage leads to both. **Export saved profiles…** writes the saved
+**Manage saved profiles…** includes **Import credential JSON…** and **Export or import saved profiles…**. The latter
+leads to both transfer actions. **Export saved profiles…** writes the saved
 Claude and Codex profiles, logins included, to a JSON file and opens it in the editor, and **Import saved
 profiles…** reads it on another computer: profiles not saved there are added, and a saved profile whose login is missing gets it back. Nothing is activated. The file holds live login tokens in plain text, so delete
 it once imported, and mind that a copied login is the same session on both computers; see
@@ -159,10 +160,8 @@ responding is taken over after 10 minutes.
 
 ### Authentication profile examples
 
-The Codex Accounts menu has the same layout. It marks the current account as **Active** and keeps the save, import,
-rename and delete actions, the account features and their settings in the same picker:
-
-![Codex Accounts menu with six saved profiles and the manage and account feature actions](images/screenshots/accounts-codex.png)
+The Codex Accounts menu also marks the current account as **Active** and offers **Save current login…**,
+**Manage saved profiles…**, account features and settings.
 
 After activation, the AI Usage menu names the selected profile beside **Accounts**, shows its detected plan on the
 right, and follows with its usage and the source of the reading:

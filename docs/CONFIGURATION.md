@@ -158,13 +158,16 @@ refreshed, and once for older profiles when the menu opens. The email is stored 
 metadata.
 
 The Accounts menu lists the saved profiles with their email, last usage reading and check time, marks the active
-one, and follows with the management actions:
+one, and follows with **Save current login…** and **Manage saved profiles…**:
 
 ![Codex Accounts menu with the saved profiles and their usage](../images/screenshots/accounts-codex-profiles.png)
 
 ![Save current login… item](../images/screenshots/accounts-save-login.png)
-![Import credential JSON… item](../images/screenshots/accounts-import.png)
-![Rename a profile… and Delete a saved profile… items](../images/screenshots/accounts-rename-delete.png)
+
+**Manage saved profiles…** contains **Import credential JSON…** and **Export or import saved profiles…** even when
+no profiles are saved. With saved profiles, it also offers **Sign in again…**, **Rename a profile…**,
+**Move a profile up or down…** (from two profiles) and **Delete a saved profile…**. Each action returns to this
+submenu, and **Back** returns to the Accounts menu.
 
 The AI Usage menu of all services confirms which profile is active and shows its detected plan:
 
@@ -194,7 +197,7 @@ refreshable, says so once in a notification with the same **Sign in again** acti
 
 ### Moving profiles to another computer
 
-**Export or import saved profiles…** under Manage in either Accounts menu opens a picker with both actions; the
+**Export or import saved profiles…** under **Manage saved profiles…** in either Accounts menu opens a picker with both actions; the
 Command Palette has them as **AI Usage: Export Claude/Codex Authentication Profiles…** and **AI Usage: Import
 Claude/Codex Authentication Profiles…**. **Export saved profiles…** lists every saved Claude and Codex profile,
 preselected, and writes the chosen ones with their logins to a JSON file, which then opens in the editor; on Linux

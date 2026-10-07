@@ -3,7 +3,7 @@ const test = require('node:test');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { fetchClaudeUsageCli } = require('../out/live');
+const { fetchClaudeUsageCli, fetchClaudeUsageFromAccountFile } = require('../out/live');
 
 const ACCOUNT = '11111111-2222-3333-4444-555555555555';
 
@@ -52,8 +52,8 @@ test('runs /usage and reports the reading it caused Claude Code to cache', async
   const root = temporary(t);
   const { dir, file } = home(root);
   const cli = fakeCli(root, writesCache(file, {
-    five_hour: { utilization: 41, resets_at: '2026-09-22T23:00:00Z' },
-    seven_day: { utilization: 56, resets_at: '2026-09-26T20:00:00Z' }
+    five_hour: { utilization: 41, resets_at: new Date(Date.now() + 4 * 3600000).toISOString() },
+    seven_day: { utilization: 56, resets_at: new Date(Date.now() + 4 * 86400000).toISOString() }
   }));
 
   const result = await fetchClaudeUsageCli(cli, dir, file);
@@ -62,6 +62,23 @@ test('runs /usage and reports the reading it caused Claude Code to cache', async
   assert.deepEqual(result.usage.windows.map((w) => [w.label, w.usedPercent]), [['5h', 41], ['7d', 56]]);
   assert.equal(result.usage.plan, 'max');
   assert.deepEqual(result.usage.details, ['Source: Claude Code CLI (/usage)']);
+});
+
+test('an account-file reading from a completed quota window is not displayed', async (t) => {
+  const root = temporary(t);
+  const { dir, file } = home(root);
+  fs.writeFileSync(file, JSON.stringify({
+    oauthAccount: { accountUuid: ACCOUNT },
+    cachedUsageUtilization: {
+      fetchedAtMs: Date.now() - 30 * 60000,
+      accountUuid: ACCOUNT,
+      utilization: { five_hour: { utilization: 93, resets_at: new Date(Date.now() - 60000).toISOString() } }
+    }
+  }));
+
+  const result = await fetchClaudeUsageFromAccountFile(file, dir);
+  assert.equal(result.kind, 'error');
+  assert.match(result.message, /new quota window/);
 });
 
 test('asks for the non-interactive /usage without loading anything of the user own', async (t) => {

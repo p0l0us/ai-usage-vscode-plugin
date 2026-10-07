@@ -2,7 +2,7 @@
   "name": "ai-usage-vscode-plugin",
   "displayName": "AI subscription management and usage",
   "description": "Manage your Claude Code, Codex and GitHub Copilot subscriptions and see what is left of them: switch between saved accounts without signing in again, keep them warm, rotate on exhaustion, and read live 5h/7d windows, premium requests and org billing in the status bar and chat input. Open source, contributions welcome.",
-  "version": "0.0.38",
+  "version": "0.1.0",
   "publisher": "p0l0us",
   "license": "GPL-3.0-only",
   "repository": {
@@ -6952,6 +6952,12 @@
             "default": ".ai-usage.profiles.json",
             "order": 92,
             "markdownDescription": "**Project profile file.** Path of the file that holds a project's profiles, relative to each workspace folder. It has the format of a profile export and is written with mode `0600`; when the folder is a Git repository, the path is added to its `.gitignore` the first time a project profile is saved there."
+          },
+          "aiUsage.serviceProfiles.enabled": {
+            "type": "boolean",
+            "default": true,
+            "order": 93,
+            "markdownDescription": "**Account service profiles.** Also list and use the profiles kept by the AI Usage account service in `~/.ai-usage/profiles.json` (or `$AI_USAGE_HOME`), logins included. A build with the account service moves the saved profiles there once and removes them from SecretStorage; this keeps them listed in builds without the service. Changes such as refreshed logins, renames, reordering and deletions are written back to that file. With the file present, saving a profile also offers it as the place to keep it."
           },
           "aiUsage.statusBar.labels": {
             "type": "string",

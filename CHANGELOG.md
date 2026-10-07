@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.1.0 (2026-10-07)
+
+- **Account service profiles are listed.** A build with the account service moves the saved profiles into
+  `~/.ai-usage/profiles.json` (or `$AI_USAGE_HOME`) once and removes them from SecretStorage, so builds without the
+  service showed none. The Accounts menu now lists those profiles after the private ones and before the project ones,
+  marked **account service**, uses their logins, and writes refreshed logins, renames, reordering and deletions back
+  to that file without touching what else the service keeps there. Saving a profile offers the file as a place to
+  keep it. `aiUsage.serviceProfiles.enabled` turns this off.
+- **Manage saved profiles…** in the Accounts menu groups credential import, profile export/import, sign-in, rename,
+  reorder and delete in a submenu. Import remains available when no profiles are saved. Each action returns to the
+  submenu, so several changes take fewer steps and the Accounts menu is shorter.
+- The active profile and status bar use the newest valid reading for that account. Readings from a quota window that
+  has already reset are no longer shown or used to block activation.
+
 ## 0.0.38 (2026-10-07)
 
 - **Move a profile up or down…** in the Accounts menu changes the order of the saved profiles, one step per pick, so

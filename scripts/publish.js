@@ -3,6 +3,7 @@
 //   npm run publish                 # Marketplace
 //   npm run publish -- --pre-release
 //   npm run publish -- --ovsx       # also publish to Open VSX (needs OVSX_PAT)
+//   npm run publish -- --minor      # a release with new features: bump to the next minor version first
 //   npm run publish -- --yes        # non-interactive: auto-bump patch if the version is taken
 //   npm run publish -- --dry-run    # do everything except the publish and git steps
 //   npm run publish -- --no-push    # commit and tag locally, but do not push
@@ -27,6 +28,7 @@ const alsoOvsx = flag('--ovsx');
 const assumeYes = flag('--yes') || flag('-y');
 const dryRun = flag('--dry-run');
 const noPush = flag('--no-push');
+const minorRelease = flag('--minor');
 
 const readPkg = () => JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
 const run = (cmd, cmdArgs, opts = {}) => {
@@ -141,6 +143,18 @@ function tagTargets(tag) {
   const published = publishedVersions(id);
   const latest = published[0];
   console.log(published.length ? `Published versions: ${published.join(', ')}` : 'Not published yet.');
+
+  // New features make a minor release: the minor after the published version, carrying the open CHANGELOG section.
+  // Patch versions come from dev installs and bug-fix releases. A version already at that minor is kept.
+  if (minorRelease) {
+    const [major, minor] = (latest ?? pkg.version).split('.').map(Number);
+    const target = `${major}.${minor + 1}.0`;
+    if (compare(pkg.version, target) < 0) {
+      run('node', [path.join('scripts', 'bump-version.js'), target, '--carry']);
+      pkg = readPkg();
+      console.log(`Minor release: version is now ${pkg.version}.`);
+    }
+  }
 
   if (published.includes(pkg.version) || (latest && compare(pkg.version, latest) <= 0)) {
     const reason = published.includes(pkg.version)

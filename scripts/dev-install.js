@@ -1,15 +1,24 @@
-// Builds the current working tree into a temporary VSIX (outside the repo) and installs it into
-// the VS Code that is running here: the remote server when inside Remote-SSH/WSL/containers,
-// otherwise the desktop `code` CLI. Nothing is written into the repository.
+// Bumps the patch version (package.json, package-lock.json and the open CHANGELOG section, see
+// scripts/bump-version.js --carry), builds the working tree into a temporary VSIX (outside the repo) and
+// installs it into the VS Code that is running here: the remote server when inside Remote-SSH/WSL/containers,
+// otherwise the desktop `code` CLI. Every dev install is a new patch version, so VS Code never reuses an
+// earlier build and a later Marketplace release still replaces it. AI_USAGE_DEV_VERSION installs that version
+// instead and leaves the repository alone.
 const { execFileSync, spawnSync } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
 const root = path.join(__dirname, '..');
+if (!process.env.AI_USAGE_DEV_VERSION) {
+  const bump = spawnSync(process.execPath, [path.join(__dirname, 'bump-version.js'), 'patch', '--carry'], { cwd: root, encoding: 'utf8' });
+  if (bump.status !== 0) {
+    process.stderr.write(bump.stderr || '');
+    process.exit(bump.status ?? 1);
+  }
+}
 const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
-// A fresh version prevents VS Code from reusing an earlier development build.
-const devVersion = process.env.AI_USAGE_DEV_VERSION || `9.9.${Math.floor(Date.now() / 1000)}`;
+const devVersion = process.env.AI_USAGE_DEV_VERSION || pkg.version;
 const extensionId = `${pkg.publisher}.${pkg.name}`;
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-dev-'));
 const vsix = path.join(tmpDir, `${pkg.name}-${devVersion}-dev.vsix`);
@@ -55,8 +64,7 @@ run('npm', ['run', 'compile']);
 // Keep README image links relative so the locally installed extension page renders the bundled
 // screenshots without needing them on GitHub (the publish script rewrites them for the Marketplace).
 run('npx', [
-  '--yes', '@vscode/vsce', 'package', devVersion,
-  '--no-update-package-json', '--no-git-tag-version',
+  '--yes', '@vscode/vsce', 'package', ...(devVersion === pkg.version ? [] : [devVersion, '--no-update-package-json', '--no-git-tag-version']),
   '--no-dependencies', '--no-rewrite-relative-links', '-o', vsix
 ]);
 
@@ -73,5 +81,5 @@ for (const cli of targets) {
   spawnSync(cli, ['--uninstall-extension', extensionId], { stdio: 'ignore' });
   run(cli, ['--install-extension', vsix, '--force']);
 }
-console.log(`\nInstalled ${extensionId}@${devVersion} (dev build; package.json remains ${pkg.version}). Reload the VS Code window to activate.`);
+console.log(`\nInstalled ${extensionId}@${devVersion} (dev build${devVersion === pkg.version ? '; package.json and CHANGELOG.md were bumped' : `; package.json remains ${pkg.version}`}). Reload the VS Code window to activate.`);
 console.log(`VSIX: ${vsix}`);

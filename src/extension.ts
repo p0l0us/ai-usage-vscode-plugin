@@ -37,7 +37,9 @@ import {
   fetchLocalThenApi,
   formatResetIn,
   formatResetRemaining,
+  newestValidUsage,
   refreshCodexNativeLogin,
+  usageHasExpiredReset,
   verifyCodexNativeAccount
 } from './live';
 import { compactTokenCount, readCurrentSessionTokens, SessionTokenUsage } from './sessionTokens';
@@ -110,12 +112,16 @@ type LiveProvider = {
   activeProfileName?: () => string | undefined;
   /** "#2" for the second saved profile, when there are several and the setting shows it. */
   accountNumber?: () => string | undefined;
+  activeProfileId?: () => string | undefined;
+  activeProfileUsage?: () => LiveUsage | undefined;
   /** Shared call spacing for providers read through a rate-limited service endpoint, when the
    *  currently selected source uses one (a local source needs no spacing). */
   budget?: () => ApiCallBudget | undefined;
   last?: LiveResult;
   /** Most recent successful reading, kept so errors do not blank the item. */
   lastGood?: LiveUsage;
+  /** The saved account to which `last` and `lastGood` belong. */
+  readingProfileId?: string;
   /** In-flight refresh for this provider only; failures elsewhere never wait on it. */
   inFlight?: Promise<void>;
 };
@@ -222,7 +228,11 @@ export function activate(context: vscode.ExtensionContext): void {
   let automation: AccountAutomation;
   /** Set while a switched Claude login still has to be confirmed against the OAuth profile endpoint. */
   let claudeMetadataRetry: { nextAttemptAt: number; attempts: number } | undefined;
-  const authProfiles = new AuthProfileManager(context, log, (provider, id) => automation?.usageDetail(provider, id),
+  const authProfiles: AuthProfileManager = new AuthProfileManager(context, log, (provider, id) => {
+    const live = liveProviders.find((candidate) => candidate.id === provider);
+    const displayed = live && authProfiles.activeProfileId(provider) === id ? visibleUsage(live) : undefined;
+    return automation?.usageDetail(provider, id, displayed);
+  },
     async (provider, credential, expected) => {
       if (provider === 'codex') {
         // A fresh app-server must see the login that was just written; report a mismatch instead of success.
@@ -325,6 +335,11 @@ export function activate(context: vscode.ExtensionContext): void {
       budget: () => (claudeSpendsEndpointQuota(settingsFor('claude').source) ? claudeBudget : undefined),
       cacheDiscriminator: async () => authProfiles.cacheDiscriminator('claude'),
       activeProfileName: () => authProfiles.activeProfileName('claude'),
+      activeProfileId: () => authProfiles.activeProfileId('claude'),
+      activeProfileUsage: () => {
+        const id = authProfiles.activeProfileId('claude');
+        return id && authProfiles.activeProfileNumber('claude') !== undefined ? automation?.usage('claude', id) : undefined;
+      },
       accountNumber: () => accountNumberLabel(authProfiles, 'claude')
     },
     {
@@ -351,6 +366,11 @@ export function activate(context: vscode.ExtensionContext): void {
       },
       cacheDiscriminator: async () => authProfiles.cacheDiscriminator('codex'),
       activeProfileName: () => authProfiles.activeProfileName('codex'),
+      activeProfileId: () => authProfiles.activeProfileId('codex'),
+      activeProfileUsage: () => {
+        const id = authProfiles.activeProfileId('codex');
+        return id && authProfiles.activeProfileNumber('codex') !== undefined ? automation?.usage('codex', id) : undefined;
+      },
       accountNumber: () => accountNumberLabel(authProfiles, 'codex')
     },
     {
@@ -408,6 +428,7 @@ export function activate(context: vscode.ExtensionContext): void {
     if (provider.id !== 'copilot' && automation?.isCheckingActive(provider.id) && !afterRotation) {
       return Promise.resolve();
     }
+    let retryForNewProfile = false;
     provider.inFlight = (async () => {
       const config = vscode.workspace.getConfiguration();
       if (!config.get<boolean>(provider.settingKey, true)) {
@@ -425,13 +446,20 @@ export function activate(context: vscode.ExtensionContext): void {
         await authProfiles.followNative(provider.id);
       }
       const profileId = provider.id === 'copilot' ? undefined : authProfiles.activeProfileId(provider.id);
+      if (provider.id !== 'copilot' && provider.readingProfileId !== profileId) {
+        provider.last = undefined;
+        provider.lastGood = undefined;
+        provider.readingProfileId = profileId;
+        renderLive(provider);
+      }
       const { source, checkIntervalMs } = settingsFor(provider.id);
       const budget = provider.budget?.();
       // Each source has its own cache entry so switching sources never shows another source's reading.
       const key = SharedCache.key(provider.id, [source, await provider.cacheDiscriminator?.()].filter(Boolean).join('|'));
       const now = Date.now();
       const entry = cache.read(key);
-      const cached = deserializeUsage(entry);
+      const cachedReading = deserializeUsage(entry);
+      const cached = cachedReading && !usageHasExpiredReset(cachedReading, now) ? cachedReading : undefined;
       if (cached && (!provider.lastGood || cached.fetchedAt > provider.lastGood.fetchedAt)) {
         provider.lastGood = cached;
       }
@@ -491,7 +519,16 @@ export function activate(context: vscode.ExtensionContext): void {
       }
 
       if (result) {
+        if (provider.id !== 'copilot' && authProfiles.activeProfileId(provider.id) !== profileId) {
+          provider.last = undefined;
+          provider.lastGood = undefined;
+          provider.readingProfileId = undefined;
+          renderLive(provider);
+          retryForNewProfile = true;
+          return;
+        }
         provider.last = result;
+        provider.readingProfileId = profileId;
         if (result.kind === 'ok') {
           provider.lastGood = result.usage;
           // Codex session-log records carry no account of their own, so they are never attributed to
@@ -510,6 +547,7 @@ export function activate(context: vscode.ExtensionContext): void {
       await updateChipContext(provider, config.get<boolean>('aiUsage.chatChips.enabled', true));
     })().finally(() => {
       provider.inFlight = undefined;
+      if (retryForNewProfile) { void refreshProvider(provider, false); }
     });
     return provider.inFlight;
   };
@@ -635,6 +673,13 @@ export function activate(context: vscode.ExtensionContext): void {
   log(`usage history: ${history.enabled ? history.location : 'off'}`);
   // Switches by hand, and switches followed from outside this window; rotation records its own with more detail.
   authProfiles.onActivated = (provider, change) => {
+    const live = liveProviders.find((candidate) => candidate.id === provider);
+    if (live) {
+      live.last = undefined;
+      live.lastGood = undefined;
+      live.readingProfileId = undefined;
+      renderLive(live);
+    }
     if (change.automatic || change.previous?.id === change.profile.id) { return; }
     const account = (profile: ProfileMetadata) => ({ id: profile.id, name: profile.name, ...(profile.email ? { email: profile.email } : {}) });
     const stayedMs = change.previous ? automation.stayed(provider, change.previous.id) : undefined;
@@ -728,6 +773,10 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(vscode.commands.registerCommand('aiUsage.manageAuthProfiles', async (value?: unknown) => {
     const initial = value === 'claude' || value === 'codex' ? value as AuthProvider : undefined;
     await automation.withPaused(() => authProfiles.show(initial, {
+      beforeList: async (provider) => {
+        const live = liveProviders.find((candidate) => candidate.id === provider);
+        if (live) { renderLive(live); }
+      },
       beforeActivate: async (provider) => {
         await liveProviders.find((candidate) => candidate.id === provider)?.inFlight;
       },
@@ -1267,7 +1316,18 @@ function clickCommand(provider: LiveProvider): vscode.Command {
     : { command: 'aiUsage.manageAuthProfiles', title: 'Manage accounts', arguments: [provider.id] };
 }
 
+function visibleUsage(provider: LiveProvider): LiveUsage | undefined {
+  if (provider.activeProfileId && provider.readingProfileId !== provider.activeProfileId()) { return undefined; }
+  const live = provider.last?.kind === 'ok' ? provider.last.usage
+    : provider.last?.kind === 'error' ? provider.lastGood : undefined;
+  return newestValidUsage(live, provider.activeProfileUsage?.());
+}
+
 function renderLive(provider: LiveProvider): void {
+  if (provider.activeProfileId && provider.readingProfileId !== provider.activeProfileId()) {
+    provider.last = undefined;
+    provider.lastGood = undefined;
+  }
   const result = provider.last;
   const item = provider.status;
   item.color = undefined;
@@ -1293,28 +1353,26 @@ function renderLive(provider: LiveProvider): void {
     return;
   }
 
-  if (result.kind === 'error') {
-    const previous = provider.lastGood;
-    if (!previous) {
-      item.text = statusText(provider, '$(warning)', result.title);
-      item.tooltip = `${result.title}\n${result.message}`;
-      item.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
-      item.show();
-      return;
-    }
-    // Keep the last reading visible; grey it out once it is old enough to mislead.
-    const ageMs = Date.now() - previous.fetchedAt.getTime();
-    item.text = statusText(provider, formatUsageLabel(previous, false, statusBarStyle().usage), previous.title);
-    item.tooltip = buildTooltip(previous, result.message, provider.activeProfileName?.());
-    item.backgroundColor = undefined;
-    item.color = ageMs >= STALE_AFTER_MS ? new vscode.ThemeColor('disabledForeground') : undefined;
+  const usage = visibleUsage(provider);
+  if (result.kind === 'error' && !usage) {
+    item.text = statusText(provider, '$(warning)', result.title);
+    item.tooltip = `${result.title}\n${result.message}`;
+    item.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
     item.show();
     return;
   }
-
-  const usage = result.usage;
+  if (!usage) {
+    const title = result.kind === 'ok' ? result.usage.title : result.title;
+    item.text = statusText(provider, '$(clock)', title);
+    item.tooltip = `${title}\nWaiting for a reading from the new quota window.`;
+    item.backgroundColor = undefined;
+    item.show();
+    return;
+  }
   item.text = statusText(provider, formatUsageLabel(usage, false, statusBarStyle().usage), usage.title);
-  item.tooltip = buildTooltip(usage, undefined, provider.activeProfileName?.());
+  item.tooltip = buildTooltip(usage, result.kind === 'error' ? result.message : undefined, provider.activeProfileName?.());
+  item.color = Date.now() - usage.fetchedAt.getTime() >= STALE_AFTER_MS
+    ? new vscode.ThemeColor('disabledForeground') : undefined;
 
   const worst = worstPercent(usage);
   if (worst >= ERROR_PERCENT) {
@@ -1494,7 +1552,7 @@ function providerItems(provider: LiveProvider): DetailItem[] {
     });
     return items;
   }
-  const usage = result.kind === 'ok' ? result.usage : provider.lastGood;
+  const usage = visibleUsage(provider);
   if (result.kind === 'error') {
     items.push({
       label: '$(warning) Last refresh failed',
@@ -1504,6 +1562,15 @@ function providerItems(provider: LiveProvider): DetailItem[] {
       return items;
     }
   }
+  if (!usage) {
+    items.push({
+      label: '$(clock) Waiting for usage after reset',
+      detail: 'Refresh now to check the new quota window.',
+      action: 'refreshProvider',
+      providerId: provider.id
+    });
+    return items;
+  }
 
   // One row per service: every window with its countdown, the age of the reading, and a refresh on
   // click. Window names and exact reset times stay one hover away in the status bar tooltip.
@@ -1512,8 +1579,8 @@ function providerItems(provider: LiveProvider): DetailItem[] {
   const budget = provider.budget?.();
   const throttledMs = budget ? budget.nextAllowedAt(now.getTime()) - now.getTime() : 0;
   items.push({
-    label: `${usageIcon(worstPercent(usage!))} ${usage!.windows.map((window) => `${window.label} ${usagePart(window, now)}`).join(' · ')}`,
-    description: `Updated ${usage!.fetchedAt.toLocaleTimeString()}`,
+    label: `${usageIcon(worstPercent(usage))} ${usage.windows.map((window) => `${window.label} ${usagePart(window, now)}`).join(' · ')}`,
+    description: `Updated ${usage.fetchedAt.toLocaleTimeString()}`,
     detail: `Refresh now · ${SOURCE_LABELS[source] ?? source} · checked every ${formatInterval(checkIntervalMs)} · ` +
       (throttledMs > 0
         ? `next call to the service allowed in ${Math.ceil(throttledMs / 1000)}s`
@@ -1521,7 +1588,7 @@ function providerItems(provider: LiveProvider): DetailItem[] {
     action: 'refreshProvider',
     providerId: provider.id
   });
-  for (const line of usage!.details ?? []) {
+  for (const line of usage.details ?? []) {
     const [key, ...rest] = line.split(': ');
     items.push(rest.length ? { label: `$(info) ${key}`, description: rest.join(': ') } : { label: `$(info) ${line}` });
   }

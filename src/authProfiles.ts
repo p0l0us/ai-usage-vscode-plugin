@@ -27,6 +27,48 @@ const PROVIDERS: AuthProvider[] = ['claude', 'codex'];
 /** Default path of a project's profile file, inside the workspace folder; `aiUsage.projectProfiles.file` changes it. */
 export const DEFAULT_PROJECT_PROFILES_FILE = '.ai-usage.profiles.json';
 
+/**
+ * Home of the AI Usage account service (`AI_USAGE_HOME`, or `~/.ai-usage`). A build with the service moves the saved
+ * profiles into its `profiles.json` once and removes them here, so its profiles are listed and kept up to date in
+ * that file, beside the private and project ones. The home path stands in for the folder of these profiles.
+ */
+export function accountServiceHome(): string {
+  const configured = process.env.AI_USAGE_HOME?.trim();
+  return path.resolve(configured || path.join(os.homedir(), '.ai-usage'));
+}
+
+function accountServiceFile(): string { return path.join(accountServiceHome(), 'profiles.json'); }
+
+function isAccountService(folder: string | undefined): boolean { return Boolean(folder) && folder === accountServiceHome(); }
+
+/** Where a file-backed profile lives, for menus and messages. */
+function sourceLabel(folder: string): string {
+  return isAccountService(folder) ? 'account service' : `project ${path.basename(folder)}`;
+}
+
+type ServiceStore = { version?: number } & Partial<Record<AuthProvider, { profiles?: Array<Record<string, unknown>>; activeProfileId?: string }>>;
+
+/** The service store's profiles that have a login, checked the way an import checks them. */
+function parseServiceStore(text: string): ExportedProfile[] {
+  const store = JSON.parse(text) as ServiceStore;
+  const profiles = PROVIDERS.flatMap((provider) => (Array.isArray(store?.[provider]?.profiles) ? store[provider]!.profiles! : [])
+    .filter((profile) => profile && profile.credential)
+    .map(({ folder: _folder, ...profile }) => ({ ...profile, provider })));
+  return parseProfileExport(JSON.stringify({ aiUsageProfiles: 1, profiles }));
+}
+
+/** The service store with `entries` as its profiles; what else it holds, such as the service's active profile, stays. */
+function serializeServiceStore(previous: ServiceStore | undefined, entries: ExportedProfile[]): string {
+  const store: ServiceStore = { ...(previous ?? {}), version: 1 };
+  for (const provider of PROVIDERS) {
+    store[provider] = {
+      ...(previous?.[provider] ?? {}),
+      profiles: entries.filter((entry) => entry.provider === provider).map(({ provider: _provider, ...entry }) => entry)
+    };
+  }
+  return `${JSON.stringify(store, null, 2)}\n`;
+}
+
 export type ProfileMetadata = {
   id: string;
   name: string;
@@ -36,14 +78,17 @@ export type ProfileMetadata = {
   email?: string;
   /** Stable vendor account id; Claude Team members can share an organization but never this id. */
   accountId?: string;
-  /** The workspace folder a project profile lives in; a private profile has none. Never stored in global state. */
+  /**
+   * The workspace folder a project profile lives in, or the account service home for a profile kept by the service
+   * (`accountServiceHome`); a private profile has none. Never stored in global state.
+   */
   folder?: string;
 };
 
-/** Menu description: the account email, the project for a project profile, a duplicate marker, then the active marker. */
+/** Menu description: the account email, the project or the account service it lives in, a duplicate marker, then the active marker. */
 function profileDescription(profile: ProfileMetadata, active: boolean, siblings: ProfileMetadata[] = []): string | undefined {
   const twin = profile.email ? siblings.find((other) => other.id !== profile.id && other.email === profile.email) : undefined;
-  return [profile.email, profile.folder ? `project ${path.basename(profile.folder)}` : undefined,
+  return [profile.email, profile.folder ? sourceLabel(profile.folder) : undefined,
     twin ? `duplicate of “${twin.name}”` : undefined, active ? 'Active' : undefined].filter(Boolean).join(' · ') || undefined;
 }
 
@@ -80,7 +125,7 @@ type ProfileItem = vscode.QuickPickItem & {
   readOnly?: boolean;
   /** The login error of the profile's last check; selecting it offers to renew the login, check it again or activate it anyway. */
   loginProblem?: string;
-  action?: 'save' | 'import' | 'transfer' | 'signIn' | 'rename' | 'reorder' | 'delete' | 'keepAliveNow' | 'settings' | 'serviceSettings' | 'back';
+  action?: 'save' | 'manage' | 'keepAliveNow' | 'settings' | 'serviceSettings' | 'back';
 };
 
 /**
@@ -90,6 +135,7 @@ type ProfileItem = vscode.QuickPickItem & {
 export type ActivationChange = { kind: 'activated' | 'saved'; accountChanged: boolean };
 
 type ProfileHooks = {
+  beforeList?: (provider: AuthProvider) => Promise<void>;
   beforeActivate?: (provider: AuthProvider) => Promise<void>;
   afterActivate?: (provider: AuthProvider, change: ActivationChange) => Promise<void>;
   /** One chosen account, or every saved account in order when "All accounts" was picked. */
@@ -222,7 +268,18 @@ export class AuthProfileManager {
     return (typeof configured === 'string' && configured.trim()) || DEFAULT_PROJECT_PROFILES_FILE;
   }
 
-  private projectFile(folder: string): string { return path.resolve(folder, this.projectFileName()); }
+  private projectFile(folder: string): string {
+    return isAccountService(folder) ? accountServiceFile() : path.resolve(folder, this.projectFileName());
+  }
+
+  /** The account service home while its store exists and `aiUsage.serviceProfiles.enabled` is on. */
+  private serviceSources(): string[] {
+    if (!vscode.workspace.getConfiguration().get<boolean>('aiUsage.serviceProfiles.enabled', true)) { return []; }
+    return fs.existsSync(accountServiceFile()) ? [accountServiceHome()] : [];
+  }
+
+  /** Every file that holds profiles with their logins: the account service store first, then the project files. */
+  private profileSources(): string[] { return [...this.serviceSources(), ...this.projectFolders()]; }
 
   /** The open workspace folders that may hold project profiles: local folders, while project profiles are enabled. */
   private projectFolders(): string[] {
@@ -231,25 +288,26 @@ export class AuthProfileManager {
   }
 
   /**
-   * Reads every open folder's profile file, once per change of the file, and rebuilds the index of project profiles
-   * from them. The profiles of every folder open in the window are merged into one list: the extension is one per
+   * Reads the account service store and every open folder's profile file, once per change of the file, and rebuilds
+   * the index of file-backed profiles from them. The profiles of every folder open in the window are merged into one list: the extension is one per
    * window, so a project can be used with another open project's profiles; that is a known limitation.
    */
   private loadProjectProfiles(): Record<AuthProvider, ProfileMetadata[]> {
     const loaded: Record<AuthProvider, ProfileMetadata[]> = { claude: [], codex: [] };
     this.projectFolderOf.clear();
     this.projectCredentials.clear();
-    for (const folder of this.projectFolders()) {
+    for (const folder of this.profileSources()) {
       const file = this.projectFile(folder);
       let mtimeMs: number;
       try { mtimeMs = fs.statSync(file).mtimeMs; } catch { this.projectFiles.delete(file); continue; }
       let cached = this.projectFiles.get(file);
       if (!cached || cached.mtimeMs !== mtimeMs) {
         try {
-          cached = { mtimeMs, entries: parseProfileExport(fs.readFileSync(file, 'utf8')) };
+          const text = fs.readFileSync(file, 'utf8');
+          cached = { mtimeMs, entries: isAccountService(folder) ? parseServiceStore(text) : parseProfileExport(text) };
         } catch (error) {
           cached = { mtimeMs, entries: [], error: errorMessage(error) };
-          this.log(`project profiles in ${file} were not loaded: ${cached.error}`);
+          this.log(`${isAccountService(folder) ? 'account service' : 'project'} profiles in ${file} were not loaded: ${cached.error}`);
         }
         this.projectFiles.set(file, cached);
       }
@@ -266,7 +324,7 @@ export class AuthProfileManager {
     return loaded;
   }
 
-  /** Writes a folder's project profiles, unless the file already holds exactly them or could not be read. */
+  /** Writes a folder's project profiles, or the account service's, unless the file already holds exactly them or could not be read. */
   private writeProjectFile(folder: string, entries: ExportedProfile[], force = false): void {
     const file = this.projectFile(folder);
     const cached = this.projectFiles.get(file);
@@ -274,10 +332,17 @@ export class AuthProfileManager {
     if (cached?.error) { return; }
     if (!force && cached && cached.entries.length === entries.length &&
       cached.entries.every((entry, index) => projectEntryKey(entry) === projectEntryKey(entries[index]))) { return; }
-    writeTextAtomically(file, serializeProfileExport(entries));
+    if (isAccountService(folder)) {
+      // Read right before writing: the service may be running and have changed the file since it was listed.
+      let previous: ServiceStore | undefined;
+      try { previous = JSON.parse(fs.readFileSync(file, 'utf8')) as ServiceStore; } catch { previous = undefined; }
+      writeTextAtomically(file, serializeServiceStore(previous, entries));
+    } else {
+      writeTextAtomically(file, serializeProfileExport(entries));
+    }
     this.projectFiles.set(file, { mtimeMs: fs.statSync(file).mtimeMs, entries });
-    this.log(`wrote ${entries.length} project profiles to ${file}`);
-    if (!cached) { this.ignoreInGit(folder); }
+    this.log(`wrote ${entries.length} ${isAccountService(folder) ? 'account service' : 'project'} profiles to ${file}`);
+    if (!cached && !isAccountService(folder)) { this.ignoreInGit(folder); }
   }
 
   /** Project profiles hold login tokens in plain text; a Git repository must not commit them. */
@@ -304,25 +369,31 @@ export class AuthProfileManager {
   }
 
   /**
-   * Where a new profile is kept: private, in this VS Code client's SecretStorage, or in an open project's folder.
-   * Asked only when both kinds are enabled and a local folder is open; otherwise the only possible kind is used.
+   * Where a new profile is kept: private, in this VS Code client's SecretStorage, in the account service's store, or
+   * in an open project's folder. Asked only when more than one is possible; otherwise the only one is used.
    * Undefined when cancelled.
    */
   async pickScope(): Promise<{ folder?: string } | undefined> {
     const privateEnabled = vscode.workspace.getConfiguration().get<boolean>('aiUsage.privateProfiles.enabled', true);
+    const services = this.serviceSources();
     const folders = this.projectFolders();
-    if (!folders.length) { return {}; }
-    if (!privateEnabled && folders.length === 1) { return { folder: folders[0] }; }
+    if (!folders.length && !services.length) { return {}; }
+    if (!privateEnabled && folders.length + services.length === 1) { return { folder: [...services, ...folders][0] }; }
     const items: Array<vscode.QuickPickItem & { folder?: string }> = [];
     if (privateEnabled) {
       items.push({ label: '$(account) Private profile', detail: 'Kept in this VS Code client\'s SecretStorage and listed in every window, as before.' });
     }
+    items.push(...services.map((folder) => ({
+      label: '$(server-process) Account service profile',
+      detail: `Kept, login included, in ${this.projectFile(folder)}, where the AI Usage account service and its builds find it.`,
+      folder
+    })));
     items.push(...folders.map((folder) => ({
       label: `$(root-folder) Project profile${folders.length > 1 ? ` in ${path.basename(folder)}` : ''}`,
       detail: `Kept, login included, in ${this.projectFile(folder)} and listed whenever that folder is open.`,
       folder
     })));
-    const picked = await vscode.window.showQuickPick(items, { title: 'AI Usage · Where to keep the profile', placeHolder: 'Private, or in a project folder' });
+    const picked = await vscode.window.showQuickPick(items, { title: 'AI Usage · Where to keep the profile', placeHolder: services.length ? 'Private, in the account service, or in a project folder' : 'Private, or in a project folder' });
     return picked ? { folder: picked.folder } : undefined;
   }
 
@@ -534,6 +605,7 @@ export class AuthProfileManager {
     await this.followNative(provider);
     // Management actions return to the list. Choosing a profile activates it and closes the menu.
     while (true) {
+      await hooks?.beforeList?.(provider);
       const item = await vscode.window.showQuickPick(this.items(provider, Boolean(hooks?.back)), {
         title: `AI Usage · ${TITLES[provider]} accounts`,
         placeHolder: 'Choose a profile to activate, or manage saved profiles',
@@ -581,19 +653,8 @@ export class AuthProfileManager {
           if (await this.saveCurrent(provider)) {
             await hooks?.afterActivate?.(provider, { kind: 'saved', accountChanged: false });
           }
-        } else if (item.action === 'import') {
-          await this.importFile(provider);
-        } else if (item.action === 'transfer') {
-          await this.transferMenu(provider);
-        } else if (item.action === 'signIn') {
-          const profile = await this.pickSaved(provider, `Sign in again for a ${TITLES[provider]} profile`);
-          if (profile) { await hooks?.signIn?.(provider, profile); }
-        } else if (item.action === 'rename') {
-          await this.rename(provider);
-        } else if (item.action === 'reorder') {
-          await this.reorder(provider);
-        } else if (item.action === 'delete') {
-          await this.delete(provider);
+        } else if (item.action === 'manage') {
+          await this.manageMenu(provider, hooks);
         }
       } catch (error) {
         this.log(`${provider}: authentication profile operation failed: ${errorMessage(error)}`);
@@ -621,7 +682,7 @@ export class AuthProfileManager {
     return fallback;
   }
 
-  /** Private profiles go to global state; project profiles go back to their folders' files, logins included. */
+  /** Private profiles go to global state; project and account service profiles go back to their files, logins included. */
   private async updateState(state: ProfileState): Promise<void> {
     const stored = emptyState();
     const perFolder = new Map<string, ExportedProfile[]>();
@@ -640,7 +701,7 @@ export class AuthProfileManager {
     }
     await this.context.globalState.update(STATE_KEY, stored);
     // A folder whose file exists but has no profile left gets an empty list, so a deleted profile is gone from it.
-    for (const folder of new Set([...perFolder.keys(), ...this.projectFolders()])) {
+    for (const folder of new Set([...perFolder.keys(), ...this.profileSources()])) {
       const entries = perFolder.get(folder) ?? [];
       if (entries.length || this.projectFiles.has(this.projectFile(folder))) { this.writeProjectFile(folder, entries); }
     }
@@ -668,7 +729,7 @@ export class AuthProfileManager {
   private async storeSecret(provider: AuthProvider, id: string, credential: StoredCredential): Promise<void> {
     const folder = this.projectFolderOf.get(this.key(provider, id));
     if (folder) {
-      // A project profile's login lives in its folder's file; the file is rewritten with the new one right away.
+      // A project or account service profile's login lives in its file; the file is rewritten with the new one right away.
       this.projectCredentials.set(this.key(provider, id), credential);
       const entries = (this.projectFiles.get(this.projectFile(folder))?.entries ?? [])
         .map((entry) => entry.provider === provider && entry.id === id ? { ...entry, credential } : entry);
@@ -720,27 +781,10 @@ export class AuthProfileManager {
       action: 'save'
     });
     items.push({
-      label: '$(file-code) Import credential JSON…',
-      detail: 'Imports a credential file into VS Code SecretStorage without activating it.',
-      action: 'import'
+      label: '$(tools) Manage saved profiles…',
+      detail: 'Import, export, sign in again, rename, reorder, or delete profiles.',
+      action: 'manage'
     });
-    items.push({
-      label: '$(arrow-swap) Export or import saved profiles…',
-      detail: 'Moves the saved Claude and Codex profiles, logins included, to or from another computer through a JSON file.',
-      action: 'transfer'
-    });
-    if (providerState.profiles.length) {
-      items.push({
-        label: '$(sign-in) Sign in again…',
-        detail: `Runs the ${TITLES[provider]} CLI login in a terminal with a separate home and stores the new login in a saved profile. The active login is replaced only when that profile is the active one.`,
-        action: 'signIn'
-      });
-      items.push({ label: '$(edit) Rename a profile…', action: 'rename' });
-      if (providerState.profiles.length > 1) {
-        items.push({ label: '$(list-ordered) Move a profile up or down…', detail: 'Changes the order of the saved profiles in this menu and in rotation.', action: 'reorder' });
-      }
-      items.push({ label: '$(trash) Delete a saved profile…', action: 'delete' });
-    }
     const keepAlive = this.automationEnabled(provider, 'keepAlive');
     const autoRotate = this.automationEnabled(provider, 'autoRotate');
     const config = vscode.workspace.getConfiguration();
@@ -876,7 +920,7 @@ export class AuthProfileManager {
       return false;
     }
     await this.saveProfile(provider, name, credential, true, scope.folder);
-    void vscode.window.showInformationMessage(`${TITLES[provider]} login saved as “${name}”${scope.folder ? ` in project ${path.basename(scope.folder)}` : ''}.`);
+    void vscode.window.showInformationMessage(`${TITLES[provider]} login saved as “${name}”${scope.folder ? ` in ${isAccountService(scope.folder) ? 'the account service' : sourceLabel(scope.folder)}` : ''}.`);
     return true;
   }
 
@@ -929,10 +973,59 @@ export class AuthProfileManager {
       return;
     }
     await this.saveProfile(provider, name, credential, false, scope.folder);
-    void vscode.window.showInformationMessage(`${TITLES[provider]} credential imported as “${name}”${scope.folder ? ` in project ${path.basename(scope.folder)}` : ''}. Choose it from the profile menu to activate it.`);
+    void vscode.window.showInformationMessage(`${TITLES[provider]} credential imported as “${name}”${scope.folder ? ` in ${isAccountService(scope.folder) ? 'the account service' : sourceLabel(scope.folder)}` : ''}. Choose it from the profile menu to activate it.`);
   }
 
-  /** The export and the import behind one Accounts menu item; Back and cancel return to the accounts list. */
+  /** Profile management actions return here; Back returns to the Accounts menu. */
+  private async manageMenu(provider: AuthProvider, hooks?: ProfileHooks): Promise<void> {
+    type Action = 'importCredential' | 'transfer' | 'signIn' | 'rename' | 'reorder' | 'delete';
+    while (true) {
+      const count = this.state()[provider].profiles.length;
+      const items: Array<vscode.QuickPickItem & { action?: Action }> = [
+        {
+          label: '$(file-code) Import credential JSON…',
+          detail: 'Imports a credential file into VS Code SecretStorage without activating it.',
+          action: 'importCredential'
+        },
+        {
+          label: '$(arrow-swap) Export or import saved profiles…',
+          detail: 'Moves the saved Claude and Codex profiles, logins included, to or from another computer through a JSON file.',
+          action: 'transfer'
+        }
+      ];
+      if (count) {
+        items.push({
+          label: '$(sign-in) Sign in again…',
+          detail: `Runs the ${TITLES[provider]} CLI login in a terminal with a separate home and stores the new login in a saved profile. The active login is replaced only when that profile is the active one.`,
+          action: 'signIn'
+        });
+        items.push({ label: '$(edit) Rename a profile…', action: 'rename' });
+        if (count > 1) {
+          items.push({ label: '$(list-ordered) Move a profile up or down…', detail: 'Changes the order of the saved profiles in the Accounts menu and in rotation.', action: 'reorder' });
+        }
+        items.push({ label: '$(trash) Delete a saved profile…', action: 'delete' });
+      }
+      items.push({ label: '', kind: vscode.QuickPickItemKind.Separator });
+      items.push({ label: '$(arrow-left) Back', description: `${TITLES[provider]} accounts` });
+      const picked = await vscode.window.showQuickPick(items, { title: `AI Usage · Manage saved ${TITLES[provider]} profiles`, matchOnDetail: true });
+      if (!picked?.action) { return; }
+      if (picked.action === 'importCredential') {
+        await this.importFile(provider);
+      } else if (picked.action === 'transfer') {
+        await this.transferMenu(provider);
+      } else if (picked.action === 'signIn') {
+        const profile = await this.pickSaved(provider, `Sign in again for a ${TITLES[provider]} profile`);
+        if (profile) { await hooks?.signIn?.(provider, profile); }
+      } else if (picked.action === 'rename') {
+        await this.rename(provider);
+      } else if (picked.action === 'reorder') {
+        await this.reorder(provider);
+      } else {
+        await this.delete(provider);
+      }
+    }
+  }
+
   private async transferMenu(provider: AuthProvider): Promise<void> {
     const items: Array<vscode.QuickPickItem & { action?: 'export' | 'import' }> = [];
     if (PROVIDERS.some((candidate) => this.state()[candidate].profiles.length)) {
@@ -948,7 +1041,7 @@ export class AuthProfileManager {
       action: 'import'
     });
     items.push({ label: '', kind: vscode.QuickPickItemKind.Separator });
-    items.push({ label: '$(arrow-left) Back', description: `${TITLES[provider]} accounts` });
+    items.push({ label: '$(arrow-left) Back', description: 'Manage saved profiles' });
     const picked = await vscode.window.showQuickPick(items, { title: 'AI Usage · Export or import saved profiles', matchOnDetail: true });
     if (picked?.action === 'export') { await this.exportProfiles(); }
     if (picked?.action === 'import') { await this.importProfiles(); }

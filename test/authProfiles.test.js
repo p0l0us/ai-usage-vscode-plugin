@@ -72,9 +72,14 @@ function fixture(t, verify) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-profile-'));
   const previous = process.env.CLAUDE_CONFIG_DIR;
   const previousCodex = process.env.CODEX_HOME;
+  const previousService = process.env.AI_USAGE_HOME;
   process.env.CLAUDE_CONFIG_DIR = home;
   process.env.CODEX_HOME = home;
+  // Never the real account service store: without one here, no service profiles are listed or written.
+  process.env.AI_USAGE_HOME = path.join(home, 'ai-usage-service');
   t.after(() => {
+    if (previousService === undefined) delete process.env.AI_USAGE_HOME;
+    else process.env.AI_USAGE_HOME = previousService;
     if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR;
     else process.env.CLAUDE_CONFIG_DIR = previous;
     if (previousCodex === undefined) delete process.env.CODEX_HOME;
@@ -415,10 +420,12 @@ test('a profile with a login problem is marked and offers renew, keep-alive or b
 test('Sign in again… picks a saved profile and hands it to the sign-in hook', async t => {
   const f = fixture(t);
   const signedIn = [];
-  const action = f.manager.items('claude').find(item => item.action === 'signIn');
-  assert.match(action.label, /Sign in again/);
+  const action = f.manager.items('claude').find(item => item.action === 'manage');
+  assert.match(action.detail, /sign in again/);
+  quickPickResponses.push(items => items.find(item => item.action === 'manage'));
   quickPickResponses.push(items => items.find(item => item.action === 'signIn'));
   quickPickResponses.push(items => items.find(item => item.profile?.id === 'a'));
+  quickPickResponses.push(undefined);
   quickPickResponses.push(undefined);
   await f.manager.show('claude', { signIn: async (provider, profile) => { signedIn.push([provider, profile.id]); } });
   assert.deepEqual(signedIn, [['claude', 'a']]);
@@ -426,16 +433,23 @@ test('Sign in again… picks a saved profile and hands it to the sign-in hook', 
 
 test('Move a profile up or down… swaps it with its neighbour, one step per pick, and is offered from two profiles', async t => {
   const f = fixture(t);
-  assert.equal(f.manager.items('claude').some(item => item.action === 'reorder'), false);
+  const manageLabels = [];
+  quickPickResponses.push(items => items.find(item => item.action === 'manage'));
+  quickPickResponses.push(items => { manageLabels.push(...items.map(item => item.label)); return undefined; });
+  quickPickResponses.push(undefined);
+  await f.manager.show('claude', {});
+  assert.equal(manageLabels.includes('$(list-ordered) Move a profile up or down…'), false);
   f.globalValues.set('aiUsage.authProfiles.v1', {
     claude: { profiles: [{ id: 'b', name: 'Claude 2' }, { id: 'a', name: 'Claude 1' }, { id: 'c', name: 'Claude 3' }], activeProfileId: 'a' },
     codex: { profiles: [] }
   });
   const offered = [];
+  quickPickResponses.push(items => items.find(item => item.action === 'manage'));
   quickPickResponses.push(items => items.find(item => item.action === 'reorder'));
   quickPickResponses.push(items => items.find(item => item.profile?.id === 'a'));
   quickPickResponses.push((items, options) => { offered.push(items.map(item => item.label), options.placeHolder); return items.find(item => item.step === -1); });
   quickPickResponses.push((items, options) => { offered.push(items.map(item => item.label), options.placeHolder); return items.find(item => !item.step && item.kind === undefined); });
+  quickPickResponses.push(undefined);
   quickPickResponses.push(undefined);
   await f.manager.show('claude', {});
   const stored = f.globalValues.get('aiUsage.authProfiles.v1').claude;
@@ -578,23 +592,53 @@ test('a file that is not a profile export is refused with the reason', async t =
   assert.match(errorMessages.at(-1), /could not import the profiles: The selected file is not an AI Usage profile export/);
 });
 
-test('export and import share one Accounts menu item that opens a picker of the two', async t => {
+test('credential import and profile transfer live in Manage saved profiles', async t => {
   const f = fixture(t);
   const labels = f.manager.items('claude').map(item => item.label);
-  assert.equal(labels.filter(label => label === '$(arrow-swap) Export or import saved profiles…').length, 1);
+  assert.ok(!labels.includes('$(file-code) Import credential JSON…'));
+  assert.ok(!labels.includes('$(arrow-swap) Export or import saved profiles…'));
+  assert.equal(labels.filter(label => label === '$(tools) Manage saved profiles…').length, 1);
   assert.ok(!labels.some(label => label.endsWith('Export saved profiles…') || label.endsWith('Import saved profiles…')));
   const target = path.join(path.dirname(f.file), 'export.json');
-  quickPickResponses.push(items => items.find(item => item.action === 'transfer'));
+  quickPickResponses.push(items => items.find(item => item.action === 'manage'));
+  quickPickResponses.push(items => {
+    assert.ok(items.some(item => item.action === 'importCredential'));
+    return items.find(item => item.action === 'transfer');
+  });
   quickPickResponses.push(items => {
     assert.deepEqual(items.map(item => item.label), ['$(export) Export saved profiles…', '$(cloud-download) Import saved profiles…', '', '$(arrow-left) Back']);
+    assert.equal(items.at(-1).description, 'Manage saved profiles');
     return items[0];
   });
   quickPickResponses.push(items => items.filter(item => item.picked));
   saveDialogResponses.push(uri(target));
-  // Back in the accounts list afterwards; closing it ends the menu.
+  quickPickResponses.push(undefined);
   quickPickResponses.push(undefined);
   await f.manager.show('claude');
   assert.deepEqual(JSON.parse(fs.readFileSync(target, 'utf8')).profiles.map(p => [p.provider, p.id]), [['claude', 'a'], ['codex', 'x']]);
+  assert.equal(quickPickResponses.length, 0);
+});
+
+test('Manage saved profiles offers imports with no profiles', async t => {
+  const f = fixture(t);
+  f.globalValues.set('aiUsage.authProfiles.v1', {
+    claude: { profiles: [] },
+    codex: { profiles: [] }
+  });
+  assert.ok(f.manager.items('claude').some(item => item.action === 'manage'));
+  quickPickResponses.push(items => items.find(item => item.action === 'manage'));
+  quickPickResponses.push(items => {
+    assert.deepEqual(items.filter(item => item.action).map(item => item.action), ['importCredential', 'transfer']);
+    return items.find(item => item.action === 'importCredential');
+  });
+  quickPickResponses.push(items => items.find(item => item.action === 'transfer'));
+  quickPickResponses.push(items => {
+    assert.deepEqual(items.filter(item => item.action).map(item => item.action), ['import']);
+    return items.at(-1);
+  });
+  quickPickResponses.push(undefined);
+  quickPickResponses.push(undefined);
+  await f.manager.show('claude');
   assert.equal(quickPickResponses.length, 0);
 });
 
@@ -684,4 +728,43 @@ test('a project file in a subfolder is not added to .gitignore again when its fo
   assert.equal(await f.manager.saveCurrent('claude'), true);
   assert.ok(fs.existsSync(path.join(project, 'secrets', 'ai-usage.json')));
   assert.equal(fs.readFileSync(path.join(project, '.gitignore'), 'utf8'), 'secrets/\n');
+});
+
+test('profiles in the account service store are listed after the private ones and changes go back to that file', async t => {
+  const f = fixture(t);
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-service-'));
+  const previous = process.env.AI_USAGE_HOME;
+  process.env.AI_USAGE_HOME = home;
+  t.after(() => {
+    if (previous === undefined) delete process.env.AI_USAGE_HOME;
+    else process.env.AI_USAGE_HOME = previous;
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+  const store = path.join(home, 'profiles.json');
+  const now = '2026-10-07T20:03:04.000Z';
+  fs.writeFileSync(store, JSON.stringify({
+    version: 1,
+    claude: { profiles: [], activeProfileId: 'kept-by-service' },
+    codex: { profiles: [
+      { id: 's1', name: 'Codex account 1', createdAt: now, updatedAt: now, email: 's1@example.com', credential: f.codex },
+      { id: 's2', name: 'Codex account 2', createdAt: now, updatedAt: now }
+    ] }
+  }));
+  const listed = f.manager.profiles('codex');
+  assert.deepEqual(listed.map(profile => [profile.id, profile.folder]), [['x', undefined], ['s1', home]]);
+  assert.match(f.manager.items('codex').find(item => item.profile?.id === 's1').description, /account service/);
+
+  quickPickResponses.push(items => items.find(item => item.profile?.id === 's1'));
+  inputBoxResponses.push('Codex account one');
+  await f.manager.rename('codex');
+  const written = JSON.parse(fs.readFileSync(store, 'utf8'));
+  assert.deepEqual(written.codex.profiles.map(profile => [profile.id, profile.name]), [['s1', 'Codex account one']]);
+  assert.deepEqual(written.codex.profiles[0].credential, f.codex);
+  assert.equal(written.claude.activeProfileId, 'kept-by-service');
+  assert.equal(fs.statSync(store).mode & 0o777, 0o600);
+  assert.equal(fs.existsSync(path.join(home, '.gitignore')), false);
+  assert.equal(f.globalValues.get('aiUsage.authProfiles.v1').codex.profiles.some(profile => profile.id === 's1'), false);
+
+  f.settings.set('aiUsage.serviceProfiles.enabled', false);
+  assert.deepEqual(f.manager.profiles('codex').map(profile => profile.id), ['x']);
 });
