@@ -8,6 +8,8 @@ const Module = require('node:module');
 // Every window shares these user settings, as VS Code does.
 const settings = new Map();
 const informationMessages = [];
+const quickPickResponses = [];
+const executed = [];
 const load = Module._load;
 Module._load = function(id, ...args) {
   if (id === 'vscode') return {
@@ -20,9 +22,10 @@ Module._load = function(id, ...args) {
     window: {
       showInformationMessage: async (message) => { informationMessages.push(message); return undefined; },
       showWarningMessage: async () => undefined,
-      showErrorMessage: async () => undefined
+      showErrorMessage: async () => undefined,
+      showQuickPick: async (items) => { const response = quickPickResponses.shift(); return typeof response === 'function' ? response(items) : response; }
     },
-    commands: { executeCommand: async () => undefined },
+    commands: { executeCommand: async (...args) => { executed.push(args); } },
     workspace: {
       workspaceFolders: [],
       getConfiguration: () => ({
@@ -121,4 +124,33 @@ test('declining the background service offers it once and still gives the window
   assert.equal(informationMessages.filter((message) => /run its account service in the background/.test(message)).length, 1);
   manager.dispose();
   assert.equal(fs.existsSync(path.join(root, 'home', 'service')), false, 'no service package was installed');
+});
+
+test('the Account service menu ends with Back, to the AI Usage menu or to the menu that opened it', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-windows-'));
+  const previous = process.env.AI_USAGE_HOME;
+  process.env.AI_USAGE_HOME = path.join(root, 'home');
+  settings.clear();
+  const manager = new ServiceManager(windowContext(path.join(root, 'window')), () => {});
+  t.after(() => {
+    manager.dispose();
+    if (previous === undefined) delete process.env.AI_USAGE_HOME; else process.env.AI_USAGE_HOME = previous;
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  executed.length = 0;
+  quickPickResponses.push((items) => {
+    assert.equal(items.at(-1).label, '$(arrow-left) Back');
+    assert.equal(items.at(-1).description, 'AI Usage menu of all services');
+    return items.at(-1);
+  });
+  await manager.showMenu();
+  assert.deepEqual(executed, [['aiUsage.showDetails']]);
+
+  let returned = false;
+  quickPickResponses.push((items) => {
+    assert.equal(items.at(-1).description, 'Codex accounts');
+    return items.at(-1);
+  });
+  await manager.showMenu({ description: 'Codex accounts', run: async () => { returned = true; } });
+  assert.equal(returned, true);
 });

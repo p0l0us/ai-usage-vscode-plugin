@@ -175,7 +175,7 @@ export class AccountsMenu {
           }
           case 'registerMcp': await hooks?.registerMcp?.(provider); break;
           case 'settings': case 'serviceSettings': await openAiUsageSettings(`aiUsage.${provider}`); return;
-          case 'service': await this.services.showMenu(); return;
+          case 'service': await this.services.showMenu({ description: `${TITLES[provider]} accounts`, run: () => this.show(provider, hooks) }); return;
           case 'save':
             // Saving copies the login that is already active into a profile; no process starts using a new account.
             if (await this.saveCurrent(client, provider, view)) { await hooks?.afterSaved?.(provider); }
@@ -209,10 +209,10 @@ export class AccountsMenu {
     const picked = await vscode.window.showQuickPick(items, { title: `AI Usage · ${TITLES[provider]} accounts`, matchOnDetail: true });
     if (picked?.action === 'install') {
       if (!this.services.isInstalled()) { await this.services.install(); }
-      else if (!await this.services.ensure()) { await this.services.showMenu(); return; }
+      else if (!await this.services.ensure()) { await this.services.showMenu({ description: `${TITLES[provider]} accounts`, run: () => this.show(provider, hooks) }); return; }
       if (this.services.connected) { await this.show(provider, hooks); }
     } else if (picked?.action === 'service') {
-      await this.services.showMenu();
+      await this.services.showMenu({ description: `${TITLES[provider]} accounts`, run: () => this.show(provider, hooks) });
     } else if (picked?.action === 'back') {
       await hooks?.back?.(provider);
     }

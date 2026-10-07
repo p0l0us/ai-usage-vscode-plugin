@@ -425,11 +425,14 @@ export class ServiceManager implements vscode.Disposable {
   }
   private offeredTransfer = false;
 
-  /** The Account Service menu: status, start, stop, restart, reinstall, uninstall, log, command path. */
-  async showMenu(): Promise<void> {
+  /**
+   * The Account Service menu: status, profiles and transfers, start, stop, restart, reinstall, uninstall, log.
+   * Back returns to `back` (an Accounts menu), or to the AI Usage menu of all services.
+   */
+  async showMenu(back?: { description: string; run: () => Promise<unknown> }): Promise<void> {
     const status = serviceStatus(this.home);
     const client = this.connected;
-    type Item = vscode.QuickPickItem & { action?: 'install' | 'start' | 'stop' | 'restart' | 'uninstall' | 'log' | 'settings' | 'toService' | 'toVscode' };
+    type Item = vscode.QuickPickItem & { action?: 'install' | 'start' | 'stop' | 'restart' | 'uninstall' | 'log' | 'settings' | 'toService' | 'toVscode' | 'back' };
     const items: Item[] = [];
     items.push({ label: 'Status', kind: vscode.QuickPickItemKind.Separator });
     items.push({ label: status.installed ? `$(package) Installed: version ${status.installed.version}` : '$(package) Not installed',
@@ -457,9 +460,12 @@ export class ServiceManager implements vscode.Disposable {
     }
     items.push({ label: '$(output) Open the service log', detail: logFile(this.home), action: 'log' });
     items.push({ label: '$(gear) Settings', description: `${ENABLED_SETTING}, ${BACKGROUND_SETTING}`, action: 'settings' });
+    items.push({ label: '', kind: vscode.QuickPickItemKind.Separator });
+    items.push({ label: '$(arrow-left) Back', description: back?.description ?? 'AI Usage menu of all services', action: 'back' });
     const picked = await vscode.window.showQuickPick(items, { title: 'AI Usage · Account service', matchOnDetail: true });
     if (!picked?.action) { return; }
     switch (picked.action) {
+      case 'back': await (back ? back.run() : vscode.commands.executeCommand('aiUsage.showDetails')); break;
       case 'install': await this.install(); break;
       case 'toService': await this.transfer('vscode', 'service'); break;
       case 'toVscode': await this.transfer('service', 'vscode'); break;

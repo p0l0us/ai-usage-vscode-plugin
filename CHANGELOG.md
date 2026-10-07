@@ -1,7 +1,8 @@
 # Changelog
 
-## 1.0.4 (unreleased)
+## 1.0.5 (unreleased)
 
+- The Account service menu ends with **Back**, to the AI Usage menu or to the Accounts menu it was opened from.
 - **Account service…** moved from the Claude and Codex Accounts menus to the AI Usage menu of all services, since one
   service serves both; its line says where the service runs (background or inside a VS Code window) and its version.
 - **Accounts without a background service.** Declining the background service, or turning
