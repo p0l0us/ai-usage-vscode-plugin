@@ -2,7 +2,7 @@
   "name": "ai-usage-vscode-plugin",
   "displayName": "AI subscription management and usage",
   "description": "Manage your Claude Code, Codex and GitHub Copilot subscriptions and see what is left of them: switch between saved accounts without signing in again, keep them warm, rotate on exhaustion, and read live 5h/7d windows, premium requests and org billing in the status bar and chat input. Open source, contributions welcome.",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "publisher": "p0l0us",
   "license": "GPL-3.0-only",
   "repository": {
@@ -6922,7 +6922,7 @@
             "type": "boolean",
             "default": true,
             "order": 0,
-            "markdownDescription": "**Manage Claude and Codex accounts.** The account service keeps the saved profiles in `~/.ai-usage`, independent of VS Code, sends keep-alives and rotates accounts. It runs in the background or, with `#aiUsage.accountService.background#` off or not installed, inside VS Code while a window is open. Off: no Accounts menus, keep-alives or rotation in this window. See [Account service](https://github.com/p0l0us/ai-usage-vscode-plugin/blob/main/docs/CONFIGURATION.md#account-service)."
+            "markdownDescription": "**Manage Claude and Codex accounts.** The account service keeps the saved profiles (in `~/.ai-usage` as a background service, in VS Code otherwise), sends keep-alives and rotates accounts. It runs in the background or, with `#aiUsage.accountService.background#` off or not installed, inside VS Code while a window is open. Off: no Accounts menus, keep-alives or rotation in this window. See [Account service](https://github.com/p0l0us/ai-usage-vscode-plugin/blob/main/docs/CONFIGURATION.md#account-service)."
           },
           "aiUsage.accountService.background": {
             "type": "boolean",

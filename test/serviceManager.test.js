@@ -37,15 +37,20 @@ Module._load = function(id, ...args) {
 const { ServiceManager } = require('../out/serviceManager');
 Module._load = load;
 
-/** One VS Code window's extension context; nothing of the real user's storage. */
-function windowContext(storage) {
-  const state = new Map();
+/** VS Code's global state and SecretStorage, shared by every window of one user; never the real user's. */
+function userStorage() {
+  return { state: new Map(), secrets: new Map() };
+}
+
+/** One VS Code window's extension context over the user's storage. */
+function windowContext(storage, user = userStorage()) {
+  const { state, secrets } = user;
   return {
     extensionPath: path.join(__dirname, '..'),
     extension: { packageJSON: { version: '1.0.0-test' } },
     globalStorageUri: { fsPath: storage },
     globalState: { get: (key) => state.get(key), update: async (key, value) => { state.set(key, value); } },
-    secrets: { get: async () => undefined, delete: async () => undefined, store: async () => undefined },
+    secrets: { get: async (key) => secrets.get(key), delete: async (key) => { secrets.delete(key); }, store: async (key, value) => { secrets.set(key, value); } },
     environmentVariableCollection: { prepend() {}, clear() {} }
   };
 }
@@ -70,8 +75,11 @@ test('without the background service one window hosts the service, the others us
     if (previous === undefined) delete process.env.AI_USAGE_HOME; else process.env.AI_USAGE_HOME = previous;
     fs.rmSync(root, { recursive: true, force: true });
   });
+  const user = userStorage();
+  user.state.set('aiUsage.authProfiles.v1', { codex: { profiles: [{ id: 'x1', name: 'Codex 1', createdAt: '2026-10-07T12:00:00.000Z', updatedAt: '2026-10-07T12:00:00.000Z' }] } });
+  user.secrets.set('aiUsage.authProfile.v1.codex.x1', JSON.stringify({ auth_mode: 'chatgpt', tokens: { access_token: 'a', refresh_token: 'r', account_id: 'acc-1' }, last_refresh: '2026-10-07T12:00:00.000Z' }));
   const open = (name) => {
-    const manager = new ServiceManager(windowContext(path.join(root, name)), () => {});
+    const manager = new ServiceManager(windowContext(path.join(root, name), user), () => {});
     managers.push(manager);
     return manager;
   };
@@ -82,6 +90,9 @@ test('without the background service one window hosts the service, the others us
   assert.equal(first.hosting, true);
   assert.equal(first.isInstalled(), false, 'nothing is installed');
   assert.equal(informationMessages.length, 0, 'no install offer while the background service is off');
+  assert.equal(client.info.profileStore, 'vscode');
+  assert.deepEqual((await client.list('codex')).profiles.map((profile) => profile.name), ['Codex 1'], 'the profiles saved in VS Code are listed');
+  assert.equal(fs.existsSync(path.join(root, 'home', 'profiles.json')), false, 'nothing is written to the service file');
 
   const second = open('second');
   assert.ok(await second.ensure());
@@ -90,6 +101,7 @@ test('without the background service one window hosts the service, the others us
   first.dispose();
   await until(() => second.hosting && second.connected);
   assert.ok(second.connected, 'the second window took over');
+  assert.deepEqual((await second.connected.list('codex')).profiles.map((profile) => profile.name), ['Codex 1']);
 });
 
 test('declining the background service offers it once and still gives the window a working service', async (t) => {

@@ -74,6 +74,8 @@ export type ServiceInfo = {
   node: string;
   socket: string;
   clients: number;
+  /** Where the private profiles are: `service` (profiles.json in the home) or `vscode` (a VS Code window's storage). */
+  profileStore?: 'service' | 'vscode';
 };
 
 export type Snapshot = {

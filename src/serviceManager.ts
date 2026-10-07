@@ -7,7 +7,7 @@ import {
   stopService, uninstallService
 } from '../service/out';
 import { ConfigSync, readSettings } from './configSync';
-import { migrateLegacyProfiles } from './legacyProfiles';
+import { ProfileStoreKind, STORE_TITLES, clientAccess, directAccess, transferProfiles, vscodeProfileBackend, vscodeProfileCount } from './vscodeProfiles';
 
 /**
  * The extension's side of the account service: installs the bundled package under the service home (with the
@@ -17,7 +17,9 @@ import { migrateLegacyProfiles } from './legacyProfiles';
  * Without the background service (declined, not installed yet, or `aiUsage.accountService.background` off) the
  * same service runs inside a VS Code window instead: the first window that finds no service answering hosts it on
  * the service socket, the other windows and the `ai-usage` command connect to it, and when that window closes
- * another one takes over. Profiles stay in the service home either way, so they do not depend on VS Code.
+ * another one takes over. That one keeps the private profiles in VS Code's storage, as the extension did before the
+ * service; the background service keeps them in its profiles.json. Project profiles are listed either way. Profiles
+ * move between the two only when the user asks (Account service menu, or the offer after an install).
  */
 
 const ENABLED_SETTING = 'aiUsage.accountService.enabled';
@@ -160,13 +162,15 @@ export class ServiceManager implements vscode.Disposable {
   private async hostHere(): Promise<ServiceClient | undefined> {
     let host: ServiceHost;
     try {
-      host = await startServiceHost({ home: this.home, version: this.bundledVersion(), embedded: true });
+      const privateProfiles = await vscodeProfileBackend(this.context, this.log);
+      host = await startServiceHost({ home: this.home, version: this.bundledVersion(), embedded: true, privateProfiles });
+      void host.stopped.then(() => privateProfiles.flush());
     } catch (error) {
       this.log(`service: not hosted in this window: ${error instanceof Error ? error.message : String(error)}`);
       return this.connectExisting();
     }
     this.host = host;
-    this.log(`service: running inside this VS Code window (home ${this.home}); it stops when the window closes`);
+    this.log(`service: running inside this VS Code window with the profiles saved in VS Code (home ${this.home}); it stops when the window closes`);
     void host.stopped.then(() => { if (this.host === host) { this.host = undefined; } });
     return this.connectExisting();
   }
@@ -227,10 +231,7 @@ export class ServiceManager implements vscode.Disposable {
     }
     try {
       await this.syncConfig(client);
-      const migrated = await migrateLegacyProfiles(this.context, client, this.home, this.log);
-      if (migrated && (migrated.moved || migrated.withoutLogin.length)) {
-        void vscode.window.showInformationMessage(`AI Usage: moved ${migrated.moved} saved profile${migrated.moved === 1 ? '' : 's'} to the account service.${migrated.withoutLogin.length ? ` No login was stored here for ${migrated.withoutLogin.join(', ')}; sign in again for those.` : ''}`);
-      }
+      void this.offerOtherProfiles(client);
     } catch (error) {
       this.log(`service: could not finish the first sync: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -357,11 +358,78 @@ export class ServiceManager implements vscode.Disposable {
     this.installEmitter.fire();
   }
 
+  /** Which store the connected service keeps its private profiles in. */
+  profileStore(client = this.connected): ProfileStoreKind | undefined {
+    return client ? client.info.profileStore ?? 'service' : undefined;
+  }
+
+  private async access(kind: ProfileStoreKind) {
+    const client = this.connected;
+    return client && this.profileStore(client) === kind ? clientAccess(client) : directAccess(kind, this.home, this.context, this.log);
+  }
+
+  /**
+   * Copies or moves private profiles between the account service and VS Code, both ways. Asks which profiles and
+   * whether to copy or move; `preset` skips the second question. Returns whether anything was transferred.
+   */
+  async transfer(from: ProfileStoreKind, to: ProfileStoreKind, preset?: 'copy' | 'move'): Promise<boolean> {
+    try {
+      const source = await this.access(from);
+      const entries = await source.list();
+      if (!entries.length) {
+        void vscode.window.showInformationMessage(`AI Usage: ${STORE_TITLES[from]} keeps no profiles to transfer.`);
+        return false;
+      }
+      const picked = await vscode.window.showQuickPick(entries.map((entry) => ({
+        label: entry.name, description: [entry.provider === 'claude' ? 'Claude' : 'Codex', entry.email].filter(Boolean).join(' · '), picked: true, entry
+      })), { title: `AI Usage · Profiles from ${STORE_TITLES[from]} to ${STORE_TITLES[to]}`, placeHolder: 'The chosen profiles are transferred with their logins', canPickMany: true });
+      if (!picked?.length) { return false; }
+      let mode = preset;
+      if (!mode) {
+        const choice = await vscode.window.showQuickPick([
+          { label: '$(arrow-right) Move', description: `removes them from ${STORE_TITLES[from]}, so each login is kept in one place`, mode: 'move' as const },
+          { label: '$(copy) Copy', description: `keeps them in ${STORE_TITLES[from]} too; a login refreshed in one place can stop working in the other`, mode: 'copy' as const }
+        ], { title: `AI Usage · Move or copy ${picked.length} profile${picked.length === 1 ? '' : 's'}` });
+        mode = choice?.mode;
+      }
+      if (!mode) { return false; }
+      const target = await this.access(to);
+      const summary = await transferProfiles(source, target, picked.map((item) => item.entry), mode === 'move');
+      this.log(`profiles: ${mode === 'move' ? 'moved' : 'copied'} ${picked.length} from ${STORE_TITLES[from]} to ${STORE_TITLES[to]}: ${summary}`);
+      void vscode.window.showInformationMessage(`AI Usage: ${mode === 'move' ? 'moved' : 'copied'} ${picked.length} profile${picked.length === 1 ? '' : 's'} to ${STORE_TITLES[to]} (${summary}).`);
+      await this.refreshViews();
+      return true;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.log(`profiles: transfer from ${STORE_TITLES[from]} to ${STORE_TITLES[to]} failed: ${message}`);
+      void vscode.window.showErrorMessage(`AI Usage: could not transfer the profiles: ${message}`);
+      return false;
+    }
+  }
+
+  /** When the store in use is empty but the other one keeps profiles, offers to bring them over, once per session. */
+  private async offerOtherProfiles(client: ServiceClient): Promise<void> {
+    if (this.offeredTransfer) { return; }
+    const current = this.profileStore(client);
+    if (!current) { return; }
+    const other: ProfileStoreKind = current === 'service' ? 'vscode' : 'service';
+    const views = await Promise.all((['claude', 'codex'] as const).map((provider) => client.list(provider)));
+    if (views.some((view) => view.profiles.some((profile) => !profile.folder))) { return; }
+    const count = other === 'vscode' ? vscodeProfileCount(this.context) : (await (await this.access('service')).list()).length;
+    if (!count) { return; }
+    this.offeredTransfer = true;
+    const choice = await vscode.window.showInformationMessage(
+      `AI Usage: ${count} profile${count === 1 ? ' is' : 's are'} saved in ${STORE_TITLES[other]}, but ${current === 'service' ? 'the account service is in use' : 'no background service is in use, so VS Code\'s own profiles are used'}. Bring ${count === 1 ? 'it' : 'them'} over?`,
+      'Move', 'Copy', 'Not now');
+    if (choice === 'Move' || choice === 'Copy') { await this.transfer(other, current, choice === 'Move' ? 'move' : 'copy'); }
+  }
+  private offeredTransfer = false;
+
   /** The Account Service menu: status, start, stop, restart, reinstall, uninstall, log, command path. */
   async showMenu(): Promise<void> {
     const status = serviceStatus(this.home);
     const client = this.connected;
-    type Item = vscode.QuickPickItem & { action?: 'install' | 'start' | 'stop' | 'restart' | 'uninstall' | 'log' | 'settings' };
+    type Item = vscode.QuickPickItem & { action?: 'install' | 'start' | 'stop' | 'restart' | 'uninstall' | 'log' | 'settings' | 'toService' | 'toVscode' };
     const items: Item[] = [];
     items.push({ label: 'Status', kind: vscode.QuickPickItemKind.Separator });
     items.push({ label: status.installed ? `$(package) Installed: version ${status.installed.version}` : '$(package) Not installed',
@@ -372,6 +440,13 @@ export class ServiceManager implements vscode.Disposable {
     items.push({ label: status.autostart.kind === 'none' ? '$(warning) Autostart: none available' : `$(${status.autostart.registered ? 'pass' : 'warning'}) Autostart: ${status.autostart.kind}, ${status.autostart.registered ? 'registered' : 'not registered'}`,
       detail: status.autostart.detail ?? (status.autostart.registered ? 'The service starts when you sign in.' : 'Reinstall to register it.') });
     if (status.launcher) { items.push({ label: '$(terminal) Command: ai-usage', detail: `${status.launcher} · available in VS Code terminals; add ${launcherDir(this.home)} to your PATH elsewhere.` }); }
+    const store = this.profileStore(client);
+    items.push({ label: 'Profiles', kind: vscode.QuickPickItemKind.Separator });
+    items.push({ label: `$(database) In use: ${store === 'vscode' ? 'saved in VS Code' : store === 'service' ? 'saved in the account service' : 'none (not connected)'}`,
+      detail: store === 'vscode' ? 'No background service is used; the private profiles are in VS Code\'s storage, as before the service. Project profiles are listed too.'
+        : store === 'service' ? `The private profiles are in ${this.home}/profiles.json, also without VS Code. Project profiles are listed too.` : undefined });
+    items.push({ label: '$(arrow-right) Transfer profiles from VS Code to the account service…', detail: `Copy or move; ${vscodeProfileCount(this.context)} saved in VS Code.`, action: 'toService' });
+    items.push({ label: '$(arrow-left) Transfer profiles from the account service to VS Code…', detail: 'Copy or move the profiles the service keeps into VS Code\'s storage.', action: 'toVscode' });
     items.push({ label: 'Actions', kind: vscode.QuickPickItemKind.Separator });
     items.push({ label: status.installed ? '$(sync) Reinstall or upgrade' : '$(cloud-download) Install', detail: `Installs the bundled service ${this.bundledVersion()} and registers it to start at sign-in.`, action: 'install' });
     if (status.installed) {
@@ -386,6 +461,8 @@ export class ServiceManager implements vscode.Disposable {
     if (!picked?.action) { return; }
     switch (picked.action) {
       case 'install': await this.install(); break;
+      case 'toService': await this.transfer('vscode', 'service'); break;
+      case 'toVscode': await this.transfer('service', 'vscode'); break;
       case 'start': { const result = startService(this.home); void vscode.window.showInformationMessage(`AI Usage: account service ${result.ok ? result.detail : `could not start: ${result.detail}`}.`); await this.ensure(); break; }
       case 'stop': { const result = await stopService(this.home); void vscode.window.showInformationMessage(`AI Usage: account service ${result.detail}.`); break; }
       case 'restart': { const result = await restartService(this.home); void vscode.window.showInformationMessage(`AI Usage: account service ${result.ok ? `restarted (${result.detail})` : `could not restart: ${result.detail}`}.`); await this.ensure(); break; }

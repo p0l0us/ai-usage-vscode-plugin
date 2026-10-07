@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import { AccountService } from './accountService';
+import type { PrivateProfileBackend } from './profileStore';
 import { Logger } from './logger';
 import { ensureServiceHome, infoFile, logFile, readOrCreateToken, socketPath, stateDir } from './paths';
 import { RpcServer } from './rpc';
@@ -24,6 +25,8 @@ export type HostOptions = {
   embedded?: boolean;
   /** Told every log line, besides the service log file. */
   onLog?: (line: string) => void;
+  /** Where the private profiles are kept; profiles.json in the home by default. */
+  privateProfiles?: PrivateProfileBackend;
 };
 
 /** A running account service: its core, and how to stop it. */
@@ -51,7 +54,7 @@ export async function startServiceHost(options: HostOptions): Promise<ServiceHos
   const logger = new Logger(logFile(home));
   if (options.onLog) { logger.onLine(options.onLog); }
   const token = readOrCreateToken(home);
-  const service = new AccountService({ home, version, log: (message) => logger.log(message) });
+  const service = new AccountService({ home, version, log: (message) => logger.log(message), privateProfiles: options.privateProfiles });
   let stopping: Promise<void> | undefined;
   let resolveStopped: () => void = () => undefined;
   const stopped = new Promise<void>((resolve) => { resolveStopped = resolve; });

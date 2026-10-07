@@ -18,8 +18,9 @@ ai-usage service run            # or: run it in the foreground instead
 `ai-usage service install` copies the package to `~/.ai-usage/service`, registers it to start when you sign in (a
 systemd user unit on Linux, a launchd agent on macOS, a Run registry value on Windows) and puts the `ai-usage`
 launcher in `~/.ai-usage/bin`. The VS Code extension does the same with your permission; when you decline, it runs
-the service inside VS Code while a window is open instead. Either way the profiles stay in `~/.ai-usage`, so the
-command, the extension and a later background install all see the same accounts. `AI_USAGE_HOME` moves the whole
+the service inside VS Code while a window is open instead, with the profiles saved in VS Code as before. The
+background service keeps its profiles in `~/.ai-usage/profiles.json`; the extension's Account service menu copies or
+moves profiles between the two in either direction. `AI_USAGE_HOME` moves the whole
 home elsewhere; `AI_USAGE_NODE` names the Node.js (20 or newer) to run the service with.
 
 ## Commands

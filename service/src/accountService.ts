@@ -13,7 +13,7 @@ import { deserializeUsage } from './cache';
 import { ServiceConfig, automationSettings, configFileOf, loadConfig, saveConfig, setConfigValue, strategySummary } from './configStore';
 import { LiveUsage, resolveCli, verifyCodexNativeAccount } from './live';
 import { ExportedProfile, ImportPlan, parseProfileExport, serializeProfileExport } from './profileTransfer';
-import { ActivationOutcome, ProfileMetadata, ProfileStore, PROVIDERS, TITLES, importOutcome } from './profileStore';
+import { ActivationOutcome, PrivateProfileBackend, ProfileMetadata, ProfileStore, PROVIDERS, TITLES, importOutcome } from './profileStore';
 import {
   ActivationResult, ExportResult, ImportPlanView, ImportSummary, KeepAliveAllResult, ProfileView, ProviderView, SaveNativeResult, ServiceEvent, ServiceInfo,
   SerializedUsage, SignInPreparation, SignInResult, Snapshot, UsageReadResult, serializeKeepAlive
@@ -44,6 +44,8 @@ export type AccountServiceOptions = {
   verifyCodex?: typeof verifyCodexNativeAccount;
   syncClaudeMetadata?: typeof activateClaudeAccountMetadata;
   now?: () => number;
+  /** Where the private profiles are kept; profiles.json in the home by default. */
+  privateProfiles?: PrivateProfileBackend;
 };
 
 function providerParam(params: Record<string, unknown>): AuthProvider {
@@ -106,7 +108,8 @@ export class AccountService {
       projectFileName: () => this.config.projectProfiles.file,
       projectProfilesEnabled: () => this.config.projectProfiles.enabled,
       privateProfilesEnabled: () => this.config.privateProfiles.enabled,
-      notice: (message) => this.emit({ event: 'notice', level: 'info', message })
+      notice: (message) => this.emit({ event: 'notice', level: 'info', message }),
+      privateProfiles: options.privateProfiles
     });
     this.store.verifyActivation = (provider, credential, expected) => this.verifyActivation(provider, credential, expected);
     const states = stateDir(options.home);
@@ -317,7 +320,7 @@ export class AccountService {
 
   info(): ServiceInfo {
     return { version: this.options.version, pid: process.pid, startedAt: this.startedAt.toISOString(), home: this.options.home,
-      node: process.execPath, socket: '', clients: this.clientCount() };
+      node: process.execPath, socket: '', clients: this.clientCount(), profileStore: this.store.privateBackend.kind };
   }
 
   async snapshot(): Promise<Snapshot> {

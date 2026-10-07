@@ -43,7 +43,28 @@ export type ProfileMetadata = {
   folder?: string;
 };
 
-type StoredProfile = ProfileMetadata & { credential?: StoredCredential };
+export type StoredProfile = ProfileMetadata & { credential?: StoredCredential };
+
+/**
+ * Where the private profiles and their logins are kept. The service keeps them in `profiles.json` in its home; a
+ * host may keep them elsewhere, such as the VS Code extension in its own SecretStorage when no background service
+ * is used. Reads and writes are synchronous; a backend over asynchronous storage keeps a copy in memory.
+ */
+export type PrivateProfileBackend = {
+  /** What the clients are told: `service` for profiles.json, `vscode` for VS Code's storage. */
+  readonly kind: 'service' | 'vscode';
+  read(): Partial<ProfileFile> | undefined;
+  write(state: ProfileFile): void;
+};
+
+/** The private profiles in a profiles.json file, mode 0600. */
+export function fileProfileBackend(file: string): PrivateProfileBackend {
+  return {
+    kind: 'service',
+    read: () => { try { return JSON.parse(fs.readFileSync(file, 'utf8')) as Partial<ProfileFile>; } catch { return undefined; } },
+    write: (state) => writeJsonAtomically(file, state)
+  };
+}
 
 export type ProfileStoreOptions = {
   /** The project profile file, relative to each folder; absolute paths are used as they are. */
@@ -52,6 +73,8 @@ export type ProfileStoreOptions = {
   privateProfilesEnabled?: () => boolean;
   /** Told about things worth a notification, such as a .gitignore that was edited. */
   notice?: (message: string) => void;
+  /** Where the private profiles are kept; profiles.json at the store's file by default. */
+  privateProfiles?: PrivateProfileBackend;
 };
 
 /** Where a new profile may be kept, as the clients ask before saving one. */
@@ -66,8 +89,8 @@ function toEntry(provider: AuthProvider, profile: StoredProfile, credential: Sto
   return { provider, id: profile.id, name: profile.name, createdAt: profile.createdAt, updatedAt: profile.updatedAt,
     ...(profile.email ? { email: profile.email } : {}), ...(profile.accountId ? { accountId: profile.accountId } : {}), credential };
 }
-type ProviderState = { profiles: StoredProfile[]; activeProfileId?: string };
-type ProfileFile = { version: 1; claude: ProviderState; codex: ProviderState };
+export type ProviderState = { profiles: StoredProfile[]; activeProfileId?: string };
+export type ProfileFile = { version: 1; claude: ProviderState; codex: ProviderState };
 
 /**
  * What an `afterActivate` hook is reacting to. Only a real account change invalidates already-running vendor
@@ -290,10 +313,16 @@ export class ProfileStore {
 
   // --- the merged state --------------------------------------------------------------------------------------
 
-  /** The private profiles from profiles.json, then the project profiles of every declared folder. */
+  /** Where the private profiles are kept. */
+  get privateBackend(): PrivateProfileBackend {
+    this.backend ??= this.options.privateProfiles ?? fileProfileBackend(this.file);
+    return this.backend;
+  }
+  private backend?: PrivateProfileBackend;
+
+  /** The private profiles from their backend, then the project profiles of every declared folder. */
   private state(): ProfileFile {
-    let stored: Partial<ProfileFile> | undefined;
-    try { stored = JSON.parse(fs.readFileSync(this.file, 'utf8')); } catch { stored = undefined; }
+    const stored = this.privateBackend.read();
     const fallback = emptyState();
     const project = this.loadProjectProfiles();
     for (const provider of PROVIDERS) {
@@ -311,7 +340,7 @@ export class ProfileStore {
     return fallback;
   }
 
-  /** Private profiles go to profiles.json; project profiles go back to their folders' files, logins included. */
+  /** Private profiles go to their backend; project profiles go back to their folders' files, logins included. */
   private updateState(state: ProfileFile): void {
     const stored = emptyState();
     const perFolder = new Map<string, ExportedProfile[]>();
@@ -324,7 +353,7 @@ export class ProfileStore {
         perFolder.set(profile.folder, entries);
       }
     }
-    writeJsonAtomically(this.file, stored);
+    this.privateBackend.write(stored);
     // A folder whose file exists but has no profile left gets an empty list, so a deleted profile is gone from it.
     for (const folder of new Set([...perFolder.keys(), ...this.activeProjectFolders()])) {
       const entries = perFolder.get(folder) ?? [];

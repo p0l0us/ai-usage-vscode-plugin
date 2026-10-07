@@ -118,6 +118,8 @@ type LiveProvider = {
   cacheDiscriminator?: () => Promise<string | undefined>;
   /** Name of the extension-managed authentication profile currently selected for this provider. */
   activeProfileName?: () => string | undefined;
+  /** The Accounts row of the menu: the active profile, or how many are saved when none is active. */
+  accountsSummary?: () => string;
   /** "#2" for the second saved profile, when there are several and the setting shows it. */
   accountNumber?: () => string | undefined;
   activeProfileId?: () => string | undefined;
@@ -313,6 +315,7 @@ export function activate(context: vscode.ExtensionContext): void {
       budget: () => (claudeSpendsEndpointQuota(settingsFor('claude').source) ? claudeBudget : undefined),
       cacheDiscriminator: async () => cacheDiscriminator(services, 'claude'),
       activeProfileName: () => activeProfileName(services, 'claude'),
+      accountsSummary: () => accountsSummary(services, 'claude'),
       activeProfileId: () => services.views.claude?.activeProfileId,
       activeProfileUsage: () => accountUsage(services, 'claude'),
       accountNumber: () => accountNumberLabel(services, 'claude')
@@ -341,6 +344,7 @@ export function activate(context: vscode.ExtensionContext): void {
       },
       cacheDiscriminator: async () => cacheDiscriminator(services, 'codex'),
       activeProfileName: () => activeProfileName(services, 'codex'),
+      accountsSummary: () => accountsSummary(services, 'codex'),
       activeProfileId: () => services.views.codex?.activeProfileId,
       activeProfileUsage: () => accountUsage(services, 'codex'),
       accountNumber: () => accountNumberLabel(services, 'codex')
@@ -1494,6 +1498,15 @@ function activeProfileName(services: ServiceManager, provider: AuthProvider): st
   return services.views[provider]?.profiles.find((profile) => profile.active)?.name;
 }
 
+function accountsSummary(services: ServiceManager, provider: AuthProvider): string {
+  const view = services.views[provider];
+  if (!view) { return services.connected ? 'Loading…' : 'Account service not connected'; }
+  const active = view.profiles.find((profile) => profile.active);
+  if (active) { return active.name; }
+  if (!view.profiles.length) { return 'None saved'; }
+  return `${view.profiles.length} saved · ${view.nativeUnsaved ? 'current login not saved' : 'none active'}`;
+}
+
 function accountUsage(services: ServiceManager, provider: AuthProvider): LiveUsage | undefined {
   const view = services.views[provider];
   const reading = view?.activeNumber !== undefined ? view.profiles.find((profile) => profile.id === view.activeProfileId)?.usage : undefined;
@@ -1584,10 +1597,9 @@ function providerItems(provider: LiveProvider): DetailItem[] {
   const who = usage?.subtitle ? ` · ${usage.subtitle}` : '';
   items.push({ label: `${title}${who}${plan}`, kind: vscode.QuickPickItemKind.Separator });
   if (provider.id === 'claude' || provider.id === 'codex') {
-    const name = provider.activeProfileName?.();
     items.push({
       label: '$(key) Accounts',
-      description: name ?? 'None saved',
+      description: provider.accountsSummary?.() ?? provider.activeProfileName?.() ?? 'None saved',
       detail: 'Save, name, and switch logins, or configure automatic account rotation.',
       action: 'profiles',
       providerId: provider.id

@@ -1,23 +1,29 @@
 # Changelog
 
-## 1.0.3 (unreleased)
+## 1.0.4 (unreleased)
 
 - **Account service…** moved from the Claude and Codex Accounts menus to the AI Usage menu of all services, since one
   service serves both; its line says where the service runs (background or inside a VS Code window) and its version.
 - **Accounts without a background service.** Declining the background service, or turning
   `aiUsage.accountService.background` off, no longer leaves the Accounts menus empty: the same account service runs
   inside VS Code while a window is open (the first window hosts it, the others use it, another takes over when that
-  window closes), with the profiles, keep-alives and rotation as before and nothing running after VS Code closes.
-  **Don't ask again** on the install offer now chooses this instead of turning accounts off.
+  window closes) with the profiles saved in VS Code, exactly as before the service, plus project profiles; keep-alives
+  and rotation work while a window is open and nothing runs after VS Code closes. **Don't ask again** on the install
+  offer now chooses this instead of turning accounts off.
+- **Profiles move only when you ask, in both directions.** The background service keeps its profiles in
+  `~/.ai-usage/profiles.json`, VS Code keeps its own; installing the service no longer moves them automatically.
+  **AI Usage: Account Service…** transfers chosen profiles from VS Code to the service or back, as a move or a copy,
+  and AI Usage offers it once per session when the profiles in use are empty but the other side has some.
+- The Accounts row of the AI Usage menu says how many profiles are saved when none is active ("5 saved · current
+  login not saved") instead of "None saved".
 - **The service works without VS Code.** It is ready to be published as the npm package `ai-usage-service`:
-  `npm install -g ai-usage-service`, then `ai-usage service install` or `ai-usage service run`. Profiles stay in
+  `npm install -g ai-usage-service`, then `ai-usage service install` or `ai-usage service run`. Its profiles are in
   `~/.ai-usage`, shared by the command, the background service and the extension.
 - **Account service.** Saved Claude and Codex profiles, keep-alives and automatic rotation moved out of the extension
   host into a background service, so they keep running while VS Code is closed. The extension installs the service
   under `~/.ai-usage` with your permission (one notification with **Install**, **Not now** and **Don't ask again**;
   `aiUsage.accountService.enabled` is the switch), registers it to start when you sign in (a systemd user unit on
-  Linux, a launchd agent on macOS, a Run registry value on Windows), upgrades it when the extension is updated, and
-  moves the profiles it had saved in VS Code's SecretStorage into it once. The Accounts menus, the status bar
+  Linux, a launchd agent on macOS, a Run registry value on Windows) and upgrades it when the extension is updated. The Accounts menus, the status bar
   account number and every notification work as before, now through the service, and every window connected to the
   same host shares its profiles. **AI Usage: Account Service…** shows its status and log and starts, stops,
   reinstalls or uninstalls it. Without the service the Accounts menus offer to install it and nothing rotates.

@@ -345,8 +345,18 @@ AI Usage log.
 ## Account service
 
 Saved profiles, keep-alives and automatic rotation run in the account service, one per host, which the
-`ai-usage` command controls as well. The profiles live in `~/.ai-usage`, independent of VS Code. The service runs
-either in the background, whether VS Code is open or not, or inside VS Code while a window is open.
+`ai-usage` command controls as well. It runs either in the background, whether VS Code is open or not, or inside
+VS Code while a window is open.
+
+**Where the profiles are.** With the background service, its private profiles are in `~/.ai-usage/profiles.json`
+(mode 0600), usable without VS Code. Without it, the private profiles are the ones saved in VS Code (global state
+and SecretStorage), exactly as before the service existed. Project profiles (`.ai-usage.profiles.json` in an open
+folder) are listed in both cases. Nothing moves between the two on its own: **AI Usage: Account Service…** →
+**Transfer profiles from VS Code to the account service…** or **…from the account service to VS Code…** copies or
+moves the chosen profiles, logins included. Moving removes each profile from the source once the target holds it,
+so a login is refreshed in one place only; copying keeps both, and a login refreshed in one place can then stop
+working in the other. When the store in use has no profiles and the other one has some, AI Usage offers to move or
+copy them once per session, for example right after installing the background service.
 
 **Inside VS Code.** Until the background service is installed, or with `aiUsage.accountService.background` off,
 the extension runs the same service inside a VS Code window: the first window that finds no service answering
@@ -364,8 +374,8 @@ again, or run **AI Usage: Install Account Service**). The extension copies the s
 start at sign-in and starts it. It looks for Node.js 20 or newer on the PATH and in the usual install locations
 (`nvm`, `volta`, `/usr/local/bin`, …), and falls back to VS Code's own runtime (`ELECTRON_RUN_AS_NODE`) or, in a
 remote window, the VS Code server's. `AI_USAGE_NODE` names one explicitly. When the extension is updated and
-carries a newer service, the installed one is replaced and restarted without asking. The profiles the extension
-kept in VS Code's SecretStorage before are moved into the service once and removed there.
+carries a newer service, the installed one is replaced and restarted without asking. Profiles saved in VS Code
+stay there until you transfer them (see above).
 
 **Autostart.** Linux: a systemd user unit `ai-usage.service` in `~/.config/systemd/user`, enabled, with
 `loginctl enable-linger` attempted so the service also runs while you are logged out (when that needs a password,

@@ -106,14 +106,17 @@ it once imported, and mind that a copied login is the same session on both compu
 
 ### The account service and the `ai-usage` command
 
-Account management runs in a small account service that keeps the profiles in `~/.ai-usage`, independent of
-VS Code. Installed as a background service, keep-alives and rotation keep going while VS Code is closed and a
-terminal can drive them; without it, the same service runs inside VS Code while a window is open and nothing runs
-in the background. On first use the extension asks once to install it (**Install**, **Not now** or **Don't ask
-again**, which keeps it inside VS Code; `aiUsage.accountService.background` is the switch): the service goes to `~/.ai-usage`, is registered to start when you sign in (a systemd user unit, a launchd agent or a Run
-registry value), and receives the profiles the extension had saved before. Each extension update upgrades it.
-**AI Usage: Account Service…** shows its status and log and starts, stops, reinstalls or uninstalls it; the
-service needs Node.js 20 or newer, and uses VS Code's own runtime when no other is found.
+Account management runs in a small account service. Installed as a background service, it keeps its profiles in
+`~/.ai-usage`, and keep-alives and rotation keep going while VS Code is closed and a terminal can drive them;
+without it, the same service runs inside VS Code while a window is open, with the profiles saved in VS Code as
+before, and nothing runs in the background. Project profiles are listed either way, and **AI Usage: Account
+Service…** copies or moves profiles between VS Code and the service in both directions. On first use the extension
+asks once to install it (**Install**, **Not now** or **Don't ask again**, which keeps it inside VS Code;
+`aiUsage.accountService.background` is the switch): the service goes to `~/.ai-usage`, is registered to start when
+you sign in (a systemd user unit, a launchd agent or a Run registry value), and offers to move or copy the profiles
+saved in VS Code into it. Each extension update upgrades it. **AI Usage: Account Service…** shows its status and
+log and starts, stops, reinstalls or uninstalls it; the service needs Node.js 20 or newer, and uses VS Code's own
+runtime when no other is found.
 
 The service comes with the `ai-usage` command, on the PATH of every VS Code terminal (add `~/.ai-usage/bin` to
 your own PATH for other terminals). `ai-usage` alone opens a live view of both services with keys to switch,
