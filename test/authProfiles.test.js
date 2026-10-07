@@ -424,6 +424,29 @@ test('Sign in again… picks a saved profile and hands it to the sign-in hook', 
   assert.deepEqual(signedIn, [['claude', 'a']]);
 });
 
+test('Move a profile up or down… swaps it with its neighbour, one step per pick, and is offered from two profiles', async t => {
+  const f = fixture(t);
+  assert.equal(f.manager.items('claude').some(item => item.action === 'reorder'), false);
+  f.globalValues.set('aiUsage.authProfiles.v1', {
+    claude: { profiles: [{ id: 'b', name: 'Claude 2' }, { id: 'a', name: 'Claude 1' }, { id: 'c', name: 'Claude 3' }], activeProfileId: 'a' },
+    codex: { profiles: [] }
+  });
+  const offered = [];
+  quickPickResponses.push(items => items.find(item => item.action === 'reorder'));
+  quickPickResponses.push(items => items.find(item => item.profile?.id === 'a'));
+  quickPickResponses.push((items, options) => { offered.push(items.map(item => item.label), options.placeHolder); return items.find(item => item.step === -1); });
+  quickPickResponses.push((items, options) => { offered.push(items.map(item => item.label), options.placeHolder); return items.find(item => !item.step && item.kind === undefined); });
+  quickPickResponses.push(undefined);
+  await f.manager.show('claude', {});
+  const stored = f.globalValues.get('aiUsage.authProfiles.v1').claude;
+  assert.deepEqual(stored.profiles.map(profile => profile.id), ['a', 'b', 'c']);
+  assert.equal(stored.activeProfileId, 'a');
+  assert.deepEqual(offered[0], ['$(arrow-up) Move up', '$(arrow-down) Move down', '', '$(check) Done']);
+  assert.equal(offered[1], 'Position 2 of 3: Claude 2, Claude 1, Claude 3');
+  assert.deepEqual(offered[2], ['$(arrow-down) Move down', '', '$(check) Done']);
+  assert.equal(offered[3], 'Position 1 of 3: Claude 1, Claude 2, Claude 3');
+});
+
 test('only a real account change is reported to the activation hook', async t => {
   const f = fixture(t);
   const changes = [];

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.0.38 (2026-10-07)
+
+- **Move a profile up or down…** in the Accounts menu changes the order of the saved profiles, one step per pick, so
+  they can be put back in order without deleting and adding them again. The order is the one the menu lists and
+  rotation in saved order follows. A project profile moves among the profiles of its own folder.
+
 ## 0.0.37 (2026-10-03)
 
 - **Usage history.** Every reading of every saved Claude and Codex account, every account switch (by hand, or by

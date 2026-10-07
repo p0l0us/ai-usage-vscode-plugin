@@ -80,7 +80,7 @@ type ProfileItem = vscode.QuickPickItem & {
   readOnly?: boolean;
   /** The login error of the profile's last check; selecting it offers to renew the login, check it again or activate it anyway. */
   loginProblem?: string;
-  action?: 'save' | 'import' | 'transfer' | 'signIn' | 'rename' | 'delete' | 'keepAliveNow' | 'settings' | 'serviceSettings' | 'back';
+  action?: 'save' | 'import' | 'transfer' | 'signIn' | 'rename' | 'reorder' | 'delete' | 'keepAliveNow' | 'settings' | 'serviceSettings' | 'back';
 };
 
 /**
@@ -590,6 +590,8 @@ export class AuthProfileManager {
           if (profile) { await hooks?.signIn?.(provider, profile); }
         } else if (item.action === 'rename') {
           await this.rename(provider);
+        } else if (item.action === 'reorder') {
+          await this.reorder(provider);
         } else if (item.action === 'delete') {
           await this.delete(provider);
         }
@@ -734,6 +736,9 @@ export class AuthProfileManager {
         action: 'signIn'
       });
       items.push({ label: '$(edit) Rename a profile…', action: 'rename' });
+      if (providerState.profiles.length > 1) {
+        items.push({ label: '$(list-ordered) Move a profile up or down…', detail: 'Changes the order of the saved profiles in this menu and in rotation.', action: 'reorder' });
+      }
       items.push({ label: '$(trash) Delete a saved profile…', action: 'delete' });
     }
     const keepAlive = this.automationEnabled(provider, 'keepAlive');
@@ -1301,6 +1306,47 @@ export class AuthProfileManager {
       target.updatedAt = new Date().toISOString();
       await this.updateState(state);
       this.log(`${provider}: renamed authentication profile to "${name}"`);
+    }
+  }
+
+  /**
+   * Moves one profile up or down, one step per pick, until Done. Private profiles and each folder's project
+   * profiles are stored apart, so a profile only trades places with the nearest one stored with it.
+   */
+  private async reorder(provider: AuthProvider): Promise<void> {
+    const profile = await this.pickSaved(provider, `Move a ${TITLES[provider]} profile`);
+    if (!profile) {
+      return;
+    }
+    for (;;) {
+      const state = this.state();
+      const profiles = state[provider].profiles;
+      const peers = profiles.flatMap((candidate, index) => candidate.folder === profile.folder ? [index] : []);
+      const at = peers.findIndex((index) => profiles[index].id === profile.id);
+      if (at < 0) {
+        return;
+      }
+      const items: Array<vscode.QuickPickItem & { step?: -1 | 1 }> = [];
+      if (at > 0) {
+        items.push({ label: '$(arrow-up) Move up', description: `above “${profiles[peers[at - 1]].name}”`, step: -1 });
+      }
+      if (at < peers.length - 1) {
+        items.push({ label: '$(arrow-down) Move down', description: `below “${profiles[peers[at + 1]].name}”`, step: 1 });
+      }
+      items.push({ label: '', kind: vscode.QuickPickItemKind.Separator });
+      items.push({ label: '$(check) Done', description: `${TITLES[provider]} accounts` });
+      const picked = await vscode.window.showQuickPick(items, {
+        title: `AI Usage · Move “${profile.name}”`,
+        placeHolder: `Position ${at + 1} of ${peers.length}: ${peers.map((index) => profiles[index].name).join(', ')}`
+      });
+      if (!picked?.step) {
+        return;
+      }
+      const from = peers[at];
+      const to = peers[at + picked.step];
+      [profiles[from], profiles[to]] = [profiles[to], profiles[from]];
+      await this.updateState(state);
+      this.log(`${provider}: moved authentication profile "${profile.name}" ${picked.step < 0 ? 'up' : 'down'}`);
     }
   }
 
