@@ -161,14 +161,16 @@ OAuth profile endpoint (or the local Claude Code account file when offline) when
 refreshed, and once for older profiles when the menu opens. The email is stored with the profile name as non-secret
 metadata.
 
-The Accounts menu lists the saved profiles with their email, last usage reading and check time, marks the active
-one, and follows with the management actions:
+The Accounts menu lists the saved profiles with their email, last valid usage reading and check time, marks the active
+one, and follows with **Save current login…** and **Manage saved profiles…**:
 
 ![Codex Accounts menu with the saved profiles and their usage](../images/screenshots/accounts-codex-profiles.png)
 
 ![Save current login… item](../images/screenshots/accounts-save-login.png)
-![Import credential JSON… item](../images/screenshots/accounts-import.png)
-![Rename a profile… and Delete a saved profile… items](../images/screenshots/accounts-rename-delete.png)
+**Manage saved profiles…** contains credential import and profile transfer even when no profiles are saved. With
+saved profiles it also offers sign-in, rename, move and delete. Moving a profile changes the order used by the
+Accounts menu and sequential rotation; a project profile moves within its own folder. The terminal equivalent is
+`ai-usage move <service> <profile> up|down`.
 
 The AI Usage menu of all services confirms which profile is active and shows its detected plan:
 
@@ -180,9 +182,11 @@ user-profile directory's ACL on Windows. For Claude only the `claudeAiOauth` obj
 entries remain untouched. Codex `auth.json` is replaced as a unit. When the native active login can be matched
 safely to its saved profile (Codex account id, Claude organization, or an identical refresh token), refreshed token data
 is captured before switching away. If a saved profile stops working with "Login expired" or "Invalid token", use
-**Sign in again…** in its Accounts menu, or choose the profile itself: an account marked **Login problem** is sent a
-keep-alive instead of being activated, and when the login cannot be refreshed the failure notification offers
-**Sign in again**. The sign-in runs the vendor CLI's login in a terminal whose home is a folder inside the keep-alive
+**Sign in again…** in its Accounts menu, or choose the profile itself: an account marked **Login problem** is not
+activated but opens a menu with **Renew the login…** (the same sign-in), **Try a keep-alive** (a keep-alive refreshes
+an expired token, and when the login cannot be refreshed its failure notification offers **Sign in again**),
+**Select anyway** (activates the login as it is) and **Back**. The sign-in runs the vendor CLI's login in a
+terminal whose home is a folder inside the keep-alive
 home, so the active login is not touched; the new login is stored in the profile, and written to the native file
 only when that profile is the active one. While the sign-in is pending (from **Sign in again…** or `ai-usage
 login`), that service's keep-alives and rotation wait for it, and a keep-alive or sweep started by hand says that
@@ -197,7 +201,7 @@ refreshable, says so once in a notification with the same **Sign in again** acti
 
 ### Moving profiles to another computer
 
-**Export or import saved profiles…** under Manage in either Accounts menu opens a picker with both actions; the
+**Export or import saved profiles…** under **Manage saved profiles…** in either Accounts menu opens a picker with both actions; the
 Command Palette has them as **AI Usage: Export Claude/Codex Authentication Profiles…** and **AI Usage: Import
 Claude/Codex Authentication Profiles…**. **Export saved profiles…** lists every saved Claude and Codex profile,
 preselected, and writes the chosen ones with their logins to a JSON file, which then opens in the editor; on Linux
@@ -394,8 +398,10 @@ MCP server whose tools list every saved profile with its usage windows (`list_ac
 one profile (`refresh_usage`) and, when allowed, switch the active account (`switch_account`) or run a rotation
 sweep (`rotate_account`). While it is on, the extension also offers the server to the agents of the VS Code window
 as **AI Usage accounts**, so Copilot agent mode and other consumers of the editor's MCP servers see it without any
-configuration; command-line agents register `~/.ai-usage/bin/ai-usage mcp` themselves. The feature is experimental,
-off by default, and described in [MCP server for AI agents](MCP.md): the tools, their answers, how to register the
+configuration. **Set up MCP server…** in the top-level AI Usage menu installs and enables it, then registers it with
+the Claude or Codex CLI. Their Accounts menus offer the same registration while MCP is on. Registration runs the
+CLI's own `mcp add` for `~/.ai-usage/bin/ai-usage mcp`, and other command-line agents register that command
+themselves. The feature is experimental, off by default, and described in [MCP server for AI agents](MCP.md): the tools, their answers, how to register the
 server with Claude Code and Codex, and what a switch by an agent means.
 
 | Setting | Default | Purpose |

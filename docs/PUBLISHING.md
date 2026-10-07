@@ -7,12 +7,21 @@ npm install
 npm run dev:install      # build the working tree to a temp VSIX and install it into this VS Code
 ```
 
-`dev:install` compiles, packages to a temporary folder (nothing is written into the repo), and installs into the
-VS Code that owns the current shell: the remote server in Remote-SSH/WSL/container sessions, otherwise the desktop
-`code` CLI. Development VSIX files report version `9.9.99` so they are easy to identify, while `package.json`
-retains the normal release version used by the patch/minor/major publishing workflow. Override the development
-version with `AI_USAGE_DEV_VERSION` if needed. Use `npm run dev:install:all` to install into every VS Code found.
-Reload the window afterwards.
+`dev:install` bumps the patch version, compiles, packages to a temporary folder, and installs into the VS Code
+that owns the current shell: the remote server in Remote-SSH/WSL/container sessions, otherwise the desktop `code`
+CLI. The bump (`npm run bump patch --carry`) updates `package.json` and `package-lock.json` and moves the open
+`## x.y.z (unreleased)` section of `CHANGELOG.md` to the new version, so every dev build has its own version and a
+later Marketplace release still replaces it. `AI_USAGE_DEV_VERSION=<x.y.z>` installs that version instead and
+leaves the repository alone. Use `npm run dev:install:all` to install into every VS Code found. Reload the window
+afterwards.
+
+### Version numbers
+
+- **Patch** (`x.y.Z`): bug fixes. Every `npm run dev:install` bumps it, and a release with only fixes publishes
+  the patch version the dev installs reached.
+- **Minor** (`x.Y.0`): new features. Only a publish bumps it: `npm run publish -- --minor` sets the version to
+  the minor after the published one and carries the open changelog section to it.
+- **Major** (`X.0.0`): by hand, `npm run bump major`.
 Manual equivalent:
 
 ```bash
@@ -52,6 +61,7 @@ The manifest already carries the publisher id (`p0l0us`), repository, license, i
 npm run publish            # checks the Marketplace, offers a bump if the version is taken, builds, packages, publishes
 npm run publish:pre        # same, as a pre-release
 npm run publish:all        # also publishes to Open VSX (needs OVSX_PAT)
+npm run publish -- --minor # a release with new features: bumps to the next minor version first
 npm run publish -- --yes   # non-interactive: auto-bumps patch when needed, no confirmation prompts
 npm run publish:dry        # everything except the publish step (builds and packages to a temp folder)
 ```

@@ -65,6 +65,27 @@ test('a login that is already saved is reported as a duplicate unless a copy is 
   assert.equal(f.store.profileCount('claude'), 2);
 });
 
+test('reordering persists within the same profile scope without changing the active login', async (t) => {
+  const f = fixture(t);
+  const a = await f.store.saveNative('claude', { name: 'A' });
+  const b = await f.store.importCredential('claude', 'B', claudeLogin('b'));
+  const project = path.join(f.root, 'project');
+  fs.mkdirSync(project);
+  f.store.setProjectFolders([project]);
+  const p = await f.store.importCredential('claude', 'Project', claudeLogin('project'), false, project);
+  const q = await f.store.importCredential('claude', 'Project 2', claudeLogin('project2'), false, project);
+  assert.deepEqual(f.store.profiles('claude').map((item) => item.id), [a.profile.id, b.profile.id, p.profile.id, q.profile.id]);
+  assert.deepEqual(f.store.reorder('claude', b.profile.id, -1).map((item) => item.id), [b.profile.id, a.profile.id, p.profile.id, q.profile.id]);
+  assert.equal(f.store.activeProfileId('claude'), a.profile.id);
+  assert.equal(f.store.activeProfileNumber('claude'), 2);
+  assert.deepEqual(f.store.profiles('claude').map((item) => item.id), [b.profile.id, a.profile.id, p.profile.id, q.profile.id]);
+  assert.throws(() => f.store.reorder('claude', p.profile.id, -1), /cannot move further/);
+  f.store.reorder('claude', q.profile.id, -1);
+  assert.deepEqual(f.store.profiles('claude').map((item) => item.id), [b.profile.id, a.profile.id, q.profile.id, p.profile.id]);
+  const file = path.join(project, '.ai-usage.profiles.json');
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')).profiles.map((item) => item.id), [q.profile.id, p.profile.id]);
+});
+
 test('importing a credential saves it without activating; activating writes the native file and keeps MCP entries', async (t) => {
   const f = fixture(t);
   const work = await f.store.saveNative('claude', { name: 'Work' });

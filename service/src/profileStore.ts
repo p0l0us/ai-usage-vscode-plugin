@@ -615,6 +615,22 @@ export class ProfileStore {
     return strip(target);
   }
 
+  /** Move a profile one place within private profiles or its own project folder. */
+  reorder(provider: AuthProvider, id: string, step: -1 | 1): ProfileMetadata[] {
+    const state = this.state();
+    const profiles = state[provider].profiles;
+    const target = profiles.find((profile) => profile.id === id);
+    if (!target) { throw new Error('The profile no longer exists.'); }
+    const peers = profiles.flatMap((profile, index) => profile.folder === target.folder ? [index] : []);
+    const at = peers.findIndex((index) => profiles[index].id === id);
+    const next = at + step;
+    if (next < 0 || next >= peers.length) { throw new Error('The profile cannot move further in that direction.'); }
+    [profiles[peers[at]], profiles[peers[next]]] = [profiles[peers[next]], profiles[peers[at]]];
+    this.updateState(state);
+    this.log(`${provider}: moved authentication profile "${target.name}" ${step < 0 ? 'up' : 'down'}`);
+    return this.profiles(provider);
+  }
+
   /** Removes the profile; an active one leaves the native login in place until the next switch or sign-out. */
   delete(provider: AuthProvider, id: string): { profile: ProfileMetadata; wasActive: boolean } {
     const state = this.state();

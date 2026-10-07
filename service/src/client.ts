@@ -3,6 +3,7 @@ import { RpcClient, RpcError } from './rpc';
 import { readServiceInfo, readToken, socketPath, processAlive } from './paths';
 import type { AuthProvider } from './authFiles';
 import type { ServiceConfig } from './configStore';
+import type { ProfileMetadata } from './profileStore';
 import type {
   ActivationResult, EventName, ExportResult, HelloResult, ImportPlanView, ImportSummary, KeepAliveResult, ProviderView, SaveNativeResult,
   CheckWait, HistoryExportKind, HistoryInfo, HistorySummaryResult, KeepAliveAllResult, SerializedUsage, ServiceEvent, ServiceInfo, SignInPreparation,
@@ -80,6 +81,9 @@ export class ServiceClient extends EventEmitter {
   setFolders(folders: string[]): Promise<unknown> { return this.call('session.folders', { folders }); }
   rename(provider: AuthProvider, target: string | { ref: string }, name: string): Promise<{ id: string; name: string }> {
     return this.call('profiles.rename', { provider, ...(typeof target === 'string' ? { id: target } : target), name });
+  }
+  reorder(provider: AuthProvider, id: string, step: -1 | 1): Promise<ProfileMetadata[]> {
+    return this.call('profiles.reorder', { provider, id, step });
   }
   delete(provider: AuthProvider, target: string | { ref: string }): Promise<{ profile: { id: string; name: string }; wasActive: boolean }> {
     return this.call('profiles.delete', { provider, ...(typeof target === 'string' ? { id: target } : target) });

@@ -97,7 +97,8 @@ a profile whose token has expired is repaired after signing in with that account
 
 ![Save current login picker with Create a new profile… and an existing profile to update](images/screenshots/save-current-login.png)
 
-**Export or import saved profiles…** under Manage leads to both. **Export saved profiles…** writes the saved
+**Manage saved profiles…** contains **Import credential JSON…**, **Export or import saved profiles…**, sign-in,
+rename, move and delete. The transfer item leads to both actions. **Export saved profiles…** writes the saved
 Claude and Codex profiles, logins included, to a JSON file and opens it in the editor, and **Import saved
 profiles…** reads it on another computer: profiles not saved there are added, and a saved profile whose login is missing gets it back. Nothing is activated. The file holds live login tokens in plain text, so delete
 it once imported, and mind that a copied login is the same session on both computers; see
@@ -126,9 +127,11 @@ Details: [Account service](docs/CONFIGURATION.md#account-service).
 An AI agent can do the same through the Model Context Protocol: `ai-usage mcp` is a stdio MCP server whose tools
 list every saved profile with its usage windows, read a fresh reading for one of them and, when you allow it,
 switch the active account or run a rotation sweep. It is off by default (`aiUsage.mcp.enabled`); while it is on,
-agents in the VS Code window see it as **AI Usage accounts** without any configuration, and Claude Code or Codex in
-a terminal register `~/.ai-usage/bin/ai-usage mcp` themselves. `aiUsage.mcp.switching` decides whether agents may
-switch at all. Details: [MCP server for AI agents](docs/MCP.md).
+agents in the VS Code window see it as **AI Usage accounts** without any configuration. Choose **Set up MCP
+server…** in the top-level AI Usage menu to install and enable it, then register it with the Claude or Codex CLI
+for terminal sessions. The CLI registration also appears in that service's Accounts menu.
+`aiUsage.mcp.switching` decides whether agents may switch at all. Details:
+[MCP server for AI agents](docs/MCP.md).
 
 ### Account keep-alives and automatic rotation
 
@@ -159,10 +162,12 @@ the menu shows what each one is set to.
 
 Each profile row carries the outcome of its last check: usage per window with the reset countdown, the check time,
 and a warning when the keep-alive or the usage check failed. An account whose login failed (expired or revoked) is
-marked **Login problem**; choosing it sends a keep-alive instead of activating it, which refreshes an expired token,
-and when the login cannot be refreshed the failure notification offers **Sign in again**. The same sign-in is
-available for any profile as **Sign in again…** under Manage: it runs the CLI login in a terminal with a separate
-home and stores the new login in the profile, replacing the active login only when that profile is the active one.
+marked **Login problem**; choosing it opens a small menu instead of activating it: **Renew the login…** runs the CLI
+login in a terminal with a separate home inside the keep-alive home and stores the new login in the profile,
+**Try a keep-alive** sends a keep-alive, which refreshes an expired token and, when the login cannot be refreshed,
+offers **Sign in again** in its failure notification, **Select anyway** activates the login as it is, and **Back**
+returns to the accounts. The same sign-in is available for any profile as **Sign in again…** under **Manage saved profiles…**; either
+way the active login is replaced only when that profile is the active one.
 
 ![Active Claude profile row with its 5h, 7d and 7d Fable usage and reset countdowns](images/screenshots/accounts-row-active.png)
 ![Claude profile row whose last keep-alive failed, marked with a warning](images/screenshots/accounts-row-warning.png)
@@ -185,10 +190,9 @@ whether VS Code is open or not, and persists it across restarts.
 
 ### Authentication profile examples
 
-The Codex Accounts menu has the same layout. It marks the current account as **Active** and keeps the save, import,
-rename and delete actions, the account features and their settings in the same picker:
-
-![Codex Accounts menu with six saved profiles and the manage and account feature actions](images/screenshots/accounts-codex.png)
+The Codex Accounts menu marks the current account as **Active** and offers **Save current login…**,
+**Manage saved profiles…**, account features and settings. Profile order can be changed from the management submenu
+or with `ai-usage move <service> <profile> up|down`.
 
 After activation, the AI Usage menu names the selected profile beside **Accounts**, shows its detected plan on the
 right, and follows with its usage and the source of the reading:

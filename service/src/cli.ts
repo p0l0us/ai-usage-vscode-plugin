@@ -40,6 +40,7 @@ Accounts
   import <service> <file> --name <name> [--project[=<dir>]]
                                   Import a credential JSON file as a profile without activating it
   rename <service> <profile> <new name>
+  move <service> <profile> up|down   Move a saved profile one place in its list
   delete <service> <profile> [-y]
   login <service> <profile> [-y]  Sign in again with the vendor CLI (isolated home) and store the new login
   keepalive <service> [<profile>|--all]
@@ -370,6 +371,18 @@ export async function main(argv: string[], io?: CliOutput): Promise<number> {
         return withClient(home, [], async (client) => {
           const renamed = await client.rename(service, { ref: rest[1] }, rest.slice(2).join(' '));
           if (json) { printJson(renamed); } else { out(`${green('✓')} Renamed to “${renamed.name}”.\n`); }
+          return 0;
+        }, flags);
+      }
+      case 'move': {
+        const service = provider(rest[0]);
+        if (!rest[1] || (rest[2] !== 'up' && rest[2] !== 'down')) { throw new UsageError('Usage: ai-usage move <service> <profile> up|down'); }
+        return withClient(home, [], async (client) => {
+          const view = await client.list(service);
+          const target = view.profiles.find((candidate) => matches(candidate, rest[1]));
+          if (!target) { throw new UsageError(`No ${TITLES[service]} profile matches "${rest[1]}".`); }
+          const profiles = await client.reorder(service, target.id, rest[2] === 'up' ? -1 : 1);
+          if (json) { printJson(profiles); } else { out(`${green('✓')} Moved “${target.name}” ${rest[2]}.\n`); }
           return 0;
         }, flags);
       }

@@ -1,6 +1,11 @@
 # Changelog
 
-## 0.0.37 (unreleased)
+## 0.0.39 (unreleased)
+
+- Development installs now bump the patch version and carry unreleased notes forward; `npm run publish -- --minor`
+  prepares a feature release. The bundled account service keeps the extension version.
+- The Accounts menu groups import, export, sign-in, rename, reorder and delete under **Manage saved profiles…**. The service and `ai-usage move` preserve profile order across restarts; project profiles move within their own folder.
+- Status bar, account rows and rotation limits discard readings from quota windows that have reset; the newest valid reading for the active account is shown.
 
 - **Account service.** Saved Claude and Codex profiles, keep-alives and automatic rotation moved out of the extension
   host into a background service, so they keep running while VS Code is closed. The extension installs the service
@@ -37,9 +42,15 @@
   turns it on; `aiUsage.mcp.switching` (default on) decides whether the switching tools are offered at all. Both are
   checked by the service on every call. While it is on, the extension offers the server to the agents of the VS
   Code window as **AI Usage accounts** (Copilot agent mode and other consumers of the editor's MCP servers see it
-  without configuration); Claude Code and Codex in a terminal register `~/.ai-usage/bin/ai-usage mcp` themselves.
-  No tool returns login material, and nothing listens on a network port. See
-  [docs/MCP.md](docs/MCP.md).
+  without configuration). **Set up MCP server…** in the top-level AI Usage menu installs and enables it, then offers
+  CLI registration; the Claude and Codex Accounts menus also offer **Register the MCP server with the … CLI…**,
+  which runs `claude mcp add` (user scope) or `codex mcp add` for `~/.ai-usage/bin/ai-usage mcp` and tells whether
+  the CLI already has the entry; other agents in a terminal register that command themselves. No tool returns login
+  material, and nothing listens on a network port. See [docs/MCP.md](docs/MCP.md).
+- Choosing a profile marked **Login problem** in the Accounts menu no longer sends a keep-alive straight away. It
+  opens a menu that names the problem and offers **Renew the login…**, which runs the CLI login in a terminal with a
+  separate home inside the keep-alive home and stores the new login in that profile, **Try a keep-alive**, which is
+  what choosing the profile did before, **Select anyway**, which activates the login as it is, and **Back**.
 - **Usage history.** The service appends every reading of every saved Claude and Codex account, every account
   switch (by hand, or by rotation together with the accounts it considered and what it did with each: skipped for a
   failed check, still at its limit, not clearly better, exhausted on a fresh reading, failed its keep-alive, or
@@ -58,6 +69,35 @@
 - The stretch with every account at its limit now also ends when the active account's status bar reading drops below
   its thresholds, not only when a sweep reads it again, so the next such stretch is reported again.
 - The extension package now carries the service under `service/`; the account modules moved there from `src/`.
+
+## 0.0.38 (2026-10-07)
+
+- **Move a profile up or down…** in the Accounts menu changes the order of the saved profiles, one step per pick, so
+  they can be put back in order without deleting and adding them again. The order is the one the menu lists and
+  rotation in saved order follows. A project profile moves among the profiles of its own folder.
+
+## 0.0.37 (2026-10-03)
+
+- **Usage history.** Every reading of every saved Claude and Codex account, every account switch (by hand, or by
+  rotation together with the accounts it considered and what it did with each: skipped for a failed check, still at
+  its limit, not clearly better, exhausted on a fresh reading, failed its keep-alive, or chosen), the rotation sweeps
+  that spent endpoint calls without switching, the stretches with every account at its limit and when they ended, and
+  checks that start or stop failing are appended to one JSON Lines file per month under the extension's global storage
+  (`aiUsage.history.directory` moves them; `~` is supported), kept for a year by default
+  (`aiUsage.history.retentionDays`) and on by default (`aiUsage.history.enabled`). No login material is written.
+  **AI Usage: Show Usage History…**, also **Usage history** in the details panel, summarizes the last 7, 30 or 90 days
+  or everything kept as a Markdown document: per account the time as the active login, the weekly cycles seen with
+  their mean peak, how many weeks and 5-hour cycles reached the limit, readings and failed checks; per service the
+  switches by reason with the median stay, how long every account was at its limit at once, and the sweeps that
+  switched nothing; and an estimate of how many accounts the observed weekly use needs. The same menu exports the
+  readings, or the switches and sweeps, as CSV, and everything as JSON Lines. Details:
+  [Usage history](docs/CONFIGURATION.md#usage-history).
+- The stretch with every account at its limit now also ends when the active account's status bar reading drops below
+  its thresholds, not only when a sweep reads it again, so the next such stretch is reported again.
+- Choosing a profile marked **Login problem** in the Accounts menu no longer sends a keep-alive straight away. It
+  opens a menu that names the problem and offers **Renew the login…**, which runs the CLI login in a terminal with a
+  separate home inside the keep-alive home and stores the new login in that profile, **Try a keep-alive**, which is
+  what choosing the profile did before, **Select anyway**, which activates the login as it is, and **Back**.
 
 ## 0.0.36 (2026-10-01)
 

@@ -67,6 +67,26 @@ test('profiles are listed as views with numbers, active marks, readings and prob
   assert.ok(!('credential' in backup));
 });
 
+test('profile reorder RPC updates the list and active number', async (t) => {
+  const f = fixture(t);
+  const work = await f.call('profiles.saveNative', { provider: 'claude', name: 'Work' });
+  const backup = await f.call('profiles.importCredential', { provider: 'claude', name: 'Backup', credential: claudeLogin('b') });
+  await f.call('profiles.reorder', { provider: 'claude', id: backup.profile.id, step: -1 });
+  const view = await f.call('profiles.list', { provider: 'claude' });
+  assert.deepEqual(view.profiles.map((item) => item.id), [backup.profile.id, work.profile.id]);
+  assert.equal(view.activeNumber, 2);
+  await assert.rejects(f.call('profiles.reorder', { provider: 'claude', id: backup.profile.id, step: -1 }), /cannot move further/);
+});
+
+test('a profile view omits usage and the limit from a completed quota window', async (t) => {
+  const f = fixture(t);
+  const work = await f.call('profiles.saveNative', { provider: 'claude', name: 'Work' });
+  f.service.automation.observe('claude', work.profile.id, usage('claude', [100, 10], Date.now() - 2 * 24 * HOUR));
+  const view = await f.call('profiles.list', { provider: 'claude' });
+  assert.equal(view.profiles[0].usage, undefined);
+  assert.equal(view.profiles[0].limit.readOnly, false);
+});
+
 test('activating by name emits an activated event and answers with the message', async (t) => {
   const f = fixture(t);
   await f.call('profiles.saveNative', { provider: 'claude', name: 'Work' });

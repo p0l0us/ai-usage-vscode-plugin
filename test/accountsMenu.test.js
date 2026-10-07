@@ -22,7 +22,7 @@ Module._load = function(id, ...args) {
       showWarningMessage(message) { warningMessages.push(message); return warningResponses.shift(); },
       showErrorMessage(message) { errorMessages.push(message); },
       showInputBox: async () => inputBoxResponses.shift(),
-      showQuickPick(items) { const response = quickPickResponses.shift(); return typeof response === 'function' ? response(items) : response; }
+      showQuickPick(items, options) { const response = quickPickResponses.shift(); return typeof response === 'function' ? response(items, options) : response; }
     },
     commands: { executeCommand: async () => undefined },
     workspace: { fs: {}, getConfiguration: () => ({ get: (key, fallback) => fallback, update: async () => undefined }) }
@@ -48,6 +48,15 @@ function fixture(views) {
     saveNative: async (provider, options) => { calls.push(['saveNative', provider, options]); return options.name === 'Twin' && !options.allowDuplicate
       ? { status: 'duplicate', twin: { id: 'a', name: 'Work' }, warning: 'already saved as “Work”' } : { status: options.id ? 'updated' : 'saved', profile: { id: 'n', name: options.name ?? 'Work' } }; },
     rename: async (provider, id, name) => { calls.push(['rename', provider, id, name]); return { id, name }; },
+    reorder: async (provider, id, step) => {
+      calls.push(['reorder', provider, id, step]);
+      const profiles = views[provider].profiles;
+      const at = profiles.findIndex((candidate) => candidate.id === id);
+      const peers = profiles.flatMap((candidate, index) => candidate.folder === profiles[at].folder ? [index] : []);
+      const position = peers.indexOf(at);
+      [profiles[at], profiles[peers[position + step]]] = [profiles[peers[position + step]], profiles[at]];
+      return profiles;
+    },
     delete: async (provider, id) => { calls.push(['delete', provider, id]); return { profile: { id, name: 'x' }, wasActive: false }; },
     keepAliveNow: async (provider, id) => { calls.push(['keepAliveNow', provider, id]); return {}; },
     getConfig: async () => defaultConfig()
@@ -64,6 +73,33 @@ test('the usage detail line shows every window, the check time and known problem
     problems: [{ check: 'keepAlive', raw: 'x', label: 'Insufficient credits', known: true }, { check: 'usage', raw: 'weird', label: 'weird', known: false }] }));
   assert.match(detail, /^5h: 41% \(2h\) · 7d: 7% · Checked .* · \$\(warning\) Insufficient credits · \$\(warning\) Usage check failed: weird$/);
   assert.equal(usageDetail(profile()), undefined);
+  const old = profile({ usage: { provider: 'claude', title: 'Claude', fetchedAt: new Date(now - 60_000).toISOString(),
+    windows: [{ label: '5h', usedPercent: 95, resetsAt: new Date(now - 1000).toISOString() }] } });
+  const current = { provider: 'claude', title: 'Claude', fetchedAt: new Date(now), windows: [{ label: '5h', usedPercent: 4, resetsAt: new Date(now + 5 * 3_600_000) }] };
+  assert.match(usageDetail(old, current), /5h: 4%/);
+  assert.doesNotMatch(usageDetail(old, current), /95%/);
+});
+
+test('profile actions live in Manage saved profiles and moving a profile updates its order', async () => {
+  const views = { codex: { provider: 'codex', title: 'Codex', profiles: [profile({ active: true }), profile({ id: 'b', name: 'Backup', number: 2 })],
+    activeProfileId: 'a', nativeUnsaved: false, checkingActive: false, keepAlive: false, autoRotate: false, strategySummary: '', scopes } };
+  const f = fixture(views);
+  quickPickResponses.push((items) => {
+    assert.ok(!items.some((item) => item.action === 'rename'));
+    return items.find((item) => item.action === 'manage');
+  });
+  quickPickResponses.push((items) => {
+    assert.deepEqual(items.filter((item) => item.action).map((item) => item.action), ['importCredential', 'transfer', 'signIn', 'rename', 'reorder', 'delete']);
+    return items.find((item) => item.action === 'reorder');
+  });
+  quickPickResponses.push((items) => items.find((item) => item.profile?.id === 'b'));
+  quickPickResponses.push((items) => items.find((item) => item.step === -1));
+  quickPickResponses.push((items) => { assert.match(items.at(-1).description, /Codex accounts/); return items.at(-1); });
+  quickPickResponses.push((items) => { assert.equal(items.at(-1).description, 'Codex accounts'); return items.at(-1); });
+  quickPickResponses.push(undefined);
+  await f.menu.show('codex');
+  assert.deepEqual(f.calls, [['reorder', 'codex', 'b', -1]]);
+  assert.deepEqual(views.codex.profiles.map((item) => item.id), ['b', 'a']);
 });
 
 test('choosing a profile activates it through the service and closes the menu; an exhausted one only warns', async () => {
@@ -88,14 +124,75 @@ test('choosing a profile activates it through the service and closes the menu; a
   assert.equal(quickPickResponses.length, 0);
 });
 
-test('a profile with a login problem is checked again instead of activated', async () => {
+test('a profile with a login problem offers renew, keep-alive or back instead of activating', async () => {
   const views = { codex: { provider: 'codex', title: 'Codex', profiles: [profile({ loginProblem: 'OAuth token has expired' })], nativeUnsaved: false, checkingActive: false, keepAlive: false, autoRotate: false, strategySummary: '', scopes } };
   const f = fixture(views);
-  const sent = [];
+  const sent = [], signedIn = [];
+  const hooks = { sendKeepAlive: async (provider, profiles) => { sent.push([provider, profiles.map((p) => p.id)]); }, signIn: async (provider, p) => { signedIn.push([provider, p.id]); } };
+  // Choosing the profile opens its menu: renew first, keep-alive second, Back last, the problem as the placeholder.
+  let menu;
   quickPickResponses.push((items) => { assert.match(items[0].description, /Login problem/); return items[0]; });
-  quickPickResponses.push(undefined);
-  await f.menu.show('codex', { sendKeepAlive: async (provider, profiles) => { sent.push([provider, profiles.map((p) => p.id)]); }, signIn: async () => undefined });
+  quickPickResponses.push((items, options) => { menu = { items, options }; return items.find((item) => item.choice === 'keepAlive'); });
+  quickPickResponses.push(undefined); // close the accounts list that reopens after the check
+  await f.menu.show('codex', hooks);
+  assert.deepEqual(menu.items.filter((item) => item.kind === undefined).map((item) => item.label),
+    ['$(sign-in) Renew the login…', '$(play) Try a keep-alive', '$(check) Select anyway', '$(arrow-left) Back']);
+  assert.match(menu.items[0].detail, /separate home inside the keep-alive home .* “Work”/);
+  assert.equal(menu.options.title, 'AI Usage · Codex account “Work” · Login problem');
+  assert.match(menu.options.placeHolder, /expired/i);
   assert.deepEqual(sent, [['codex', ['a']]]);
+  assert.deepEqual(signedIn, []);
+  // Renew hands the profile to the sign-in hook, which signs in under the keep-alive home.
+  quickPickResponses.push((items) => items[0]);
+  quickPickResponses.push((items) => items.find((item) => item.choice === 'renew'));
+  quickPickResponses.push(undefined);
+  await f.menu.show('codex', hooks);
+  assert.deepEqual(signedIn, [['codex', 'a']]);
+  // Back returns to the accounts list without touching the login.
+  quickPickResponses.push((items) => items[0]);
+  quickPickResponses.push((items) => items.find((item) => /Back/.test(item.label)));
+  quickPickResponses.push((items) => { assert.ok(items[0].profile, 'the accounts list is shown again'); return undefined; });
+  await f.menu.show('codex', hooks);
+  assert.deepEqual(sent, [['codex', ['a']]]);
+  assert.deepEqual(signedIn, [['codex', 'a']]);
+  assert.deepEqual(f.calls, []);
+  // Select anyway activates the login as it is through the service and closes the menu.
+  quickPickResponses.push((items) => items[0]);
+  quickPickResponses.push((items) => items.find((item) => item.choice === 'select'));
+  await f.menu.show('codex', hooks);
+  assert.deepEqual(f.calls, [['activate', 'codex', 'a']]);
+  assert.equal(quickPickResponses.length, 0);
+});
+
+test('the MCP registration item is offered while mcp.enabled is on and a hook exists, shows the CLI entry, and runs the hook', async () => {
+  const views = { claude: { provider: 'claude', title: 'Claude', profiles: [profile({ active: true })], activeProfileId: 'a', nativeUnsaved: false, checkingActive: false, keepAlive: false, autoRotate: false, strategySummary: '', scopes } };
+  const f = fixture(views);
+  const base = { sendKeepAlive: async () => undefined, signIn: async () => undefined };
+  // Off: no item, even with the hook.
+  quickPickResponses.push((items) => { assert.ok(!items.some((item) => item.action === 'registerMcp')); return undefined; });
+  await f.menu.show('claude', { ...base, registerMcp: async () => undefined });
+  // On, but no hook: still no item.
+  f.services.config.mcp.enabled = true;
+  quickPickResponses.push((items) => { assert.ok(!items.some((item) => item.action === 'registerMcp')); return undefined; });
+  await f.menu.show('claude', base);
+  // On with the hook: the item tells the CLI's entry, choosing it runs the hook, and the list returns with the new state.
+  const registered = [];
+  let registration = { registered: false, current: false };
+  const hooks = { ...base, mcpRegistration: () => registration,
+    registerMcp: async (provider) => { registered.push(provider); registration = { registered: true, current: true, command: '/x/ai-usage', args: ['mcp'] }; } };
+  quickPickResponses.push((items) => {
+    const item = items.find((candidate) => candidate.action === 'registerMcp');
+    assert.match(item.label, /Register the MCP server with the Claude CLI/);
+    assert.equal(item.description, 'Not registered');
+    assert.match(item.detail, /claude mcp add ai-usage/);
+    return item;
+  });
+  quickPickResponses.push((items) => { assert.equal(items.find((candidate) => candidate.action === 'registerMcp').description, 'Registered'); return undefined; });
+  await f.menu.show('claude', hooks);
+  assert.deepEqual(registered, ['claude']);
+  registration = { registered: true, current: false, command: 'node', args: ['/old.js', 'mcp'] };
+  quickPickResponses.push((items) => { assert.equal(items.find((candidate) => candidate.action === 'registerMcp').description, 'Registered with another command'); return undefined; });
+  await f.menu.show('claude', hooks);
   assert.deepEqual(f.calls, []);
 });
 

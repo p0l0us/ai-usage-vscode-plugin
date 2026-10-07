@@ -2,7 +2,7 @@
   "name": "ai-usage-vscode-plugin",
   "displayName": "AI subscription management and usage",
   "description": "Manage your Claude Code, Codex and GitHub Copilot subscriptions and see what is left of them: switch between saved accounts without signing in again, keep them warm, rotate on exhaustion, and read live 5h/7d windows, premium requests and org billing in the status bar and chat input. Open source, contributions welcome.",
-  "version": "0.0.37",
+  "version": "0.0.39",
   "publisher": "p0l0us",
   "license": "GPL-3.0-only",
   "repository": {
@@ -7712,7 +7712,7 @@
             "tags": [
               "experimental"
             ],
-            "markdownDescription": "**Experimental.** Offer AI agents an MCP server whose tools list every saved Claude Code and Codex profile with its usage windows and, when `#aiUsage.mcp.switching#` allows, switch the active account. Agents of this VS Code window (Copilot agent mode and every other consumer of the editor's MCP servers) see it as **AI Usage accounts** as soon as this is on; command-line agents register `ai-usage mcp` themselves. Needs the account service. Mirrored to the service's `mcp.enabled` setting. See [MCP server for AI agents](https://github.com/p0l0us/ai-usage-vscode-plugin/blob/main/docs/MCP.md)."
+            "markdownDescription": "**Experimental.** Offer AI agents an MCP server whose tools list every saved Claude Code and Codex profile with its usage windows and, when `#aiUsage.mcp.switching#` allows, switch the active account. Agents of this VS Code window (Copilot agent mode and every other consumer of the editor's MCP servers) see it as **AI Usage accounts** as soon as this is on; the Claude and Codex Accounts menus register it with their CLIs (**Register the MCP server with the … CLI…**), and other command-line agents register `ai-usage mcp` themselves. Needs the account service. Mirrored to the service's `mcp.enabled` setting. See [MCP server for AI agents](https://github.com/p0l0us/ai-usage-vscode-plugin/blob/main/docs/MCP.md)."
           },
           "aiUsage.mcp.switching": {
             "type": "boolean",

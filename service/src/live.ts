@@ -64,6 +64,16 @@ export function newerUsage(a: LiveUsage | undefined, b: LiveUsage | undefined): 
   return a.fetchedAt >= b.fetchedAt ? a : b;
 }
 
+/** A reading whose window reset is over cannot describe usage in the current window. */
+export function usageHasExpiredReset(usage: LiveUsage, now = Date.now()): boolean {
+  return usage.windows.some((window) => window.resetsAt && window.resetsAt.getTime() <= now);
+}
+
+export function newestValidUsage(a: LiveUsage | undefined, b: LiveUsage | undefined, now = Date.now()): LiveUsage | undefined {
+  return newerUsage(a && !usageHasExpiredReset(a, now) ? a : undefined,
+    b && !usageHasExpiredReset(b, now) ? b : undefined);
+}
+
 /**
  * The `both` source. The local file is read on every check and serves the reading while it is no
  * older than the service's own check interval; once it falls behind — the CLI has been idle, or has
@@ -84,12 +94,15 @@ export async function fetchLocalThenApi(options: {
   now?: () => number;
 }): Promise<LiveResult> {
   const local = await options.local();
-  const newest = newerUsage(local.kind === 'ok' ? local.usage : undefined, options.known);
   const now = (options.now ?? Date.now)();
+  const newest = newestValidUsage(local.kind === 'ok' ? local.usage : undefined, options.known, now);
   if (newest && now - newest.fetchedAt.getTime() < options.apiCheckIntervalMs) {
     return { kind: 'ok', usage: newest };
   }
-  const keep: LiveResult = newest ? { kind: 'ok', usage: newest } : local;
+  const keep: LiveResult = newest ? { kind: 'ok', usage: newest } : local.kind === 'ok'
+    ? { kind: 'error', provider: local.usage.provider, title: local.usage.title, transient: true,
+      message: 'The previous quota window has reset; waiting for a new usage reading.' }
+    : local;
   // The service's slot is claimed first: the fallback's own slot must not be spent on a call that
   // the service budget then refuses.
   if (options.fallback.nextAllowedAt(now) > now || (options.budget && !options.budget.reserve(now))) {
@@ -395,6 +408,12 @@ export async function fetchClaudeUsageFromAccountFile(file = claudeAccountFile()
     return { kind: 'error', provider, title: CLAUDE_TITLE, message: 'Cached usage contained no rate-limit windows.' };
   }
 
+  const fetchedAt = new Date(cache.fetchedAtMs);
+  if (usageHasExpiredReset({ provider, title: CLAUDE_TITLE, windows, fetchedAt })) {
+    return { kind: 'error', provider, title: CLAUDE_TITLE, transient: true,
+      message: 'Claude Code has not cached usage for the new quota window yet.' };
+  }
+
   return {
     kind: 'ok',
     usage: {
@@ -402,7 +421,7 @@ export async function fetchClaudeUsageFromAccountFile(file = claudeAccountFile()
       title: CLAUDE_TITLE,
       plan: credentials.rateLimitTier ?? credentials.subscriptionType,
       windows,
-      fetchedAt: new Date(cache.fetchedAtMs)
+      fetchedAt
     }
   };
 }

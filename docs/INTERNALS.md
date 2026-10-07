@@ -98,6 +98,9 @@ block of `config.json` (`mcp.enabled`, `mcp.switching`; `GLOBAL_SETTINGS` in `co
 `aiUsage.mcp.*` like the provider settings) is read on every tool call, so a switch takes effect for a running
 server. `src/mcpProvider.ts` registers a `McpServerDefinitionProvider` that offers the installed service's command
 to the agents of the VS Code window while the setting is on, and re-announces it after an install or upgrade.
+`src/mcpRegistration.ts` registers the same launcher with the Claude Code and Codex CLIs for the Accounts menu item,
+through their own `mcp add` and `mcp remove` (an existing entry is removed first, since Claude Code refuses a
+duplicate), and reads the CLI's current entry from `.claude.json` or Codex's `config.toml` for the item's description.
 
 ## Authentication profile storage and switching
 

@@ -11,6 +11,10 @@ the service over its local socket, nothing listens on a network port, and no too
 
 ## Turning it on
 
+Open the top-level **AI Usage** menu and choose **Set up MCP server…**. It installs the account service if needed,
+enables the server, and offers registration with the Claude and Codex CLIs. The setup item stays visible while the
+server is off, so you can return to it later.
+
 | Setting | Default | `ai-usage config` key | Purpose |
 | --- | --- | --- | --- |
 | `aiUsage.mcp.enabled` | `false` | `mcp.enabled` | Serve the tools at all: the command, and the server VS Code offers to its agents. |
@@ -31,9 +35,17 @@ definition provider, so the editor lists a server named **AI Usage accounts** ne
 use its tools; VS Code starts it as `node ~/.ai-usage/service/<version>/bin/ai-usage.js mcp` with the Node.js the
 service was installed with. Nothing is offered while the setting is off.
 
-**From a terminal.** Agents outside VS Code register the command themselves, as a stdio server. The launcher is
-`~/.ai-usage/bin/ai-usage` (`%USERPROFILE%\.ai-usage\bin\ai-usage.cmd` on Windows); most agents do not expand `~`
-in their configuration files, so use the full path.
+**From a terminal.** In **Set up MCP server…**, choose **Register with Claude CLI…** or **Register with Codex CLI…**.
+The same registration is available in each service's Accounts menu while the setting is on. It runs that CLI's own
+`mcp add` for the launcher with the CLI set in `aiUsage.<service>.cliPath`:
+`claude mcp add --scope user ai-usage -- ~/.ai-usage/bin/ai-usage mcp`, so every project sees it, or
+`codex mcp add ai-usage -- ~/.ai-usage/bin/ai-usage mcp`, which is global. The item's description tells whether
+the CLI already has the entry. An entry of the same name that runs something else is replaced after a confirmation;
+when the CLI already runs this launcher, the item offers **Register again** or **Remove**. No sign-in or token is
+involved: the server reaches the service over its local socket with the token kept in the service home. Other
+agents register the command themselves, as a stdio server. The launcher is `~/.ai-usage/bin/ai-usage`
+(`%USERPROFILE%\.ai-usage\bin\ai-usage.cmd` on Windows); most agents do not expand `~` in their configuration
+files, so use the full path.
 
 ```sh
 claude mcp add ai-usage -- /home/you/.ai-usage/bin/ai-usage mcp      # Claude Code

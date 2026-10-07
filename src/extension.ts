@@ -31,11 +31,13 @@ import {
   fetchLocalThenApi,
   formatResetIn,
   formatResetRemaining,
+  newestValidUsage,
   needsSignIn,
   readableProblem,
   refreshCodexNativeLogin,
   serviceHome,
-  stateDir
+  stateDir,
+  usageHasExpiredReset
 } from '../service/out';
 import { AccountsMenu } from './accountsMenu';
 import { signInWithTerminal } from './accountLogin';
@@ -45,6 +47,7 @@ import { CodexProxyRuntime } from './codexProxyRuntime';
 import { applyCodexSettingsToFile, readCodexSettingAssignments } from './codexSettings';
 import { applyClaudeSettingsToFile, readClaudeSettingAssignments } from './claudeSettings';
 import { registerMcpProvider } from './mcpProvider';
+import { MCP_SERVER_NAME, mcpCli, mcpLauncher, readMcpRegistration, registerMcpServer, unregisterMcpServer } from './mcpRegistration';
 import { ServiceManager } from './serviceManager';
 import { openAiUsageSettings } from './settingsLink';
 import { compactTokenCount, readCurrentSessionTokens, SessionTokenUsage } from './sessionTokens';
@@ -117,12 +120,16 @@ type LiveProvider = {
   activeProfileName?: () => string | undefined;
   /** "#2" for the second saved profile, when there are several and the setting shows it. */
   accountNumber?: () => string | undefined;
+  activeProfileId?: () => string | undefined;
+  activeProfileUsage?: () => LiveUsage | undefined;
   /** Shared call spacing for providers read through a rate-limited service endpoint, when the
    *  currently selected source uses one (a local source needs no spacing). */
   budget?: () => ApiCallBudget | undefined;
   last?: LiveResult;
   /** Most recent successful reading, kept so errors do not blank the item. */
   lastGood?: LiveUsage;
+  /** The saved account to which `last` and `lastGood` belong. */
+  readingProfileId?: string;
   /** In-flight refresh for this provider only; failures elsewhere never wait on it. */
   inFlight?: Promise<void>;
 };
@@ -306,6 +313,8 @@ export function activate(context: vscode.ExtensionContext): void {
       budget: () => (claudeSpendsEndpointQuota(settingsFor('claude').source) ? claudeBudget : undefined),
       cacheDiscriminator: async () => cacheDiscriminator(services, 'claude'),
       activeProfileName: () => activeProfileName(services, 'claude'),
+      activeProfileId: () => services.views.claude?.activeProfileId,
+      activeProfileUsage: () => accountUsage(services, 'claude'),
       accountNumber: () => accountNumberLabel(services, 'claude')
     },
     {
@@ -332,6 +341,8 @@ export function activate(context: vscode.ExtensionContext): void {
       },
       cacheDiscriminator: async () => cacheDiscriminator(services, 'codex'),
       activeProfileName: () => activeProfileName(services, 'codex'),
+      activeProfileId: () => services.views.codex?.activeProfileId,
+      activeProfileUsage: () => accountUsage(services, 'codex'),
       accountNumber: () => accountNumberLabel(services, 'codex')
     },
     {
@@ -389,6 +400,7 @@ export function activate(context: vscode.ExtensionContext): void {
     if (provider.id !== 'copilot' && services.views[provider.id]?.checkingActive && !afterRotation) {
       return Promise.resolve();
     }
+    let retryForNewProfile = false;
     provider.inFlight = (async () => {
       const config = vscode.workspace.getConfiguration();
       if (!config.get<boolean>(provider.settingKey, true)) {
@@ -407,13 +419,20 @@ export function activate(context: vscode.ExtensionContext): void {
         await services.refreshViews(provider.id);
       }
       const profileId = provider.id === 'copilot' ? undefined : services.views[provider.id]?.activeProfileId;
+      if (provider.id !== 'copilot' && provider.readingProfileId !== profileId) {
+        provider.last = undefined;
+        provider.lastGood = undefined;
+        provider.readingProfileId = profileId;
+        renderLive(provider);
+      }
       const { source, checkIntervalMs } = settingsFor(provider.id);
       const budget = provider.budget?.();
       // Each source has its own cache entry so switching sources never shows another source's reading.
       const key = SharedCache.key(provider.id, [source, await provider.cacheDiscriminator?.()].filter(Boolean).join('|'));
       const now = Date.now();
       const entry = cache.read(key);
-      const cached = deserializeUsage(entry);
+      const cachedReading = deserializeUsage(entry);
+      const cached = cachedReading && !usageHasExpiredReset(cachedReading, now) ? cachedReading : undefined;
       if (cached && (!provider.lastGood || cached.fetchedAt > provider.lastGood.fetchedAt)) {
         provider.lastGood = cached;
       }
@@ -473,7 +492,16 @@ export function activate(context: vscode.ExtensionContext): void {
       }
 
       if (result) {
+        if (provider.id !== 'copilot' && services.views[provider.id]?.activeProfileId !== profileId) {
+          provider.last = undefined;
+          provider.lastGood = undefined;
+          provider.readingProfileId = undefined;
+          renderLive(provider);
+          retryForNewProfile = true;
+          return;
+        }
         provider.last = result;
+        provider.readingProfileId = profileId;
         if (result.kind === 'ok') {
           provider.lastGood = result.usage;
           // Codex session-log records carry no account of their own, so they are never attributed to
@@ -493,6 +521,7 @@ export function activate(context: vscode.ExtensionContext): void {
       await updateChipContext(provider, config.get<boolean>('aiUsage.chatChips.enabled', true));
     })().finally(() => {
       provider.inFlight = undefined;
+      if (retryForNewProfile) { void refreshProvider(provider, false); }
     });
     return provider.inFlight;
   };
@@ -552,6 +581,7 @@ export function activate(context: vscode.ExtensionContext): void {
     await live.inFlight;
     live.last = undefined;
     live.lastGood = undefined;
+    live.readingProfileId = undefined;
     renderLive(live);
     await updateChipContext(live, vscode.workspace.getConfiguration().get<boolean>('aiUsage.chatChips.enabled', true));
     // Claude Code re-reads its credential file, so a switch reaches open chats by itself. Codex's app-server does
@@ -645,15 +675,112 @@ export function activate(context: vscode.ExtensionContext): void {
     void codexProxy.sync();
   }, 60_000);
   context.subscriptions.push({ dispose: () => clearInterval(accountTimer) });
+  /**
+   * Registers the service's MCP server with the provider's CLI through the CLI's own `mcp add`, so Claude Code or
+   * Codex in a terminal gets the account tools. Offered by the Accounts menu while aiUsage.mcp.enabled is on; when
+   * the CLI already runs this launcher, the same item offers to register again or to remove the entry.
+   */
+  const registerMcpWithCli = async (provider: AuthProvider): Promise<void> => {
+    const title = provider === 'claude' ? 'Claude' : 'Codex';
+    const launcher = mcpLauncher(services.home);
+    if (!services.isInstalled() || !fs.existsSync(launcher)) {
+      void vscode.window.showWarningMessage(`AI Usage: the account service is not installed, so there is no ai-usage command to register with the ${title} CLI. Install it from Account service… first.`);
+      return;
+    }
+    const { cli, reason } = mcpCli(provider, vscode.workspace.getConfiguration().get<string>(`aiUsage.${provider}.cliPath`));
+    if (!cli) { void vscode.window.showErrorMessage(`AI Usage: ${reason}`); return; }
+    const where = provider === 'claude' ? 'in its user scope, for every project' : 'in its config.toml';
+    const before = readMcpRegistration(provider, launcher);
+    if (before.current) {
+      const choice = await vscode.window.showInformationMessage(
+        `AI Usage: the ${title} CLI already runs the “${MCP_SERVER_NAME}” MCP server from ${launcher} ${where}.`, 'Register again', 'Remove');
+      if (!choice) { return; }
+      if (choice === 'Remove') {
+        const removed = await unregisterMcpServer(provider, cli);
+        log(`${provider}: ${path.basename(cli)} mcp remove ${MCP_SERVER_NAME}: ${removed.ok ? 'removed' : 'failed'}: ${removed.detail}`);
+        if (removed.ok) { void vscode.window.showInformationMessage(`AI Usage: the “${MCP_SERVER_NAME}” MCP server was removed from the ${title} CLI.`); }
+        else { void vscode.window.showErrorMessage(`AI Usage: could not remove the “${MCP_SERVER_NAME}” MCP server from the ${title} CLI: ${removed.detail}`); }
+        return;
+      }
+    } else if (before.registered) {
+      const current = [before.command, ...(before.args ?? [])].filter(Boolean).join(' ') || 'another command';
+      const choice = await vscode.window.showWarningMessage(
+        `The ${title} CLI already has an MCP server named “${MCP_SERVER_NAME}” that runs ${current}. Replace it with ${launcher} mcp?`, { modal: true }, 'Replace');
+      if (choice !== 'Replace') { return; }
+    }
+    const result = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: `AI Usage: registering the MCP server with the ${title} CLI…` },
+      () => registerMcpServer(provider, cli, launcher));
+    log(`${provider}: registering the MCP server with ${cli}: ${result.ok ? 'registered' : 'failed'}: ${result.detail}`);
+    if (!result.ok) {
+      void vscode.window.showErrorMessage(`AI Usage: could not register the MCP server with the ${title} CLI: ${result.detail}`);
+      return;
+    }
+    const switching = services.config?.mcp.switching ?? true;
+    void vscode.window.showInformationMessage(
+      `AI Usage: the ${title} CLI now has the “${MCP_SERVER_NAME}” MCP server ${where}. New ${title} sessions can list the saved accounts with their usage${switching ? ' and switch between them' : ''}; the tools answer while aiUsage.mcp.enabled is on.`);
+  };
+  context.subscriptions.push(vscode.commands.registerCommand('aiUsage.setupMcp', async () => {
+    while (true) {
+      const installed = services.isInstalled();
+      const client = services.connected;
+      const enabled = services.config?.mcp.enabled ?? false;
+      const items: Array<vscode.QuickPickItem & { action: 'install' | 'connect' | 'enable' | 'claude' | 'codex' | 'settings' }> = [];
+      if (!installed) {
+        items.push({ label: '$(cloud-download) Install the account service…', detail: 'Installs the ai-usage command that serves the MCP tools.', action: 'install' });
+      } else if (!client) {
+        items.push({ label: '$(debug-start) Connect to the account service…', detail: 'Starts the installed service and reads its MCP settings.', action: 'connect' });
+      } else if (!enabled) {
+        items.push({ label: '$(plug) Enable the MCP server…', detail: 'Makes account tools available to agents in this VS Code window and allows CLI registration.', action: 'enable' });
+      } else {
+        for (const provider of ['claude', 'codex'] as const) {
+          const registration = readMcpRegistration(provider, mcpLauncher(services.home));
+          items.push({
+            label: `$(plug) Register with ${provider === 'claude' ? 'Claude' : 'Codex'} CLI…`,
+            description: registration.current ? 'Registered' : registration.registered ? 'Registered with another command' : 'Not registered',
+            detail: `Adds the ${MCP_SERVER_NAME} MCP server to ${provider === 'claude' ? 'Claude Code' : 'Codex'} in terminal sessions.`,
+            action: provider
+          });
+        }
+      }
+      items.push({ label: '$(gear) MCP settings…', description: enabled ? 'Enabled' : 'Disabled', action: 'settings' });
+      const picked = await vscode.window.showQuickPick(items, { title: 'AI Usage · MCP server setup', matchOnDetail: true });
+      if (!picked) { return; }
+      if (picked.action === 'install') {
+        if (!await services.install()) { return; }
+      } else if (picked.action === 'connect') {
+        if (!await services.ensure()) { await services.showMenu(); return; }
+      } else if (picked.action === 'enable') {
+        try {
+          const config = await client!.setConfig({ 'mcp.enabled': true });
+          services.config = config;
+          await services.configSync.pull(config);
+        } catch (error) {
+          void vscode.window.showErrorMessage(`AI Usage: could not enable the MCP server: ${error instanceof Error ? error.message : String(error)}`);
+          return;
+        }
+      } else if (picked.action === 'claude' || picked.action === 'codex') {
+        await registerMcpWithCli(picked.action);
+      } else {
+        await openAiUsageSettings('aiUsage.mcp');
+        return;
+      }
+    }
+  }));
   context.subscriptions.push(vscode.commands.registerCommand('aiUsage.manageAuthProfiles', async (value?: unknown) => {
     const initial = value === 'claude' || value === 'codex' ? value as AuthProvider : undefined;
     await accountsMenu.show(initial, {
+      activeUsage: (provider, id) => {
+        const live = liveProviders.find((candidate) => candidate.id === provider);
+        return live && services.views[provider]?.activeProfileId === id ? visibleUsage(live) : undefined;
+      },
       beforeActivate: async (provider) => {
         await liveProviders.find((candidate) => candidate.id === provider)?.inFlight;
       },
       afterSaved: (provider) => afterProfileActivated(provider, { kind: 'saved', accountChanged: false }),
       back: async () => { await vscode.commands.executeCommand('aiUsage.showDetails'); },
       signIn: async (provider, profile) => { await signInAgain(provider, profile.id); },
+      mcpRegistration: (provider) => readMcpRegistration(provider, mcpLauncher(services.home)),
+      registerMcp: registerMcpWithCli,
       sendKeepAlive: async (provider, profiles) => {
         const client = services.require();
         const title = provider === 'claude' ? 'Claude' : 'Codex';
@@ -1208,7 +1335,7 @@ async function updateChipContext(provider: LiveProvider, enabled: boolean): Prom
   }
   if (enabled) {
     const result = provider.last;
-    const usage = result?.kind === 'ok' ? result.usage : result?.kind === 'error' ? provider.lastGood : undefined;
+    const usage = visibleUsage(provider);
     if (usage?.windows.length) {
       const rich = chipStyle().usage === 'rich'
         ? usage.windows.filter((window) => CHIP_WINDOWS[provider.id].includes(window.label))
@@ -1238,8 +1365,20 @@ function clickCommand(provider: LiveProvider): vscode.Command {
     : { command: 'aiUsage.manageAuthProfiles', title: 'Manage accounts', arguments: [provider.id] };
 }
 
+function visibleUsage(provider: LiveProvider): LiveUsage | undefined {
+  const sameAccount = !provider.activeProfileId || provider.readingProfileId === provider.activeProfileId();
+  const live = sameAccount ? provider.last?.kind === 'ok' ? provider.last.usage
+    : provider.last?.kind === 'error' ? provider.lastGood : undefined : undefined;
+  return newestValidUsage(live, provider.activeProfileUsage?.());
+}
+
 function renderLive(provider: LiveProvider): void {
+  if (provider.activeProfileId && provider.readingProfileId !== provider.activeProfileId()) {
+    provider.last = undefined;
+    provider.lastGood = undefined;
+  }
   const result = provider.last;
+  const usage = visibleUsage(provider);
   const item = provider.status;
   item.color = undefined;
   item.command = clickCommand(provider);
@@ -1248,7 +1387,7 @@ function renderLive(provider: LiveProvider): void {
     return;
   }
 
-  if (!result || result.kind === 'unavailable') {
+  if ((!result || result.kind === 'unavailable') && !usage) {
     if (result?.reason && provider.id === 'copilot') {
       const needsAccess = result.reason.includes('No GitHub sign-in');
       item.text = statusText(provider, needsAccess ? 'connect' : 'n/a', 'Copilot');
@@ -1264,28 +1403,25 @@ function renderLive(provider: LiveProvider): void {
     return;
   }
 
-  if (result.kind === 'error') {
-    const previous = provider.lastGood;
-    if (!previous) {
-      item.text = statusText(provider, '$(warning)', result.title);
-      item.tooltip = `${result.title}\n${result.message}`;
-      item.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
-      item.show();
-      return;
-    }
-    // Keep the last reading visible; grey it out once it is old enough to mislead.
-    const ageMs = Date.now() - previous.fetchedAt.getTime();
-    item.text = statusText(provider, formatUsageLabel(previous, false, statusBarStyle().usage), previous.title);
-    item.tooltip = buildTooltip(previous, result.message, provider.activeProfileName?.());
-    item.backgroundColor = undefined;
-    item.color = ageMs >= STALE_AFTER_MS ? new vscode.ThemeColor('disabledForeground') : undefined;
+  if (result?.kind === 'error' && !usage) {
+    item.text = statusText(provider, '$(warning)', result.title);
+    item.tooltip = `${result.title}\n${result.message}`;
+    item.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
     item.show();
     return;
   }
-
-  const usage = result.usage;
+  if (!usage) {
+    const title = result?.kind === 'ok' ? result.usage.title : result?.kind === 'error' ? result.title : PROVIDER_TITLES[provider.id];
+    item.text = statusText(provider, '$(clock)', title);
+    item.tooltip = `${title}\nWaiting for a reading from the new quota window.`;
+    item.backgroundColor = undefined;
+    item.show();
+    return;
+  }
   item.text = statusText(provider, formatUsageLabel(usage, false, statusBarStyle().usage), usage.title);
-  item.tooltip = buildTooltip(usage, undefined, provider.activeProfileName?.());
+  item.tooltip = buildTooltip(usage, result?.kind === 'error' ? result.message : undefined, provider.activeProfileName?.());
+  item.color = Date.now() - usage.fetchedAt.getTime() >= STALE_AFTER_MS
+    ? new vscode.ThemeColor('disabledForeground') : undefined;
 
   const worst = worstPercent(usage);
   if (worst >= ERROR_PERCENT) {
@@ -1358,6 +1494,12 @@ function activeProfileName(services: ServiceManager, provider: AuthProvider): st
   return services.views[provider]?.profiles.find((profile) => profile.active)?.name;
 }
 
+function accountUsage(services: ServiceManager, provider: AuthProvider): LiveUsage | undefined {
+  const view = services.views[provider];
+  const reading = view?.activeNumber !== undefined ? view.profiles.find((profile) => profile.id === view.activeProfileId)?.usage : undefined;
+  return reading ? deserializeUsage({ usage: reading }) : undefined;
+}
+
 /** A non-secret cache suffix prevents usage from one account appearing after switching to another. */
 function cacheDiscriminator(services: ServiceManager, provider: AuthProvider): string | undefined {
   const id = services.views[provider]?.activeProfileId;
@@ -1403,7 +1545,7 @@ function buildTooltip(usage: LiveUsage, refreshError?: string, activeProfile?: s
 }
 
 type DetailItem = vscode.QuickPickItem & {
-  action?: 'refresh' | 'refreshProvider' | 'log' | 'history' | 'settings' | 'connect' | 'all' | 'profiles';
+  action?: 'refresh' | 'refreshProvider' | 'log' | 'history' | 'settings' | 'connect' | 'all' | 'profiles' | 'mcp';
   providerId?: ProviderId;
 };
 
@@ -1435,10 +1577,11 @@ function usageIcon(percent: number): string {
 
 function providerItems(provider: LiveProvider): DetailItem[] {
   const result = provider.last;
+  const usage = visibleUsage(provider);
   const items: DetailItem[] = [];
-  const title = result?.kind === 'ok' ? result.usage.title : result?.kind === 'error' ? result.title : provider.id;
-  const plan = result?.kind === 'ok' && result.usage.plan ? ` · ${result.usage.plan}` : '';
-  const who = result?.kind === 'ok' && result.usage.subtitle ? ` · ${result.usage.subtitle}` : '';
+  const title = usage?.title ?? (result?.kind === 'error' ? result.title : provider.id);
+  const plan = usage?.plan ? ` · ${usage.plan}` : '';
+  const who = usage?.subtitle ? ` · ${usage.subtitle}` : '';
   items.push({ label: `${title}${who}${plan}`, kind: vscode.QuickPickItemKind.Separator });
   if (provider.id === 'claude' || provider.id === 'codex') {
     const name = provider.activeProfileName?.();
@@ -1451,11 +1594,11 @@ function providerItems(provider: LiveProvider): DetailItem[] {
     });
   }
 
-  if (!result) {
+  if (!result && !usage) {
     items.push({ label: '$(clock) Waiting for first reading…' });
     return items;
   }
-  if (result.kind === 'unavailable') {
+  if (result?.kind === 'unavailable' && !usage) {
     if (provider.id === 'copilot' && result.reason?.includes('No GitHub sign-in')) {
       items.push({
         label: '$(github) Connect GitHub account',
@@ -1474,8 +1617,7 @@ function providerItems(provider: LiveProvider): DetailItem[] {
     });
     return items;
   }
-  const usage = result.kind === 'ok' ? result.usage : provider.lastGood;
-  if (result.kind === 'error') {
+  if (result?.kind === 'error') {
     items.push({
       label: '$(warning) Last refresh failed',
       detail: usage ? `${result.message} — showing the reading from ${usage.fetchedAt.toLocaleTimeString()}.` : result.message
@@ -1483,6 +1625,10 @@ function providerItems(provider: LiveProvider): DetailItem[] {
     if (!usage) {
       return items;
     }
+  }
+  if (!usage) {
+    items.push({ label: '$(clock) Waiting for usage after reset', detail: 'Refresh now to check the new quota window.', action: 'refreshProvider', providerId: provider.id });
+    return items;
   }
 
   // One row per service: every window with its countdown, the age of the reading, and a refresh on
@@ -1492,8 +1638,8 @@ function providerItems(provider: LiveProvider): DetailItem[] {
   const budget = provider.budget?.();
   const throttledMs = budget ? budget.nextAllowedAt(now.getTime()) - now.getTime() : 0;
   items.push({
-    label: `${usageIcon(worstPercent(usage!))} ${usage!.windows.map((window) => `${window.label} ${usagePart(window, now)}`).join(' · ')}`,
-    description: `Updated ${usage!.fetchedAt.toLocaleTimeString()}`,
+    label: `${usageIcon(worstPercent(usage))} ${usage.windows.map((window) => `${window.label} ${usagePart(window, now)}`).join(' · ')}`,
+    description: `Updated ${usage.fetchedAt.toLocaleTimeString()}`,
     detail: `Refresh now · ${SOURCE_LABELS[source] ?? source} · checked every ${formatInterval(checkIntervalMs)} · ` +
       (throttledMs > 0
         ? `next call to the service allowed in ${Math.ceil(throttledMs / 1000)}s`
@@ -1501,7 +1647,7 @@ function providerItems(provider: LiveProvider): DetailItem[] {
     action: 'refreshProvider',
     providerId: provider.id
   });
-  for (const line of usage!.details ?? []) {
+  for (const line of usage.details ?? []) {
     const [key, ...rest] = line.split(': ');
     items.push(rest.length ? { label: `$(info) ${key}`, description: rest.join(': ') } : { label: `$(info) ${line}` });
   }
@@ -1541,6 +1687,9 @@ async function showDetailsPanel(providers: LiveProvider[], refreshAll: () => Pro
     items.push({ label: '$(refresh) Refresh now', action: 'refresh' });
     items.push({ label: '$(output) Open log', description: 'Output → AI Usage', action: 'log' });
     items.push({ label: '$(history) Usage history', description: 'readings, switches, how well rotation works', action: 'history' });
+    if (!focused) {
+      items.push({ label: '$(plug) Set up MCP server…', description: 'Enable account tools and register them with Claude or Codex', action: 'mcp' });
+    }
     items.push(focused
       ? { label: `$(gear) ${titleFor(focused)} settings`, description: `aiUsage.${focused.id}.*`, action: 'settings', providerId: focused.id }
       : { label: '$(gear) Settings', description: 'aiUsage.*', action: 'settings' });
@@ -1592,6 +1741,8 @@ async function showDetailsPanel(providers: LiveProvider[], refreshAll: () => Pro
       output?.show(true);
     } else if (picked.action === 'history') {
       await vscode.commands.executeCommand('aiUsage.showUsageHistory');
+    } else if (picked.action === 'mcp') {
+      await vscode.commands.executeCommand('aiUsage.setupMcp');
     } else {
       await openAiUsageSettings(picked.providerId && `aiUsage.${picked.providerId}`);
     }

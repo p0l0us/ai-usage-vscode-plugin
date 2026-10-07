@@ -352,7 +352,7 @@ export class AccountService {
     }
     return {
       ...profile, active, number,
-      usage: state.usage as SerializedUsage | undefined,
+      usage: this.automation.usage(provider, profile.id) ? state.usage as SerializedUsage : undefined,
       checkedAt: isoOrUndefined(state.checkedAt),
       lastKeepAliveAt: isoOrUndefined(state.lastKeepAliveAt),
       problems,
@@ -588,6 +588,14 @@ export class AccountService {
         const renamed = await paused(async () => this.store.rename(provider, profile.id, stringParam(params, 'name')));
         this.emit({ event: 'stateChanged', provider });
         return renamed;
+      }
+      case 'profiles.reorder': {
+        const provider = providerParam(params);
+        const profile = this.resolveParam(provider, params);
+        if (params.step !== -1 && params.step !== 1) { throw new Error('Step must be -1 or 1.'); }
+        const profiles = await paused(async () => this.store.reorder(provider, profile.id, params.step as -1 | 1));
+        this.emit({ event: 'stateChanged', provider });
+        return profiles;
       }
       case 'profiles.delete': {
         const provider = providerParam(params);

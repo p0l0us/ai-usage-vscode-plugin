@@ -232,8 +232,17 @@ function systemdUserAvailable(): boolean {
   return systemdChecked;
 }
 
-function systemdRegistered(): boolean {
-  return fs.existsSync(systemdUnitFile());
+function autostartFileMatches(file: string, home: string): boolean {
+  try { return fs.readFileSync(file, 'utf8').includes(launchScript(home)); }
+  catch { return false; }
+}
+
+function systemdRegistered(home: string): boolean {
+  return autostartFileMatches(systemdUnitFile(), home);
+}
+
+function launchdRegistered(home: string): boolean {
+  return autostartFileMatches(launchdPlist(), home);
 }
 
 function windowsRegistered(home: string): boolean {
@@ -288,14 +297,14 @@ export function registerAutostart(home: string, node: Pick<NodeChoice, 'command'
 
 export function unregisterAutostart(home: string, log: (message: string) => void = () => undefined): StepResult {
   try {
-    if (process.platform === 'linux' && systemdRegistered()) {
+    if (process.platform === 'linux' && systemdRegistered(home)) {
       run('systemctl', ['--user', 'disable', '--now', SYSTEMD_UNIT]);
       fs.rmSync(systemdUnitFile(), { force: true });
       run('systemctl', ['--user', 'daemon-reload']);
       log('autostart: systemd user unit removed');
       return { ok: true, detail: 'systemd user unit removed' };
     }
-    if (process.platform === 'darwin' && fs.existsSync(launchdPlist())) {
+    if (process.platform === 'darwin' && launchdRegistered(home)) {
       run('launchctl', ['bootout', `gui/${process.getuid?.() ?? 501}/${LAUNCHD_LABEL}`]);
       fs.rmSync(launchdPlist(), { force: true });
       log('autostart: launchd agent removed');
@@ -384,11 +393,11 @@ export function startService(home: string): StepResult {
   const current = readCurrentInstall(home);
   if (!current) { return { ok: false, detail: 'the account service is not installed' }; }
   const env = { ...current.node.env, AI_USAGE_HOME: home };
-  if (process.platform === 'linux' && systemdRegistered() && systemdUserAvailable()) {
+  if (process.platform === 'linux' && systemdRegistered(home) && systemdUserAvailable()) {
     const result = run('systemctl', ['--user', 'start', SYSTEMD_UNIT]);
     if (result.status === 0) { return { ok: true, detail: 'started through systemd' }; }
   }
-  if (process.platform === 'darwin' && fs.existsSync(launchdPlist())) {
+  if (process.platform === 'darwin' && launchdRegistered(home)) {
     const result = run('launchctl', ['kickstart', `gui/${process.getuid?.() ?? 501}/${LAUNCHD_LABEL}`]);
     if (result.status === 0) { return { ok: true, detail: 'started through launchd' }; }
   }
@@ -411,7 +420,7 @@ export async function stopService(home: string, waitMs = 8_000): Promise<StepRes
     client.close();
     asked = true;
   } catch { /* Not answering; fall through to the service manager and the pid. */ }
-  if (process.platform === 'linux' && systemdRegistered() && systemdUserAvailable()) { run('systemctl', ['--user', 'stop', SYSTEMD_UNIT]); }
+  if (process.platform === 'linux' && systemdRegistered(home) && systemdUserAvailable()) { run('systemctl', ['--user', 'stop', SYSTEMD_UNIT]); }
   if (!info || !alive) { return { ok: true, detail: asked ? 'stopped' : 'was not running' }; }
   const deadline = Date.now() + waitMs;
   while (Date.now() < deadline) {
@@ -446,7 +455,7 @@ export function serviceStatus(home: string): ServiceStatus {
   const info = readServiceInfo(home);
   const running = Boolean(info && processAlive(info.pid));
   const kind = autostartKind();
-  const registered = kind === 'systemd' ? systemdRegistered() : kind === 'launchd' ? fs.existsSync(launchdPlist()) : kind === 'windows' ? windowsRegistered(home) : false;
+  const registered = kind === 'systemd' ? systemdRegistered(home) : kind === 'launchd' ? launchdRegistered(home) : kind === 'windows' ? windowsRegistered(home) : false;
   return {
     home, installed, running, pid: running ? info?.pid : undefined, runningVersion: running ? info?.version : undefined,
     autostart: { kind, registered, detail: kind === 'none' && process.platform === 'linux' ? 'no systemd user manager' : undefined },

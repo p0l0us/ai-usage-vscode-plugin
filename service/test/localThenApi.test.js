@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { fetchLocalThenApi } = require('../out/live');
+const { fetchLocalThenApi, newestValidUsage } = require('../out/live');
 
 const CHECK_INTERVAL_MS = 10 * 60_000;
 
@@ -43,6 +43,19 @@ function fixture(overrides = {}) {
   return state;
 }
 
+test('the newest valid account reading wins; a reset discards the earlier one', () => {
+  const now = Date.now();
+  const status = reading('status', new Date(now - 20 * 60000));
+  status.windows[0].resetsAt = new Date(now - 1000);
+  const account = reading('account', new Date(now - 60000));
+  account.windows[0].resetsAt = new Date(now + 4 * 3600000);
+  assert.equal(newestValidUsage(status, account, now), account);
+
+  const newerStatus = reading('status', new Date(now));
+  newerStatus.windows[0].resetsAt = account.windows[0].resetsAt;
+  assert.equal(newestValidUsage(newerStatus, account, now), newerStatus);
+});
+
 test('a local reading inside the check interval is served without calling the service', async () => {
   const f = fixture();
   f.local = () => ({ kind: 'ok', usage: reading('local', new Date(f.at() - 60_000)) });
@@ -52,6 +65,24 @@ test('a local reading inside the check interval is served without calling the se
   assert.equal(result.kind, 'ok');
   assert.equal(result.usage.title, 'local');
   assert.deepEqual(f.calls, { local: 1, api: 0 });
+});
+
+test('a pre-reset reading is discarded even when the service cannot be called yet', async () => {
+  const f = fixture();
+  const expired = reading('old', new Date(f.at() - 60_000));
+  expired.windows[0].resetsAt = new Date(f.at() - 1);
+  f.local = () => ({ kind: 'ok', usage: expired });
+  f.budget = { nextAllowedAt: () => f.at() + 30_000, reserve: () => false };
+
+  const blocked = await f.run(expired);
+  assert.equal(blocked.kind, 'error');
+  assert.match(blocked.message, /previous quota window has reset/);
+  assert.equal(f.calls.api, 0);
+
+  f.budget = undefined;
+  const fresh = await f.run(expired);
+  assert.equal(fresh.usage.title, 'api');
+  assert.equal(f.calls.api, 1);
 });
 
 test('the service fills the gap once the local reading falls behind the check interval', async () => {

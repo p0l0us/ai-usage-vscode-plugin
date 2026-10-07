@@ -86,6 +86,16 @@ test('disabled automation performs no background calls', async t => {
   assert.deepEqual(f.calls, []);
 });
 
+test('a stored reading from before reset no longer blocks the profile', async t => {
+  const f = fixture(t);
+  f.observe('claude', [['5h', 100, 5], ['7d', 10, 168]]);
+  assert.equal(f.service.limitState('claude', 'a').readOnly, true);
+  f.advance(6 * 3_600_000);
+  assert.equal(f.service.limitState('claude', 'a').readOnly, false);
+  assert.equal(f.service.usage('claude', 'a'), undefined);
+  assert.match(f.service.usageDetail('claude', 'a'), /Usage reset/);
+});
+
 test('per-account 2h/6h schedule persists across service restarts and includes inactive accounts', async t => {
   const f = fixture(t, { settings: { claude: { enabled: true }, codex: { enabled: true } } });
   await f.service.tick();
