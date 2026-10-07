@@ -14,22 +14,59 @@ export type DaemonOptions = {
   foreground?: boolean;
 };
 
+export type HostOptions = {
+  home: string;
+  version?: string;
+  /**
+   * Hosted inside another program (the VS Code extension host) instead of its own process: it serves the same
+   * socket while that program runs, nothing is installed, and the info file says so.
+   */
+  embedded?: boolean;
+  /** Told every log line, besides the service log file. */
+  onLog?: (line: string) => void;
+};
+
+/** A running account service: its core, and how to stop it. */
+export type ServiceHost = {
+  readonly service: AccountService;
+  readonly socket: string;
+  /** Writes a line to the service log, which every connected client also receives. */
+  log(message: string): void;
+  /** Stops the timers, closes every connection and removes the socket and info file. */
+  stop(): Promise<void>;
+  /** Resolves once stopped, by `stop` or by a client's `service.shutdown`. */
+  readonly stopped: Promise<void>;
+};
+
 /**
- * Runs the account service until it is told to stop: by a signal, or by a client's `service.shutdown`. Exactly
- * one daemon runs per service home; a second one finds the first through the socket and exits.
+ * Starts the account service in this process and serves it on the home's socket. Exactly one host serves a home:
+ * when another daemon or embedded host already answers, this throws and the caller connects to that one instead.
  */
-export async function runDaemon(options: DaemonOptions): Promise<void> {
+export async function startServiceHost(options: HostOptions): Promise<ServiceHost> {
   const home = ensureServiceHome(options.home);
   fs.mkdirSync(stateDir(home), { recursive: true, mode: 0o700 });
   const version = options.version ?? serviceVersion();
   const already = await pingService(home);
   if (already) { throw new Error(`the account service is already running (pid ${already.pid}, version ${already.version})`); }
   const logger = new Logger(logFile(home));
-  if (options.foreground) { logger.onLine((line) => process.stderr.write(`${line}\n`)); }
+  if (options.onLog) { logger.onLine(options.onLog); }
   const token = readOrCreateToken(home);
   const service = new AccountService({ home, version, log: (message) => logger.log(message) });
   let stopping: Promise<void> | undefined;
+  let resolveStopped: () => void = () => undefined;
+  const stopped = new Promise<void>((resolve) => { resolveStopped = resolve; });
   const socket = socketPath(home);
+  const stop = (): Promise<void> => {
+    if (stopping) { return stopping; }
+    stopping = (async () => {
+      logger.log('account service stopping');
+      service.dispose();
+      await server.close();
+      try { fs.unlinkSync(infoFile(home)); } catch { /* Already gone. */ }
+      resolveStopped();
+    })();
+    return stopping;
+  };
   const server = new RpcServer({
     socketPath: socket,
     token,
@@ -60,28 +97,23 @@ export async function runDaemon(options: DaemonOptions): Promise<void> {
   service.events.on('event', (event) => server.broadcast(event));
   logger.onLine((line) => server.broadcast({ event: 'log', line }));
   await server.listen();
-  fs.writeFileSync(infoFile(home), JSON.stringify({ pid: process.pid, version, startedAt: service.startedAt.toISOString(), socket, node: process.execPath, home }, null, 2), { mode: 0o600 });
-  logger.log(`account service ${version} started (pid ${process.pid}, node ${process.version}, home ${home})`);
+  fs.writeFileSync(infoFile(home), JSON.stringify({ pid: process.pid, version, startedAt: service.startedAt.toISOString(), socket, node: process.execPath, home,
+    ...(options.embedded ? { embedded: true } : {}) }, null, 2), { mode: 0o600 });
+  logger.log(`account service ${version} started ${options.embedded ? 'inside VS Code ' : ''}(pid ${process.pid}, node ${process.version}, home ${home})`);
   service.start();
+  return { service, socket, log: (message) => logger.log(message), stop, stopped };
+}
 
-  const stopped = new Promise<void>((resolve) => {
-    stop = async () => {
-      if (stopping) { return stopping; }
-      stopping = (async () => {
-        logger.log('account service stopping');
-        service.dispose();
-        await server.close();
-        try { fs.unlinkSync(infoFile(home)); } catch { /* Already gone. */ }
-        resolve();
-      })();
-      return stopping;
-    };
-  });
-  const onSignal = (signal: NodeJS.Signals) => { logger.log(`received ${signal}`); void stop(); };
+/**
+ * Runs the account service as its own process until it is told to stop: by a signal, or by a client's
+ * `service.shutdown`. Exactly one host runs per service home; a second one finds the first through the socket and exits.
+ */
+export async function runDaemon(options: DaemonOptions): Promise<void> {
+  const host = await startServiceHost({ home: options.home, version: options.version,
+    onLog: options.foreground ? (line) => process.stderr.write(`${line}\n`) : undefined });
+  const onSignal = (signal: NodeJS.Signals) => { host.log(`received ${signal}`); void host.stop(); };
   process.once('SIGINT', onSignal);
   process.once('SIGTERM', onSignal);
   if (process.platform === 'win32') { process.once('SIGBREAK' as NodeJS.Signals, onSignal); }
-  await stopped;
+  await host.stopped;
 }
-
-let stop: () => Promise<void> = async () => undefined;

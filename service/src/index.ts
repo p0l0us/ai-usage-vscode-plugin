@@ -17,4 +17,5 @@ export * from './logger';
 export * from './version';
 export { RpcError } from './rpc';
 export { AccountService, TICK_MS } from './accountService';
-export { runDaemon } from './daemon';
+export { runDaemon, startServiceHost } from './daemon';
+export type { HostOptions, ServiceHost } from './daemon';

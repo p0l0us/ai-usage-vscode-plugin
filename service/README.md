@@ -1,17 +1,25 @@
 # AI Usage account service and `ai-usage` command
 
-The background service behind the [AI subscription management and usage](https://github.com/p0l0us/ai-usage-vscode-plugin)
-VS Code extension. It keeps the saved Claude Code and Codex logins as profiles, switches between them, sends
-keep-alives and rotates accounts on exhaustion, and does so whether VS Code is running or not. The `ai-usage`
-command controls it from a terminal; the extension installs it and talks to it the same way.
+Keeps the saved Claude Code and Codex logins as profiles, switches between them, sends keep-alives and rotates
+accounts on exhaustion, as a background service with the `ai-usage` command and an MCP server for AI agents. It
+needs no VS Code; the [AI subscription management and usage](https://github.com/p0l0us/ai-usage-vscode-plugin)
+VS Code extension uses it too and talks to it the same way.
 
 ## Installing
 
-The VS Code extension installs the service with your permission: it copies this package to `~/.ai-usage/service`,
-registers it to start when you sign in (a systemd user unit on Linux, a launchd agent on macOS, a Run registry
-value on Windows) and puts the `ai-usage` command in `~/.ai-usage/bin`, which VS Code terminals see on their PATH.
+Without VS Code (Node.js 20 or newer, no dependencies):
 
-From a checkout or an npm install, `ai-usage service install` does the same. `AI_USAGE_HOME` moves the whole
+```
+npm install -g ai-usage-service
+ai-usage service install        # copy to ~/.ai-usage, register autostart, start; --no-autostart skips the registration
+ai-usage service run            # or: run it in the foreground instead
+```
+
+`ai-usage service install` copies the package to `~/.ai-usage/service`, registers it to start when you sign in (a
+systemd user unit on Linux, a launchd agent on macOS, a Run registry value on Windows) and puts the `ai-usage`
+launcher in `~/.ai-usage/bin`. The VS Code extension does the same with your permission; when you decline, it runs
+the service inside VS Code while a window is open instead. Either way the profiles stay in `~/.ai-usage`, so the
+command, the extension and a later background install all see the same accounts. `AI_USAGE_HOME` moves the whole
 home elsewhere; `AI_USAGE_NODE` names the Node.js (20 or newer) to run the service with.
 
 ## Commands

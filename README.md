@@ -106,10 +106,11 @@ it once imported, and mind that a copied login is the same session on both compu
 
 ### The account service and the `ai-usage` command
 
-Account management runs in a small background service, not in the extension host, so keep-alives and rotation
-keep going while VS Code is closed and a terminal can drive them. On first use the extension asks once to install
-it (**Install**, **Not now** or **Don't ask again**; `aiUsage.accountService.enabled` is the switch): the service
-goes to `~/.ai-usage`, is registered to start when you sign in (a systemd user unit, a launchd agent or a Run
+Account management runs in a small account service that keeps the profiles in `~/.ai-usage`, independent of
+VS Code. Installed as a background service, keep-alives and rotation keep going while VS Code is closed and a
+terminal can drive them; without it, the same service runs inside VS Code while a window is open and nothing runs
+in the background. On first use the extension asks once to install it (**Install**, **Not now** or **Don't ask
+again**, which keeps it inside VS Code; `aiUsage.accountService.background` is the switch): the service goes to `~/.ai-usage`, is registered to start when you sign in (a systemd user unit, a launchd agent or a Run
 registry value), and receives the profiles the extension had saved before. Each extension update upgrades it.
 **AI Usage: Account Service…** shows its status and log and starts, stops, reinstalls or uninstalls it; the
 service needs Node.js 20 or newer, and uses VS Code's own runtime when no other is found.

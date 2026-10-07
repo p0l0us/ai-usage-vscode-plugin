@@ -74,7 +74,8 @@ export function readToken(home = serviceHome()): string | undefined {
   } catch { return undefined; }
 }
 
-export type ServiceInfoFile = { pid: number; version: string; startedAt: string; socket: string; node: string; home: string };
+/** `embedded`: hosted inside a VS Code window rather than as its own background process. */
+export type ServiceInfoFile = { pid: number; version: string; startedAt: string; socket: string; node: string; home: string; embedded?: boolean };
 
 export function readServiceInfo(home = serviceHome()): ServiceInfoFile | undefined {
   try {

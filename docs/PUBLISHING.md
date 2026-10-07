@@ -98,3 +98,17 @@ that declare proposed APIs (the publish script checks this too).
 Open VSX is a separate registry with its own account and token (<https://open-vsx.org>). Publish the same VSIX
 with `npx ovsx publish ai-usage.vsix -p <OVSX_TOKEN>`. The namespace `p0l0us` must be created there first with
 `npx ovsx create-namespace p0l0us -p <OVSX_TOKEN>`.
+
+## Publishing the account service to npm
+
+`service/` is the npm package `ai-usage-service` (no runtime dependencies, Node.js 20+). Its version follows the
+extension's (`npm run bump` and `dev:install` update `service/package.json` too). Not published yet; when it is:
+
+```bash
+cd service
+npm pack --dry-run        # check the contents: bin/, out/ (no source maps), README.md, LICENSE
+npm publish               # prepublishOnly builds out/ first; needs `npm login`
+```
+
+Check a tarball without publishing: `npm pack`, then `npm install -g --prefix <tmp> ai-usage-service-<version>.tgz`
+and run `AI_USAGE_HOME=<tmp home> <tmp>/bin/ai-usage service run`.

@@ -190,11 +190,11 @@ export class AccountsMenu {
     }
   }
 
-  /** The menu while the service is off, not installed or not answering. */
+  /** The menu while accounts are turned off, or the service neither answers nor could be hosted in this window. */
   private async showUnavailable(provider: AuthProvider, hooks?: MenuHooks): Promise<void> {
     const items: ProfileItem[] = [];
     if (!this.services.enabled) {
-      items.push({ label: '$(circle-slash) The account service is turned off', detail: 'Accounts, keep-alives and rotation need it. Turn aiUsage.accountService.enabled on to use them.' });
+      items.push({ label: '$(circle-slash) Accounts are turned off', detail: 'Saved profiles, keep-alives and rotation need the account service. Turn aiUsage.accountService.enabled on to use them.' });
       items.push({ label: '$(gear) Open the setting', action: 'service' });
     } else if (!this.services.isInstalled()) {
       items.push({ label: '$(cloud-download) Install the account service…', detail: 'Saved profiles, keep-alives and rotation move to a background service that also runs while VS Code is closed, controlled here and by the ai-usage command.', action: 'install' });

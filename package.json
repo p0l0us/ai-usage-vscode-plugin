@@ -2,7 +2,7 @@
   "name": "ai-usage-vscode-plugin",
   "displayName": "AI subscription management and usage",
   "description": "Manage your Claude Code, Codex and GitHub Copilot subscriptions and see what is left of them: switch between saved accounts without signing in again, keep them warm, rotate on exhaustion, and read live 5h/7d windows, premium requests and org billing in the status bar and chat input. Open source, contributions welcome.",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "publisher": "p0l0us",
   "license": "GPL-3.0-only",
   "repository": {
@@ -6922,7 +6922,13 @@
             "type": "boolean",
             "default": true,
             "order": 0,
-            "markdownDescription": "**Manage Claude and Codex accounts through the background account service.** The service keeps the saved profiles, sends keep-alives and rotates accounts while VS Code is closed, and is controlled by the `ai-usage` command as well as by this extension. The extension installs it under `~/.ai-usage` with your permission and registers it to start when you sign in. Off: the extension neither installs nor starts it, and the Accounts menus, keep-alives and rotation are unavailable. See [Account service](https://github.com/p0l0us/ai-usage-vscode-plugin/blob/main/docs/CONFIGURATION.md#account-service)."
+            "markdownDescription": "**Manage Claude and Codex accounts.** The account service keeps the saved profiles in `~/.ai-usage`, independent of VS Code, sends keep-alives and rotates accounts. It runs in the background or, with `#aiUsage.accountService.background#` off or not installed, inside VS Code while a window is open. Off: no Accounts menus, keep-alives or rotation in this window. See [Account service](https://github.com/p0l0us/ai-usage-vscode-plugin/blob/main/docs/CONFIGURATION.md#account-service)."
+          },
+          "aiUsage.accountService.background": {
+            "type": "boolean",
+            "default": true,
+            "order": 1,
+            "markdownDescription": "**Run the account service in the background.** On: the extension offers to install it under `~/.ai-usage` and register it to start when you sign in, so keep-alives and rotation keep running while VS Code is closed and the `ai-usage` command works in any terminal. Off, or until it is installed: the same service runs inside a VS Code window (the first window hosts it, the others use it, and another takes over when that window closes) and stops with VS Code; nothing is installed and nothing runs in the background. Turning this off does not uninstall an installed service; use **AI Usage: Account Service… → Uninstall**."
           },
           "aiUsage.chatChips.agentsWindow": {
             "type": "boolean",

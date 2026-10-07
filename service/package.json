@@ -1,7 +1,24 @@
 {
   "name": "ai-usage-service",
-  "version": "1.0.0",
-  "description": "Background service and command line for the AI Usage VS Code extension: saves Claude Code and Codex logins as profiles, switches between them, keeps them warm and rotates them on exhaustion, with VS Code running or not.",
+  "version": "1.0.2",
+  "description": "Claude Code and Codex account manager: saves logins as profiles, switches between them, sends keep-alives and rotates accounts at their limits, as a background service with the ai-usage command and an MCP server. Works without VS Code; the AI Usage VS Code extension uses it too.",
+  "keywords": [
+    "claude",
+    "claude-code",
+    "codex",
+    "openai",
+    "anthropic",
+    "usage",
+    "rate-limit",
+    "account",
+    "rotation",
+    "cli",
+    "mcp"
+  ],
+  "homepage": "https://github.com/p0l0us/ai-usage-vscode-plugin/tree/main/service#readme",
+  "bugs": {
+    "url": "https://github.com/p0l0us/ai-usage-vscode-plugin/issues"
+  },
   "license": "GPL-3.0-only",
   "repository": {
     "type": "git",
@@ -19,11 +36,18 @@
   "files": [
     "bin",
     "out",
-    "README.md"
+    "!out/**/*.map",
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
     "build": "tsc -p .",
     "test": "tsc -p . && node --test test/*.test.js",
-    "start": "node bin/ai-usage.js daemon"
+    "start": "node bin/ai-usage.js daemon",
+    "prepublishOnly": "npm run build"
+  },
+  "devDependencies": {
+    "@types/node": "^24.4.0",
+    "typescript": "^5.9.2"
   }
 }

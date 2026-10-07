@@ -344,12 +344,22 @@ AI Usage log.
 
 ## Account service
 
-Saved profiles, keep-alives and automatic rotation run in a background service, one per host, that the extension
-installs and manages and that the `ai-usage` command controls. It runs whether VS Code is open or not.
+Saved profiles, keep-alives and automatic rotation run in the account service, one per host, which the
+`ai-usage` command controls as well. The profiles live in `~/.ai-usage`, independent of VS Code. The service runs
+either in the background, whether VS Code is open or not, or inside VS Code while a window is open.
+
+**Inside VS Code.** Until the background service is installed, or with `aiUsage.accountService.background` off,
+the extension runs the same service inside a VS Code window: the first window that finds no service answering
+hosts it on the service socket, the other windows (and the `ai-usage` command, when installed) use it, and when
+that window closes another one takes over within a few seconds. Nothing is installed or registered and nothing
+keeps running once VS Code is closed; accounts, keep-alives and rotation work as long as a window is open.
+**AI Usage: Account Service…** shows "Running inside this VS Code window". A background service that is already
+running, for example one started from a terminal, is used instead.
 
 **Installation.** On activation, with no service installed, the extension asks once per session: **Install**,
-**Not now** or **Don't ask again** (which turns `aiUsage.accountService.enabled` off; turn it on again to be
-asked again, or run **AI Usage: Install Account Service**). The extension copies the service package it carries to
+**Not now** (the service runs inside VS Code for this session) or **Don't ask again** (which turns
+`aiUsage.accountService.background` off, so it keeps running inside VS Code; turn the setting on again to be asked
+again, or run **AI Usage: Install Account Service**). The extension copies the service package it carries to
 `~/.ai-usage/service/<version>`, writes the `ai-usage` launcher to `~/.ai-usage/bin`, registers the service to
 start at sign-in and starts it. It looks for Node.js 20 or newer on the PATH and in the usual install locations
 (`nvm`, `volta`, `/usr/local/bin`, …), and falls back to VS Code's own runtime (`ELECTRON_RUN_AS_NODE`) or, in a
@@ -389,7 +399,13 @@ data files.
 
 | Setting | Default | Purpose |
 | --- | --- | --- |
-| `aiUsage.accountService.enabled` | `true` | Install, start and use the account service. Off: no Accounts menus, keep-alives or rotation. |
+| `aiUsage.accountService.enabled` | `true` | Use the account service. Off: no Accounts menus, keep-alives or rotation in this window. |
+| `aiUsage.accountService.background` | `true` | Offer to install the service as a background process. Off, or until it is installed: it runs inside VS Code while a window is open. Turning it off does not uninstall an installed service. |
+
+**Without VS Code.** The service is also the npm package `ai-usage-service` (Node.js 20 or newer, no
+dependencies): `npm install -g ai-usage-service`, then `ai-usage service install` sets it up exactly as the
+extension does, or `ai-usage service run` keeps it in the foreground. The extension uses a service installed this
+way as its own.
 
 ## MCP server for AI agents (experimental)
 

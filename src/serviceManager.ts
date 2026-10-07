@@ -2,8 +2,9 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import {
-  AuthProvider, ProviderView, ServiceClient, ServiceConfig, ServiceEvent, Snapshot, compareVersions, configFileOf, connectService, findNode, installService,
-  launcherDir, logFile, readCurrentInstall, restartService, serviceHome, serviceStatus, startService, stopService, uninstallService
+  AuthProvider, ProviderView, ServiceClient, ServiceConfig, ServiceEvent, ServiceHost, Snapshot, compareVersions, configFileOf, connectService, findNode,
+  installService, launcherDir, logFile, readCurrentInstall, readServiceInfo, restartService, serviceHome, serviceStatus, startService, startServiceHost,
+  stopService, uninstallService
 } from '../service/out';
 import { ConfigSync, readSettings } from './configSync';
 import { migrateLegacyProfiles } from './legacyProfiles';
@@ -12,9 +13,17 @@ import { migrateLegacyProfiles } from './legacyProfiles';
  * The extension's side of the account service: installs the bundled package under the service home (with the
  * user's consent), keeps it up to date, starts it when it is not running, holds the connection, and hands the
  * service's events and views to the rest of the extension.
+ *
+ * Without the background service (declined, not installed yet, or `aiUsage.accountService.background` off) the
+ * same service runs inside a VS Code window instead: the first window that finds no service answering hosts it on
+ * the service socket, the other windows and the `ai-usage` command connect to it, and when that window closes
+ * another one takes over. Profiles stay in the service home either way, so they do not depend on VS Code.
  */
 
 const ENABLED_SETTING = 'aiUsage.accountService.enabled';
+const BACKGROUND_SETTING = 'aiUsage.accountService.background';
+/** How long a window waits before it hosts the service after losing the one it used, so they do not all race. */
+const TAKEOVER_DELAY_MS = 300;
 const SEEDED_KEY = 'aiUsage.accountService.configSeeded.v1';
 const PROVIDERS: AuthProvider[] = ['claude', 'codex'];
 /** How often a lost connection is retried. */
@@ -22,6 +31,8 @@ const RECONNECT_MS = 30_000;
 
 export class ServiceManager implements vscode.Disposable {
   private client?: ServiceClient;
+  /** The service hosted inside this window, when no background service is used. */
+  private host?: ServiceHost;
   private connecting?: Promise<ServiceClient | undefined>;
   private readonly eventEmitter = new vscode.EventEmitter<ServiceEvent>();
   private readonly stateEmitter = new vscode.EventEmitter<AuthProvider | undefined>();
@@ -48,6 +59,7 @@ export class ServiceManager implements vscode.Disposable {
   dispose(): void {
     this.disposed = true;
     this.client?.close();
+    void this.host?.stop();
     this.eventEmitter.dispose();
     this.stateEmitter.dispose();
     this.installEmitter.dispose();
@@ -55,6 +67,16 @@ export class ServiceManager implements vscode.Disposable {
 
   get enabled(): boolean {
     return vscode.workspace.getConfiguration().get<boolean>(ENABLED_SETTING, true);
+  }
+
+  /** Whether the service should run as its own background process; off keeps it inside VS Code windows. */
+  get background(): boolean {
+    return vscode.workspace.getConfiguration().get<boolean>(BACKGROUND_SETTING, true);
+  }
+
+  /** Whether this window hosts the service. */
+  get hosting(): boolean {
+    return Boolean(this.host);
   }
 
   get connected(): ServiceClient | undefined {
@@ -79,7 +101,7 @@ export class ServiceManager implements vscode.Disposable {
     const client = this.connected;
     if (client) { return client; }
     if (!this.enabled) { throw new Error(`The account service is turned off (${ENABLED_SETTING}). Turn it on to manage accounts.`); }
-    throw new Error(this.isInstalled() ? 'The account service is not running yet. It is started in the background; try again in a moment.' : 'The account service is not installed. Run AI Usage: Install Account Service.');
+    throw new Error('The account service is not answering yet; try again in a moment. AI Usage: Account Service… shows its state.');
   }
 
   /** Connects, installing or upgrading first as needed; `promptInstall` asks the user before a first install. */
@@ -96,14 +118,16 @@ export class ServiceManager implements vscode.Disposable {
     this.connecting = (async () => {
       try {
         const installed = readCurrentInstall(this.home);
-        if (!installed) {
-          if (options.promptInstall) { await this.offerInstall(); }
-          return this.connected;
+        if (installed && this.background) {
+          if (compareVersions(this.bundledVersion(), installed.version) > 0) {
+            await this.upgrade(installed.version);
+          }
+          return await this.connect();
         }
-        if (compareVersions(this.bundledVersion(), installed.version) > 0) {
-          await this.upgrade(installed.version);
-        }
-        return await this.connect();
+        // No background service in use: offer it once (without waiting), then use whichever service answers (another
+        // window's, or one started from a terminal), or host it in this window.
+        if (!installed && this.background && options.promptInstall) { void this.offerInstall(); }
+        return await this.connectExisting() ?? await this.hostHere();
       } catch (error) {
         this.log(`service: ${error instanceof Error ? error.message : String(error)}`);
         return undefined;
@@ -114,6 +138,34 @@ export class ServiceManager implements vscode.Disposable {
     return this.connecting;
   }
 
+  /** Connects to a service that already answers, without starting one. */
+  private async connectExisting(): Promise<ServiceClient | undefined> {
+    try {
+      const client = await connectService({ home: this.home, client: 'vscode', version: this.extensionVersion(), subscribe: 'all' });
+      await this.adopt(client);
+      return client;
+    } catch { return undefined; }
+  }
+
+  /** Hosts the service in this window and connects to it; when another window won the race, connects to that one. */
+  private async hostHere(): Promise<ServiceClient | undefined> {
+    let host: ServiceHost;
+    try {
+      host = await startServiceHost({ home: this.home, version: this.bundledVersion(), embedded: true });
+    } catch (error) {
+      this.log(`service: not hosted in this window: ${error instanceof Error ? error.message : String(error)}`);
+      return this.connectExisting();
+    }
+    this.host = host;
+    this.log(`service: running inside this VS Code window (home ${this.home}); it stops when the window closes`);
+    void host.stopped.then(() => { if (this.host === host) { this.host = undefined; } });
+    return this.connectExisting();
+  }
+
+  private extensionVersion(): string {
+    return String((this.context.extension.packageJSON as { version?: string }).version ?? '0');
+  }
+
   /** Called every minute: reconnects after a loss, without prompting. */
   tick(): void {
     if (!this.enabled || this.connected || this.connecting || Date.now() - this.lastAttemptAt < RECONNECT_MS) { return; }
@@ -121,10 +173,9 @@ export class ServiceManager implements vscode.Disposable {
   }
 
   private async connect(): Promise<ServiceClient | undefined> {
-    const version = String((this.context.extension.packageJSON as { version?: string }).version ?? '0');
     try {
       const client = await connectService({
-        home: this.home, client: 'vscode', version, subscribe: 'all', waitMs: 15_000,
+        home: this.home, client: 'vscode', version: this.extensionVersion(), subscribe: 'all', waitMs: 15_000,
         start: () => {
           const started = startService(this.home);
           this.log(`service: ${started.ok ? `starting (${started.detail})` : `could not start: ${started.detail}`}`);
@@ -153,12 +204,18 @@ export class ServiceManager implements vscode.Disposable {
       this.views = {};
       this.log('service: connection closed');
       this.stateEmitter.fire(undefined);
+      // A service hosted by a window that closed is taken over by another window soon, not after the minute tick.
+      if (!this.disposed && this.enabled && !(this.background && this.isInstalled())) {
+        setTimeout(() => void this.ensure(), TAKEOVER_DELAY_MS + Math.random() * 1_500);
+      }
     });
     // The window's local folders hold its project profiles; the service lists them while this window is connected.
     await this.declareFolders(client);
     // The extension's terminals get the ai-usage command without any PATH editing by the user.
-    this.context.environmentVariableCollection.description = 'Adds the ai-usage command of the AI Usage account service.';
-    this.context.environmentVariableCollection.prepend('PATH', `${launcherDir(this.home)}${path.delimiter}`);
+    if (this.isInstalled()) {
+      this.context.environmentVariableCollection.description = 'Adds the ai-usage command of the AI Usage account service.';
+      this.context.environmentVariableCollection.prepend('PATH', `${launcherDir(this.home)}${path.delimiter}`);
+    }
     try {
       await this.syncConfig(client);
       const migrated = await migrateLegacyProfiles(this.context, client, this.home, this.log);
@@ -236,17 +293,20 @@ export class ServiceManager implements vscode.Disposable {
     } catch { return undefined; }
   }
 
-  /** Asks once per session whether to install; "Don't ask again" turns the service setting off. */
+  /**
+   * Asks once per session whether to install the background service. Accounts work either way: without it the
+   * service runs inside VS Code. "Don't ask again" keeps it that way by turning the background setting off.
+   */
   private async offerInstall(): Promise<void> {
     if (this.offered) { return; }
     this.offered = true;
     const choice = await vscode.window.showInformationMessage(
-      'AI Usage manages Claude and Codex accounts through a small background service, so keep-alives and rotation keep running while VS Code is closed and the ai-usage command can control them from a terminal. Install it now? It goes to ~/.ai-usage and is registered to start when you sign in.',
+      'AI Usage can run its account service in the background, so keep-alives and rotation keep running while VS Code is closed and the ai-usage command works in any terminal. Without it, accounts work while VS Code is open. Install it? It goes to ~/.ai-usage and is registered to start when you sign in.',
       'Install', 'Not now', 'Don\'t ask again');
     if (choice === 'Install') { await this.install(); }
     else if (choice === 'Don\'t ask again') {
-      await vscode.workspace.getConfiguration().update(ENABLED_SETTING, false, vscode.ConfigurationTarget.Global);
-      void vscode.window.showInformationMessage(`AI Usage: the account service stays off. Turn ${ENABLED_SETTING} on to install it later.`);
+      await vscode.workspace.getConfiguration().update(BACKGROUND_SETTING, false, vscode.ConfigurationTarget.Global);
+      void vscode.window.showInformationMessage(`AI Usage: accounts keep working while VS Code is open; nothing runs in the background. Turn ${BACKGROUND_SETTING} on to install the service later.`);
     }
   }
 
@@ -297,7 +357,8 @@ export class ServiceManager implements vscode.Disposable {
     items.push({ label: 'Status', kind: vscode.QuickPickItemKind.Separator });
     items.push({ label: status.installed ? `$(package) Installed: version ${status.installed.version}` : '$(package) Not installed',
       detail: status.installed ? `${status.installed.dir} · Node.js ${status.installed.node.command}` : `Bundled version ${this.bundledVersion()} can be installed under ${this.home}.` });
-    items.push({ label: status.running ? `$(pass) Running: pid ${status.pid}, version ${status.runningVersion}` : '$(circle-slash) Not running',
+    const embedded = this.host ? ' inside this VS Code window' : readServiceInfo(this.home)?.embedded ? ' inside a VS Code window' : '';
+    items.push({ label: status.running ? `$(pass) Running${embedded}: pid ${status.pid}, version ${status.runningVersion}` : '$(circle-slash) Not running',
       detail: client ? `Connected · ${client.info.clients} client${client.info.clients === 1 ? '' : 's'}` : this.enabled ? 'Not connected' : `Turned off by ${ENABLED_SETTING}` });
     items.push({ label: status.autostart.kind === 'none' ? '$(warning) Autostart: none available' : `$(${status.autostart.registered ? 'pass' : 'warning'}) Autostart: ${status.autostart.kind}, ${status.autostart.registered ? 'registered' : 'not registered'}`,
       detail: status.autostart.detail ?? (status.autostart.registered ? 'The service starts when you sign in.' : 'Reinstall to register it.') });
@@ -311,7 +372,7 @@ export class ServiceManager implements vscode.Disposable {
       items.push({ label: '$(trash) Uninstall', detail: 'Stops and unregisters the service and removes its package; saved profiles and settings are kept.', action: 'uninstall' });
     }
     items.push({ label: '$(output) Open the service log', detail: logFile(this.home), action: 'log' });
-    items.push({ label: '$(gear) Settings', description: ENABLED_SETTING, action: 'settings' });
+    items.push({ label: '$(gear) Settings', description: `${ENABLED_SETTING}, ${BACKGROUND_SETTING}`, action: 'settings' });
     const picked = await vscode.window.showQuickPick(items, { title: 'AI Usage · Account service', matchOnDetail: true });
     if (!picked?.action) { return; }
     switch (picked.action) {
@@ -320,7 +381,7 @@ export class ServiceManager implements vscode.Disposable {
       case 'stop': { const result = await stopService(this.home); void vscode.window.showInformationMessage(`AI Usage: account service ${result.detail}.`); break; }
       case 'restart': { const result = await restartService(this.home); void vscode.window.showInformationMessage(`AI Usage: account service ${result.ok ? `restarted (${result.detail})` : `could not restart: ${result.detail}`}.`); await this.ensure(); break; }
       case 'uninstall': {
-        const confirmed = await vscode.window.showWarningMessage('Uninstall the AI Usage account service? Keep-alives and rotation stop, and the Accounts menus need it again. Saved profiles and settings are kept under ~/.ai-usage.', { modal: true }, 'Uninstall');
+        const confirmed = await vscode.window.showWarningMessage('Uninstall the AI Usage background service? Accounts, keep-alives and rotation then run inside VS Code while it is open. Saved profiles and settings are kept under ~/.ai-usage.', { modal: true }, 'Uninstall');
         if (confirmed !== 'Uninstall') { return; }
         const result = await uninstallService(this.home, this.log);
         this.context.environmentVariableCollection.clear();
