@@ -112,7 +112,7 @@ test('choosing a profile activates it through the service and closes the menu; a
     assert.equal(items[1].label, '$(circle-slash) Full');
     assert.match(items[1].description, /At its usage limit/);
     assert.ok(items.some((item) => item.action === 'save'), 'manage actions are listed');
-    assert.ok(items.some((item) => item.action === 'service'), 'the service item is listed');
+    assert.ok(!items.some((item) => item.action === 'service'), 'the one service for both is controlled from the root menu, not here');
     assert.match(items.find((item) => item.action === 'settings').description, /Keep-alive on · rotation off/);
     return items[1];
   });

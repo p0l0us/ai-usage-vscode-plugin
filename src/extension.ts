@@ -538,7 +538,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
   context.subscriptions.push(vscode.commands.registerCommand('aiUsage.showDetails', (providerId?: unknown) =>
     showDetailsPanel(liveProviders, refreshAll, (provider) => refreshProvider(provider, true),
-      typeof providerId === 'string' ? (providerId as ProviderId) : undefined)
+      typeof providerId === 'string' ? (providerId as ProviderId) : undefined, () => services.summary())
   ));
 
   context.subscriptions.push(vscode.commands.registerCommand('aiUsage.refresh', refreshAll));
@@ -1545,7 +1545,7 @@ function buildTooltip(usage: LiveUsage, refreshError?: string, activeProfile?: s
 }
 
 type DetailItem = vscode.QuickPickItem & {
-  action?: 'refresh' | 'refreshProvider' | 'log' | 'history' | 'settings' | 'connect' | 'all' | 'profiles' | 'mcp';
+  action?: 'refresh' | 'refreshProvider' | 'log' | 'history' | 'settings' | 'connect' | 'all' | 'profiles' | 'mcp' | 'service';
   providerId?: ProviderId;
 };
 
@@ -1659,7 +1659,7 @@ function providerItems(provider: LiveProvider): DetailItem[] {
  * an action to expand to all providers; without it every provider is listed.
  */
 async function showDetailsPanel(providers: LiveProvider[], refreshAll: () => Promise<void>,
-  refreshOne: (provider: LiveProvider) => Promise<void>, focus?: ProviderId): Promise<void> {
+  refreshOne: (provider: LiveProvider) => Promise<void>, focus?: ProviderId, serviceSummary?: () => string): Promise<void> {
   let focused: LiveProvider | undefined = providers.find((provider) => provider.id === focus);
   const build = (): DetailItem[] => {
     const items: DetailItem[] = [];
@@ -1689,6 +1689,8 @@ async function showDetailsPanel(providers: LiveProvider[], refreshAll: () => Pro
     items.push({ label: '$(history) Usage history', description: 'readings, switches, how well rotation works', action: 'history' });
     if (!focused) {
       items.push({ label: '$(plug) Set up MCP server…', description: 'Enable account tools and register them with Claude or Codex', action: 'mcp' });
+      // One account service serves both Claude and Codex, so it is controlled here rather than in either Accounts menu.
+      items.push({ label: '$(server-process) Account service…', description: serviceSummary?.(), detail: 'Status, log, start, stop, install or uninstall, and the ai-usage command.', action: 'service' });
     }
     items.push(focused
       ? { label: `$(gear) ${titleFor(focused)} settings`, description: `aiUsage.${focused.id}.*`, action: 'settings', providerId: focused.id }
@@ -1743,6 +1745,8 @@ async function showDetailsPanel(providers: LiveProvider[], refreshAll: () => Pro
       await vscode.commands.executeCommand('aiUsage.showUsageHistory');
     } else if (picked.action === 'mcp') {
       await vscode.commands.executeCommand('aiUsage.setupMcp');
+    } else if (picked.action === 'service') {
+      await vscode.commands.executeCommand('aiUsage.accountService');
     } else {
       await openAiUsageSettings(picked.providerId && `aiUsage.${picked.providerId}`);
     }

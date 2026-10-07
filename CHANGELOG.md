@@ -1,7 +1,9 @@
 # Changelog
 
-## 1.0.2 (unreleased)
+## 1.0.3 (unreleased)
 
+- **Account service…** moved from the Claude and Codex Accounts menus to the AI Usage menu of all services, since one
+  service serves both; its line says where the service runs (background or inside a VS Code window) and its version.
 - **Accounts without a background service.** Declining the background service, or turning
   `aiUsage.accountService.background` off, no longer leaves the Accounts menus empty: the same account service runs
   inside VS Code while a window is open (the first window hosts it, the others use it, another takes over when that

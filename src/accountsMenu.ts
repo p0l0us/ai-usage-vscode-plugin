@@ -273,7 +273,6 @@ export class AccountsMenu {
       action: 'settings'
     });
     items.push({ label: `$(settings-gear) ${TITLES[provider]} settings…`, description: `aiUsage.${provider}.*`, detail: `Opens Settings on every ${TITLES[provider]} setting, including the ${TITLES[provider]} config section.`, action: 'serviceSettings' });
-    items.push({ label: '$(server-process) Account service…', detail: `Status of the background service, its log and the ai-usage command. Version ${this.services.connected?.info.version ?? '?'}.`, action: 'service' });
     if (withBack) {
       // Last, so the active profile stays the first, preselected item.
       items.push({ label: '', kind: vscode.QuickPickItemKind.Separator });

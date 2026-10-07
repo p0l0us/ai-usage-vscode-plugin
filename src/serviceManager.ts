@@ -79,6 +79,15 @@ export class ServiceManager implements vscode.Disposable {
     return Boolean(this.host);
   }
 
+  /** One line for the root menu: where the service runs, or why it does not. */
+  summary(): string {
+    if (!this.enabled) { return 'turned off'; }
+    const client = this.connected;
+    if (!client) { return 'not running'; }
+    const where = this.host ? 'inside this VS Code window' : readServiceInfo(this.home)?.embedded ? 'inside a VS Code window' : 'background';
+    return `${where} · version ${client.info.version} · Claude and Codex`;
+  }
+
   get connected(): ServiceClient | undefined {
     return this.client?.connected ? this.client : undefined;
   }
