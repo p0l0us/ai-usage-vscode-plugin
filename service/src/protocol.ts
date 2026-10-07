@@ -12,7 +12,8 @@ import type { ProviderId } from './live';
  */
 
 export type SerializedWindow = { label: string; usedPercent: number; resetsAt?: string };
-export type SerializedUsage = { provider: ProviderId; title: string; plan?: string; subtitle?: string; windows: SerializedWindow[]; details?: string[]; fetchedAt: string };
+export type SerializedUsage = { provider: ProviderId; title: string; plan?: string; subtitle?: string; windows: SerializedWindow[];
+  resetCredits?: { availableCount: number; earliestExpiresAt?: number; totalCount?: number }; details?: string[]; fetchedAt: string };
 
 export type AccountProblemView = {
   /** Which check failed. */

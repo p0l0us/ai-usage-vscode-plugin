@@ -26,6 +26,8 @@ export type LiveUsage = {
   subtitle?: string;
   plan?: string;
   windows: UsageWindow[];
+  /** Earned Codex rate-limit reset credits, when app-server reports them. */
+  resetCredits?: { availableCount: number; earliestExpiresAt?: number; totalCount?: number };
   /** Extra tooltip lines. */
   details?: string[];
   fetchedAt: Date;
@@ -646,6 +648,10 @@ type CodexRateLimitsResponse = {
     planType?: string;
     credits?: { hasCredits?: boolean; unlimited?: boolean; balance?: number | null } | null;
   } | null;
+  rateLimitResetCredits?: {
+    availableCount?: number;
+    credits?: Array<{ status?: string; expiresAt?: number | null }> | null;
+  } | null;
 };
 
 const CODEX_CLI_TIMEOUT_MS = 20_000;
@@ -770,6 +776,43 @@ function codexRpc(cli: string, requests: CodexRpcRequest[], env: NodeJS.ProcessE
 async function codexRpcRateLimits(cli: string, env: NodeJS.ProcessEnv = process.env, cwd?: string): Promise<CodexRateLimitsResponse> {
   const [limits] = await codexRpc(cli, [{ method: 'account/rateLimits/read' }], env, cwd);
   return limits as CodexRateLimitsResponse;
+}
+
+function codexResetCredits(response: CodexRateLimitsResponse): LiveUsage['resetCredits'] {
+  const data = response.rateLimitResetCredits;
+  if (!data || !Number.isInteger(data.availableCount) || data.availableCount! < 0) { return undefined; }
+  const expiries = data.credits?.filter((credit) => credit.status === 'available' &&
+    typeof credit.expiresAt === 'number' && Number.isFinite(credit.expiresAt))
+    .map((credit) => credit.expiresAt!) ?? [];
+  return { availableCount: data.availableCount!, ...(data.availableCount! > 1 ? { totalCount: data.availableCount! } : {}),
+    ...(expiries.length ? { earliestExpiresAt: Math.min(...expiries) } : {}) };
+}
+
+/** Reads earned-reset availability without changing the configured usage source. */
+export async function fetchCodexResetCreditsCli(command = 'codex', home = codexHomeDir()): Promise<LiveUsage['resetCredits']> {
+  if (!readCodexAuth(home)) { return undefined; }
+  const cli = resolveCli(command);
+  if (!cli) { return undefined; }
+  try { return codexResetCredits(await codexRpcRateLimits(cli, { ...process.env, CODEX_HOME: home }, home)); }
+  catch { return undefined; }
+}
+
+/** The provider only reports availability; a total is shown only after AI Usage has observed one. */
+export function formatEarnedResets(credits: LiveUsage['resetCredits'], total?: number): string | undefined {
+  if (!credits) { return undefined; }
+  const count = credits.availableCount;
+  const observed = total ?? credits.totalCount;
+  return observed && observed > 1 && observed >= count
+    ? `${count} of ${observed} observed available`
+    : `${count} available`;
+}
+
+/** Redeems one earned Codex reset. Callers must supply a persisted UUID for safe retries. */
+export async function consumeCodexResetCredit(cli: string, home: string, env: NodeJS.ProcessEnv, idempotencyKey: string): Promise<'reset' | 'alreadyRedeemed' | 'nothingToReset' | 'noCredit'> {
+  const [answer] = await codexRpc(cli, [{ method: 'account/rateLimitResetCredit/consume', params: { idempotencyKey } }], env, home);
+  const outcome = (answer as { outcome?: string }).outcome;
+  if (outcome === 'reset' || outcome === 'alreadyRedeemed' || outcome === 'nothingToReset' || outcome === 'noCredit') { return outcome; }
+  throw new Error(`Unexpected Codex reset outcome: ${String(outcome)}`);
 }
 
 // --- Codex: verify which login a fresh app-server sees after a profile switch ---------------
@@ -946,7 +989,8 @@ export async function fetchCodexUsageCli(command = 'codex', home = codexHomeDir(
   }
   return {
     kind: 'ok',
-    usage: { provider, title: CODEX_TITLE, plan: limits?.planType ?? readCodexAuth(home)?.plan, windows, details: ['Source: Codex CLI (app-server)'], fetchedAt: new Date() }
+    usage: { provider, title: CODEX_TITLE, plan: limits?.planType ?? readCodexAuth(home)?.plan, windows,
+      resetCredits: codexResetCredits(response), details: ['Source: Codex CLI (app-server)'], fetchedAt: new Date() }
   };
 }
 

@@ -138,6 +138,13 @@ export class AccountService {
       this.emit({ event: 'stateChanged', provider });
     };
     this.automation.onNoCandidate = (provider, detail) => this.emit({ event: 'noCandidate', provider, detail });
+    this.automation.onEarnedReset = (id, outcome, available) => {
+      this.emit({ event: 'stateChanged', provider: 'codex' });
+      if (outcome === 'reset') {
+        const name = this.store.profile('codex', id)?.name ?? id;
+        this.emit({ event: 'notice', level: 'info', message: `Codex: used an earned rate-limit reset for "${name}"${available !== undefined ? ` (${available} available now)` : ''}.` });
+      }
+    };
     this.history = new UsageHistory(this.historyDirectory(), this.historyOptions(), this.log, this.now);
     this.automation.history = this.history;
     this.history.prune();

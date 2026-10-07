@@ -2,7 +2,7 @@
   "name": "ai-usage-vscode-plugin",
   "displayName": "AI subscription management and usage",
   "description": "Manage your Claude Code, Codex and GitHub Copilot subscriptions and see what is left of them: switch between saved accounts without signing in again, keep them warm, rotate on exhaustion, and read live 5h/7d windows, premium requests and org billing in the status bar and chat input. Open source, contributions welcome.",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "publisher": "p0l0us",
   "license": "GPL-3.0-only",
   "repository": {
@@ -7280,10 +7280,10 @@
             ],
             "order": 2,
             "markdownEnumDescriptions": [
-              "Session logs, with the usage endpoint filling the gap: the newest log record is used while it is no older than `#aiUsage.codex.checkIntervalMinutes#`, and once it falls behind — Codex has been idle, or has written no record yet — the endpoint is called instead, no more often than with `api`. Costs nothing while you are working in Codex, and still reports usage when you are not.",
+              "Session logs, with the usage endpoint filling the gap: the newest log record is used while it is no older than `#aiUsage.codex.checkIntervalMinutes#`, and once it falls behind — Codex has been idle, or has written no record yet — the endpoint is called instead. An app-server check also reads earned-reset availability; select `sessionLog` for an offline status-bar source.",
               "Local Codex CLI: runs `codex app-server` and calls `account/rateLimits/read`. Uses the CLI's own login and token refresh; documented integration surface.",
               "ChatGPT usage endpoint using the token in `~/.codex/auth.json`. Undocumented; may change without notice.",
-              "Newest `rate_limits` record in `~/.codex/sessions` logs. Fully offline, but only as fresh as your last Codex turn."
+              "Newest `rate_limits` record in `~/.codex/sessions` logs. The status-bar source makes no network request, but is only as fresh as your last Codex turn; the account service can still check saved profiles for earned resets."
             ],
             "markdownDescription": "Where Codex usage is read from."
           },
@@ -7310,7 +7310,19 @@
             "type": "boolean",
             "default": false,
             "order": 6,
-            "markdownDescription": "**Automatic Codex account rotation.** When the active account reaches `#aiUsage.codex.autoRotate.weeklyThresholdPercent#` in its weekly window, or `#aiUsage.codex.autoRotate.fiveHourThresholdPercent#` in its 5-hour window, switch to the next saved account that is below both. Requires at least two saved profiles. See [Rotation strategies and thresholds](https://github.com/p0l0us/ai-usage-vscode-plugin/blob/main/docs/CONFIGURATION.md#rotation-strategies-and-thresholds)."
+            "markdownDescription": "**Automatic Codex account rotation.** Switch when the active account reaches a 5-hour or weekly threshold, or proactively if configured. The selected strategy chooses among eligible saved accounts; reset-aware timing avoids short-lived switches just before a quota reset. Requires at least two saved profiles. See [Rotation strategies and thresholds](https://github.com/p0l0us/ai-usage-vscode-plugin/blob/main/docs/ROTATION.md)."
+          },
+          "aiUsage.codex.autoReset.enabled": {
+            "type": "boolean",
+            "default": true,
+            "order": 6.05,
+            "markdownDescription": "**Automatically use earned Codex rate-limit resets.** When Codex reports an available reset credit and the active saved account is at a quota limit, the account service can redeem one through Codex app-server. It waits for a natural reset within five minutes, considers other saved accounts and the rotation strategy, and avoids letting a reported credit expire unused. Only provider-reported credits are used; the setting can be turned off independently of account rotation."
+          },
+          "aiUsage.codex.autoRotate.resetAware": {
+            "type": "boolean",
+            "default": true,
+            "order": 6.1,
+            "markdownDescription": "**Reset-aware Codex rotation.** When on, automatic rotation waits if the active account's limiting quota resets naturally within 5 minutes, and skips a candidate whose reported 5-hour or weekly quota resets within 5 minutes. The service rechecks after the reset; a manual Rotate now bypasses this wait. Applies with every strategy. Earned credit redemption is controlled separately by `#aiUsage.codex.autoReset.enabled#`."
           },
           "aiUsage.codex.keepAlive.periodHours": {
             "type": "number",
@@ -7340,6 +7352,45 @@
             "default": 99,
             "markdownDescription": "**Codex weekly rotation threshold.** Rotate when the weekly (7d) window reaches this percentage (usage ≥ threshold). An account can only be switched to while its weekly usage is below it.",
             "order": 11
+          },
+          "aiUsage.codex.autoRotate.strategy": {
+            "type": "string",
+            "enum": [
+              "soonestReset",
+              "evenPace",
+              "leastWaste",
+              "sequential"
+            ],
+            "default": "sequential",
+            "order": 12,
+            "enumDescriptions": [
+              "Soonest reset first: spend weekly allowance that expires sooner, except an account far ahead of an even pace early in its week.",
+              "Even pace: choose the account furthest below its weekly spending pace.",
+              "Least waste: choose the most weekly allowance left per hour until reset, with a small bonus for unused 5-hour allowance about to reset.",
+              "Sequential: the next saved profile in list order (Codex's previous behavior)."
+            ],
+            "markdownDescription": "**Codex rotation strategy.** Ranks eligible accounts using saved readings, then checks the selected account again before switching. Reset-aware timing also applies to every strategy."
+          },
+          "aiUsage.codex.autoRotate.trigger": {
+            "type": "string",
+            "enum": [
+              "limit",
+              "proactive"
+            ],
+            "default": "limit",
+            "order": 13,
+            "enumDescriptions": [
+              "Switch only when the active account reaches a rotation threshold.",
+              "Also switch to a clearly better account according to the strategy, after the minimum stay. Has no effect with sequential."
+            ],
+            "markdownDescription": "**Codex rotation trigger.** When automatic rotation switches accounts."
+          },
+          "aiUsage.codex.autoRotate.minStayMinutes": {
+            "type": "number",
+            "minimum": 5,
+            "default": 30,
+            "order": 14,
+            "markdownDescription": "**Codex minimum stay before a proactive switch.** Limit-triggered rotation ignores this stay."
           },
           "aiUsage.codex.switchRestartHint": {
             "type": "boolean",

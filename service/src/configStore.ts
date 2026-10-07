@@ -28,8 +28,10 @@ export type ProviderConfig = {
     /** Dedicated CLI home for background checks; must be separate from the native CLI home. */
     home: string;
   };
+  autoReset: { enabled: boolean };
   autoRotate: {
     enabled: boolean;
+    resetAware: boolean;
     fiveHourThresholdPercent: number;
     weeklyThresholdPercent: number;
     modelLimits: ModelLimits;
@@ -85,12 +87,14 @@ export const SETTINGS: SettingSchema[] = [
   { key: 'keepAlive.model', type: 'string', description: 'Subscription model used for the keep-alive prompt; empty for the CLI default (Codex).' },
   { key: 'keepAlive.home', type: 'string', description: 'Dedicated CLI home for background checks; ~ is expanded. Must not be the native CLI home.' },
   { key: 'autoRotate.enabled', type: 'boolean', description: 'Switch the active account automatically once it reaches a rotation threshold.' },
+  { key: 'autoReset.enabled', type: 'boolean', providers: ['codex'], description: 'Automatically redeem an available earned Codex rate-limit reset when it is more useful than rotating or waiting.' },
+  { key: 'autoRotate.resetAware', type: 'boolean', providers: ['codex'], description: 'Avoid automatic switches in the five minutes before a Codex usage window resets; reconsider after the reset.' },
   { key: 'autoRotate.fiveHourThresholdPercent', type: 'number', min: 1, max: 100, description: 'Rotate when the 5-hour window reaches this percentage; a candidate must be below it.' },
   { key: 'autoRotate.weeklyThresholdPercent', type: 'number', min: 1, max: 100, description: 'Rotate when a weekly window reaches this percentage; a candidate must be below it.' },
   { key: 'autoRotate.modelLimits', type: 'enum', values: ['auto', 'always', 'never'], providers: ['claude'], description: 'Whether the model-scoped weekly window (7d Fable) counts: auto follows Claude Code\'s configured model.' },
-  { key: 'autoRotate.strategy', type: 'enum', values: ['soonestReset', 'evenPace', 'leastWaste', 'sequential'], providers: ['claude'], description: 'How the next account is chosen.' },
-  { key: 'autoRotate.trigger', type: 'enum', values: ['limit', 'proactive'], providers: ['claude'], description: 'limit switches only at a threshold; proactive also switches to a clearly better account.' },
-  { key: 'autoRotate.minStayMinutes', type: 'number', min: 5, max: 10080, providers: ['claude'], description: 'With the proactive trigger, how long a newly active account is kept.' },
+  { key: 'autoRotate.strategy', type: 'enum', values: ['soonestReset', 'evenPace', 'leastWaste', 'sequential'], description: 'How the next account is chosen.' },
+  { key: 'autoRotate.trigger', type: 'enum', values: ['limit', 'proactive'], description: 'limit switches only at a threshold; proactive also switches to a clearly better account.' },
+  { key: 'autoRotate.minStayMinutes', type: 'number', min: 5, max: 10080, description: 'With the proactive trigger, how long a newly active account is kept.' },
   { key: 'cliPath', type: 'string', description: 'Command or full path of the vendor CLI.' },
   { key: 'checkIntervalMinutes', type: 'number', min: 0.25, max: 1440, description: 'Spacing of usage endpoint calls and the pause after a transient error, in minutes; Claude accepts a quarter minute, Codex at least one.' },
   { key: 'api.minIntervalSeconds', type: 'number', min: 0, max: 600, providers: ['claude'], description: 'Smallest gap between two calls to the Claude usage endpoint, across all accounts and clients.' }
@@ -115,8 +119,10 @@ export function defaultProviderConfig(provider: AuthProvider): ProviderConfig {
     checkIntervalMinutes: claude ? 10 : 5,
     api: { minIntervalSeconds: 30 },
     keepAlive: { enabled: false, periodHours: claude ? 2 : 6, model: claude ? 'haiku' : 'gpt-5.6-luna', home: `~/.${provider}-tmp` },
+    autoReset: { enabled: !claude },
     autoRotate: {
       enabled: false,
+      resetAware: !claude,
       // Codex defaults to rotating on a used-up 5-hour window only.
       fiveHourThresholdPercent: claude ? 95 : 100,
       weeklyThresholdPercent: claude ? 99.5 : 99,
@@ -284,12 +290,13 @@ export function automationSettings(config: ServiceConfig, provider: AuthProvider
   return {
     enabled: own.keepAlive.enabled,
     autoRotate: own.autoRotate.enabled,
+    autoReset: provider === 'codex' && own.autoReset.enabled,
     fiveHourThresholdPercent: clampPercent(own.autoRotate.fiveHourThresholdPercent, claude ? 95 : 100),
     weeklyThresholdPercent: clampPercent(own.autoRotate.weeklyThresholdPercent, claude ? 99.5 : 99),
     countsWindow: modelWindowFilter(own.autoRotate.modelLimits, claude ? claudeCodeModel() : undefined),
-    // Only Claude offers a strategy and trigger; Codex always rotates in saved order at its limit.
-    strategy: claude ? own.autoRotate.strategy : 'sequential',
-    trigger: claude && own.autoRotate.trigger === 'proactive' ? 'proactive' : 'limit',
+    strategy: own.autoRotate.strategy,
+    trigger: own.autoRotate.trigger === 'proactive' ? 'proactive' : 'limit',
+    resetAware: provider === 'codex' && own.autoRotate.resetAware,
     minStayMs: Math.max(5, own.autoRotate.minStayMinutes) * 60_000,
     intervalMs: Math.max(0.25, own.keepAlive.periodHours) * 3_600_000,
     // Claude accepts a quarter minute: every endpoint call is spaced by the shared budget regardless.
@@ -304,7 +311,7 @@ export function automationSettings(config: ServiceConfig, provider: AuthProvider
 export function strategySummary(config: ServiceConfig, provider: AuthProvider): string {
   const own = config[provider].autoRotate;
   const thresholds = `5h ≥ ${own.fiveHourThresholdPercent}%, 7d ≥ ${own.weeklyThresholdPercent}%`;
-  return provider === 'claude' ? `${own.strategy}, ${own.trigger}, ${thresholds}` : thresholds;
+  return `${own.strategy}, ${own.trigger}, ${thresholds}${provider === 'codex' && own.resetAware ? ', reset-aware' : ''}`;
 }
 
 /** The config file inside a service home. */

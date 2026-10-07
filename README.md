@@ -20,12 +20,14 @@ accounts without signing in again, and shows live rate-limit and quota usage for
 - **Organization aware**: Copilot follows the GitHub account whose Copilot organization owns the workspace
   repository, so org-billed seats show org data.
 - **Gentle on the services**: one shared cache for all open windows, per-service check intervals and
-  `Retry-After` aware backoff. Codex can be read from the local CLI with no network at all.
+  `Retry-After` aware backoff. Codex's `sessionLog` source reads usage offline; earned-reset availability requires
+  an app-server check when another Codex source is selected.
 - **Honest when things fail**: a failed refresh keeps the previous reading and greys it out after 15 minutes.
 
 Nothing is shown for a tool that is not installed or signed in. Usage checks only read the tools' own login files.
-Account keep-alives and automatic profile rotation are optional and disabled by default. Enabling them allows
-background model calls, token refresh and, for rotation, native login changes.
+Account keep-alives and automatic profile rotation are optional and disabled by default. Earned Codex rate-limit
+reset redemption is enabled by default for a limited saved account when Codex reports available credits. Keep-alives
+and rotation can make background model calls and refresh tokens; rotation also changes the native login.
 
 With the default icon-only labels, the status bar stays compact while showing each live reset countdown:
 
@@ -156,12 +158,14 @@ the menu shows what each one is set to.
   check time and errors. Model calls consume subscription usage and run only while this extension host is running.
 - Automatic rotation switches as soon as the active account's usage reaches a threshold (usage ≥ threshold).
   Claude has two: **95%** for the 5-hour window and **99.5%** for the weekly windows (all models, and `7d Fable` when it
-  counts). Codex has one: **99%** for the weekly window; a Codex 5-hour window, when reported, rotates only once it is
-  used up. The account switched to must be below the thresholds in every window. Claude picks it with
-  `aiUsage.claude.autoRotate.strategy` (soonest weekly reset first by default, or even pace, least waste or saved
-  order); Codex uses saved order. When no account is below the thresholds, the current login is kept and a
-  notification says so. Rotation also works without keep-alives enabled. Claude can also switch proactively to a
-  clearly better account (`aiUsage.claude.autoRotate.trigger`). Details:
+  counts). Codex's weekly threshold is **99%**; a reported Codex 5-hour window rotates only once used up. The
+  account switched to must be below the thresholds in every window. Both services offer soonest reset, even pace,
+  least waste and saved order (`autoRotate.strategy`); Claude defaults to soonest reset and Codex to saved order.
+  Both can also switch proactively to a clearly better account (`autoRotate.trigger`). Codex waits when its active
+  quota naturally resets within five minutes and skips a candidate about to reset. When a Codex account is limited,
+  `aiUsage.codex.autoReset.enabled` can instead redeem one of its provider-reported earned reset credits, preferring
+  rotation unless no account qualifies or a credit would expire first. The Codex tooltip and profile rows show the
+  remaining credits and expiry when known. Rotation and reset redemption work without keep-alives. Details:
   [Rotation strategies and thresholds](docs/CONFIGURATION.md#rotation-strategies-and-thresholds).
 
 Each profile row carries the outcome of its last check: usage per window with the reset countdown, the check time,

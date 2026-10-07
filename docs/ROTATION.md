@@ -5,10 +5,13 @@ what happens:
 
 - **When** to switch, set by the thresholds and `autoRotate.trigger`.
 - **Where** to switch to, set by `autoRotate.strategy`.
+- **Whether a Codex switch should wait for a nearby quota reset**, set by `autoRotate.resetAware` (on by default).
+- **Whether to redeem an earned Codex rate-limit reset**, set by `autoReset.enabled` (on by default), and by the
+  provider-reported credit count and expiry.
 
 The settings themselves are listed in [Account automation](CONFIGURATION.md#account-automation). All examples below
-use the Claude defaults (5-hour threshold **95**, weekly threshold **99.5**, trigger `limit`) unless they say
-otherwise. A week is 168 hours.
+use the Claude defaults (5-hour threshold **95**, weekly threshold **99.5**, strategy `soonestReset`, trigger `limit`)
+unless they say otherwise. Codex defaults to **100**, **99**, `sequential` and `limit`. A week is 168 hours.
 
 The **Keep-alive and rotation settings…** item of each Accounts menu shows what is in effect. Here Claude has
 keep-alives on and rotation on with `leastWaste`, `proactive` and custom thresholds, and Codex has keep-alives off
@@ -30,6 +33,7 @@ and rotation at the 99% weekly threshold:
 - [Which setup to choose](#which-setup-to-choose)
 - [Safety](#safety)
 - [Codex](#codex)
+- [Codex reset-aware timing](#codex-reset-aware-timing)
 
 ## Thresholds
 
@@ -104,8 +108,9 @@ threshold and report every counted window the active account reports) and is sen
 reading alone does not prove that the login works. A candidate that fails either check is skipped, and a broken
 login is reported.
 
-The strategy only decides the **order**. With the default `limit` trigger, every strategy switches exactly once per
-threshold reached; only [proactive switching](#proactive-switching) makes the strategy start switches of its own.
+The strategy decides the **order**. With the default `limit` trigger, every strategy attempts a switch when the
+active account reaches a threshold; only [proactive switching](#proactive-switching) makes the strategy start
+switches of its own. Codex's [reset-aware timing](#codex-reset-aware-timing) can defer an attempt briefly.
 
 The readings the ranking works from are the ones the Accounts menu shows under each profile, with the time until
 each window resets and when the account was last checked:
@@ -122,7 +127,7 @@ tries A, B and C in that order.
 
 Choose `sequential` when you want predictable order, for example a main account followed by backups.
 
-### `soonestReset` (default)
+### `soonestReset` (Claude default)
 
 **Score: hours until the weekly window resets. Lowest first.** Allowance that is about to expire is spent before it
 is lost.
@@ -179,6 +184,8 @@ otherwise go to waste.
 
 **5-hour bonus:** when an account's 5-hour window still has room and resets **within the hour**, its rate is raised
 by 10%, because that unused 5-hour allowance is lost too.
+For Codex with reset-aware timing on, the final five minutes of that hour are guarded, so the bonus never causes a
+one-minute switch.
 
 **Example: plain ranking.**
 
@@ -256,7 +263,7 @@ hiding an account that has plenty of general allowance.
 
 ## Proactive switching
 
-With `autoRotate.trigger: proactive` (Claude only, and not with `sequential`), a working account is also left when a
+With `autoRotate.trigger: proactive` (Claude or Codex, and not with `sequential`), a working account is also left when a
 candidate scores **clearly better**. This is the setup that rotates while you work, based on how usage relates to
 each account's reset time. It applies these rules:
 
@@ -326,12 +333,72 @@ turn when the Codex account proxy is on, and otherwise need the extension restar
 
 ## Codex
 
-Codex always rotates `sequential` and only at a threshold: `strategy`, `trigger`, `minStayMinutes` and `modelLimits`
-do not apply. Its weekly threshold is `aiUsage.codex.autoRotate.weeklyThresholdPercent` (default **99**), and its
-5-hour threshold is `aiUsage.codex.autoRotate.fiveHourThresholdPercent` (default **100**, so a reported 5-hour window
-blocks an account or starts a rotation only once it is used up; lower it to leave earlier). API-key-only Codex
-profiles report no subscription windows and are never rotation targets.
+Codex supports all four strategies and both triggers. Its defaults remain `sequential` and `limit`, so existing
+setups keep their saved-profile order. Its weekly threshold is `aiUsage.codex.autoRotate.weeklyThresholdPercent`
+(default **99**), and its 5-hour threshold is `aiUsage.codex.autoRotate.fiveHourThresholdPercent` (default **100**,
+so a reported 5-hour window blocks an account or starts a rotation only once it is used up; lower it to leave
+earlier). `modelLimits` applies only to Claude. API-key-only Codex profiles report no subscription windows and are
+never rotation targets.
 
 **Example.** Codex profiles are saved as W, X, Y, and W is active. W reaches `7d` 99%. X is at `7d` 99.2% and is
 skipped, so Y (`7d` 40%, `5h` 100%) is checked next. Its 5-hour window is used up, so Y is skipped too, and W is kept
 with a notification until X or Y recovers.
+
+## Codex reset-aware timing
+
+Codex can renew quota naturally at the reported reset time, or redeem an **earned rate-limit reset credit** through
+its [app-server](https://learn.chatgpt.com/docs/app-server). `aiUsage.codex.autoReset.enabled` controls automatic
+credit redemption and is on by default;
+`aiUsage.codex.autoRotate.resetAware` controls timing around natural resets and is also on by default. Codex reports
+the available credit count and, sometimes, individual credit expiry dates. AI Usage never invents credits. These
+settings work together with **every** Codex strategy and both triggers:
+
+1. If the active account is at a threshold and **all** limiting windows have known resets within five minutes,
+   keep that account. Recheck after the *last* limiting reset. If one limiting window resets later or has no known
+   time, rotation proceeds. For a proactive switch, any counted window resetting within five minutes also holds
+   the current account so its new reading can be compared.
+2. Skip a candidate when **any** of its reported 5-hour or 7-day windows resets within five minutes, even if the
+   strategy ranks it first. Try the next candidate immediately; if none qualifies, retry just after the earliest
+   skipped reset. If a credit is available, keep it while waiting for that candidate unless it expires first.
+   Every candidate still needs a fresh usage read and a successful keep-alive before activation.
+3. If every window blocking the active saved account is fully used (100%) and enough credits are available to
+   cover those windows, first prefer a usable account selected by the rotation strategy. If no account qualifies
+   (or account rotation is off), redeem a credit on the active
+   account. A credit reported to expire in 30 minutes or less is used first when its expiry precedes the active
+   account's natural recovery **and** the preferred candidate's next reset in its stored reading; this avoids letting a credit expire
+   while still spending an even more short-lived candidate's allowance. A redemption is attempted only when the
+   reported available count can cover the number of currently limiting windows. A custom rotation threshold below
+   100% can switch accounts early, but never spends an earned credit early. After a redemption, AI Usage reads the
+   actual new limits; it does not guess which window Codex reset.
+4. A manual **Rotate now** ignores the five-minute timing guard and does not redeem a credit. Turn off
+   `autoReset.enabled` to keep earned credits for manual use in Codex. Turn off `autoRotate.resetAware` to switch
+   without the five-minute guard; automatic redemption still waits for an imminent natural recovery.
+
+| Strategy | When a reset is farther than five minutes away | In the last five minutes |
+| --- | --- | --- |
+| `sequential` | Try the next saved profile. | Skip profiles about to reset; keep the active profile if its limiting quota is about to recover. |
+| `soonestReset` | Prefer the qualifying weekly allowance expiring soonest, subject to the early-spend penalty. | A nearly expired candidate is skipped; score again after its reset. |
+| `evenPace` | Prefer the profile furthest below its weekly spending pace. | Recalculate pace after reset instead of switching on the old percentage. |
+| `leastWaste` | Prefer the most weekly allowance left per hour; a 5-hour reset within an hour adds a 10% bonus. | The final five minutes override that bonus so a short-lived switch is avoided. |
+
+With `limit`, this decision runs when the active account reaches either threshold. With `proactive`, strategies other
+than `sequential` may switch a still usable account after the configured minimum stay; an earned reset is **never**
+redeemed merely to improve a score while the active account remains below its thresholds. With `sequential`, the
+`proactive` trigger has no effect. The service's one-minute scheduler and provider check interval can add a short
+delay after a reported natural reset or credit expiry.
+
+**Example.** A is active with 5h at 100%, resetting in one minute, B has 20% usage, and A has two earned reset
+credits. All strategies keep A and preserve both credits, then read it again after the natural reset. If A's weekly
+window is also at 100% but resets in two days, the five-hour reset cannot make A usable: rotation tries B. If B is
+also limited and no other profile qualifies, AI Usage can redeem one credit on A, read Codex's new limits, and
+reconsider whether the second credit is needed for the remaining blocked window. If only A's 5-hour window is
+fully used, one redemption can restore it while preserving the second credit. If B itself resets in one minute, it
+is skipped until after that reset. If A's
+credit expires in ten minutes while B's allowance lasts for a day, the credit is redeemed first; if B's allowance
+expires in eight minutes, B is preferred so its short-lived allowance can be used.
+
+The Codex status bar tooltip and every saved Codex profile row show **Earned resets: x available** when Codex
+reports a count, including zero. When AI Usage has observed more than one credit in the current continuous
+availability period, it shows **x of y observed available**, such as **1 of 2 observed available** after spending
+one. `y` is an observed high-water mark, not a provider-reported total grant. An expiry countdown appears when
+Codex supplies a credit expiry. API-key-only accounts have no subscription reset credits.

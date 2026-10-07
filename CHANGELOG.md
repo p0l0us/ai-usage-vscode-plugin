@@ -1,7 +1,14 @@
 # Changelog
 
-## 1.0.5 (unreleased)
+## 1.0.6 (unreleased)
 
+- Earned Codex rate-limit resets can now be redeemed automatically (on by default) for a limited saved account.
+  The service checks Codex's available-credit count, natural reset times, other accounts and credit expiry before
+  spending a credit, and retries ambiguous outcomes with the same idempotency key. Available resets appear in the
+  Codex status tooltip and profile rows, with an observed `x of y` count when more than one was seen.
+- Codex account rotation now offers the same four strategies and proactive trigger as Claude. Reset-aware timing is
+  on by default: automatic sweeps wait when the active quota is about to recover and skip candidate accounts whose
+  quota renews within five minutes, then reconsider them after the reset. Manual rotation bypasses the wait.
 - The Account service menu ends with **Back**, to the AI Usage menu or to the Accounts menu it was opened from.
 - **Account service…** moved from the Claude and Codex Accounts menus to the AI Usage menu of all services, since one
   service serves both; its line says where the service runs (background or inside a VS Code window) and its version.

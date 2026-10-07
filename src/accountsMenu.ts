@@ -4,7 +4,7 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import {
   AuthProvider, ImportPlanView, LiveUsage, ProfileView, ProviderView, ServiceClient, ServiceConfig, deserializeUsage,
-  explainAccountProblem, formatResetRemaining, nativeCredentialPath, newestValidUsage, parseCredentialJson, strategySummary
+  explainAccountProblem, formatEarnedResets, formatResetRemaining, nativeCredentialPath, newestValidUsage, parseCredentialJson, strategySummary
 } from '../service/out';
 import { MCP_SERVER_NAME, McpRegistration } from './mcpRegistration';
 import { ServiceManager } from './serviceManager';
@@ -97,6 +97,14 @@ export function usageDetail(profile: ProfileView, displayedUsage?: LiveUsage): s
       const reset = formatResetRemaining(window.resetsAt, now);
       return `${window.label}: ${window.usedPercent}%${reset ? ` (${reset})` : ''}`;
     }).join(' · '));
+    if (usage.provider === 'codex') {
+      const credits = usage.resetCredits ?? stored?.resetCredits;
+      const line = formatEarnedResets(credits, stored?.resetCredits?.totalCount);
+      if (line) {
+        const expiry = credits?.earliestExpiresAt ? formatResetRemaining(new Date(credits.earliestExpiresAt * 1000), now) : '';
+        parts.push(`Earned resets: ${line}${expiry ? ` (next expires in ${expiry})` : ''}`);
+      }
+    }
     parts.push(`Checked ${usage.fetchedAt.toLocaleString()}`);
   }
   // Known errors read as a few words ("Insufficient credits"); the vendor's own text stays in the log.
@@ -268,8 +276,8 @@ export class AccountsMenu {
     }
     items.push({
       label: '$(gear) Keep-alive and rotation settings…',
-      description: `Keep-alive ${view.keepAlive ? 'on' : 'off'} · rotation ${view.autoRotate ? `on (${strategySummary(config, provider)})` : 'off'}`,
-      detail: `Opens Settings: turn periodic checks of every saved ${TITLES[provider]} account and automatic rotation on or off, and set the period, model, rotation strategy and thresholds, and dedicated home. The account service applies them, also while VS Code is closed.`,
+      description: `Keep-alive ${view.keepAlive ? 'on' : 'off'} · rotation ${view.autoRotate ? `on (${strategySummary(config, provider)})` : 'off'}${provider === 'codex' ? ` · earned resets ${config.codex.autoReset.enabled ? 'on' : 'off'}` : ''}`,
+      detail: `Opens Settings: turn periodic checks of every saved ${TITLES[provider]} account and automatic rotation on or off, and set the period, model, rotation strategy and thresholds${provider === 'codex' ? ', earned-reset redemption' : ''}, and dedicated home. The account service applies them, also while VS Code is closed.`,
       action: 'settings'
     });
     items.push({ label: `$(settings-gear) ${TITLES[provider]} settings…`, description: `aiUsage.${provider}.*`, detail: `Opens Settings on every ${TITLES[provider]} setting, including the ${TITLES[provider]} config section.`, action: 'serviceSettings' });

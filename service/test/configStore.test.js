@@ -5,13 +5,16 @@ const os = require('node:os');
 const path = require('node:path');
 const { defaultConfig, normalizeConfig, setConfigValue, getConfigValue, listConfig, loadConfig, saveConfig, automationSettings, strategySummary, SETTINGS, GLOBAL_SETTINGS } = require('../out/configStore');
 
-test('defaults match the extension settings: Claude rotates at 95/99.5 with soonestReset, Codex at 100/99 sequentially', () => {
+test('defaults match the extension settings: Claude rotates at 95/99.5, Codex at 100/99 with reset awareness', () => {
   const config = defaultConfig();
   assert.equal(config.claude.autoRotate.fiveHourThresholdPercent, 95);
   assert.equal(config.claude.autoRotate.weeklyThresholdPercent, 99.5);
   assert.equal(config.claude.autoRotate.strategy, 'soonestReset');
   assert.equal(config.codex.autoRotate.fiveHourThresholdPercent, 100);
   assert.equal(config.codex.autoRotate.weeklyThresholdPercent, 99);
+  assert.equal(config.codex.autoRotate.strategy, 'sequential');
+  assert.equal(config.codex.autoRotate.resetAware, true);
+  assert.equal(config.codex.autoReset.enabled, true);
   assert.equal(config.codex.keepAlive.periodHours, 6);
   assert.equal(config.codex.keepAlive.model, 'gpt-5.6-luna');
   assert.equal(config.claude.keepAlive.home, '~/.claude-tmp');
@@ -37,7 +40,9 @@ test('setConfigValue coerces command-line strings, validates and never mutates t
   assert.throws(() => setConfigValue(config, 'claude.autoRotate.strategy', 'random'), /must be one of/);
   assert.throws(() => setConfigValue(config, 'claude.keepAlive.periodHours', '0'), /at least 0.25/);
   assert.throws(() => setConfigValue(config, 'claude.keepAlive.enabled', 'maybe'), /true or false/);
-  assert.throws(() => setConfigValue(config, 'codex.autoRotate.strategy', 'evenPace'), /does not apply to Codex/);
+  assert.equal(getConfigValue(setConfigValue(config, 'codex.autoRotate.strategy', 'evenPace'), 'codex.autoRotate.strategy'), 'evenPace');
+  assert.equal(getConfigValue(setConfigValue(config, 'codex.autoRotate.resetAware', 'off'), 'codex.autoRotate.resetAware'), false);
+  assert.equal(getConfigValue(setConfigValue(config, 'codex.autoReset.enabled', 'off'), 'codex.autoReset.enabled'), false);
   assert.throws(() => setConfigValue(config, 'copilot.keepAlive.enabled', true), /start with claude\. or codex\./);
   assert.throws(() => setConfigValue(config, 'claude.nothing', true), /Unknown setting/);
 });
@@ -47,7 +52,9 @@ test('listConfig lists every applicable key with Claude first and Codex without 
   const keys = entries.map((entry) => entry.key);
   assert.equal(keys[0], 'claude.keepAlive.enabled');
   assert.ok(keys.includes('claude.autoRotate.strategy'));
-  assert.ok(!keys.includes('codex.autoRotate.strategy'));
+  assert.ok(keys.includes('codex.autoRotate.strategy'));
+  assert.ok(keys.includes('codex.autoRotate.resetAware'));
+  assert.ok(keys.includes('codex.autoReset.enabled'));
   assert.ok(keys.includes('codex.autoRotate.fiveHourThresholdPercent'));
   assert.equal(entries.length, SETTINGS.length + SETTINGS.filter((setting) => !setting.providers).length + GLOBAL_SETTINGS.length);
 });
@@ -63,7 +70,7 @@ test('the file round-trips and a missing file yields the defaults', (t) => {
   if (process.platform !== 'win32') { assert.equal(fs.statSync(file).mode & 0o777, 0o600); }
 });
 
-test('automation settings bound the intervals and force Codex to sequential at its limit', () => {
+test('automation settings bound intervals and honor Codex strategy, trigger and reset awareness', () => {
   let config = defaultConfig();
   config = setConfigValue(config, 'claude.keepAlive.periodHours', 0.5);
   config = setConfigValue(config, 'claude.autoRotate.trigger', 'proactive');
@@ -77,9 +84,14 @@ test('automation settings bound the intervals and force Codex to sequential at i
   const codex = automationSettings(config, 'codex');
   assert.equal(codex.strategy, 'sequential');
   assert.equal(codex.trigger, 'limit');
+  assert.equal(codex.resetAware, true);
+  assert.equal(codex.autoReset, true);
   assert.equal(codex.intervalMs, 6 * 3_600_000);
   assert.equal(strategySummary(config, 'claude'), 'soonestReset, proactive, 5h ≥ 95%, 7d ≥ 99.5%');
-  assert.equal(strategySummary(config, 'codex'), '5h ≥ 100%, 7d ≥ 99%');
+  assert.equal(strategySummary(config, 'codex'), 'sequential, limit, 5h ≥ 100%, 7d ≥ 99%, reset-aware');
+  const tuned = setConfigValue(setConfigValue(config, 'codex.autoRotate.strategy', 'leastWaste'), 'codex.autoRotate.trigger', 'proactive');
+  assert.equal(automationSettings(tuned, 'codex').strategy, 'leastWaste');
+  assert.equal(automationSettings(tuned, 'codex').trigger, 'proactive');
 });
 
 test('the mcp block is a global setting: off by default, switching on, listed after the provider settings and synced like them', () => {

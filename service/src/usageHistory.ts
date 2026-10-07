@@ -29,7 +29,7 @@ export type SwitchReason = 'limit' | 'proactive' | 'manual' | 'external';
  * score); `ineligible` (its fresh reading is at a threshold or incomplete); `keepAliveFailed` (the pre-switch
  * model call failed); `notReached` (an earlier candidate was chosen).
  */
-export type CandidateOutcome = 'chosen' | 'problem' | 'limited' | 'notBetter' | 'ineligible' | 'keepAliveFailed' | 'notReached';
+export type CandidateOutcome = 'chosen' | 'problem' | 'limited' | 'resetSoon' | 'notBetter' | 'ineligible' | 'keepAliveFailed' | 'notReached';
 export type HistoryCandidate = {
   account: HistoryAccount;
   /** Looked usable by its stored reading when the sweep started. */
@@ -46,6 +46,8 @@ export type HistoryCandidate = {
 export type RotationSnapshot = {
   strategy: string;
   trigger: string;
+  autoReset?: boolean;
+  resetAware?: boolean;
   fiveHourThresholdPercent: number;
   weeklyThresholdPercent: number;
   minStayMinutes?: number;

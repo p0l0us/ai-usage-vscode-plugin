@@ -78,6 +78,10 @@ test('the usage detail line shows every window, the check time and known problem
   const current = { provider: 'claude', title: 'Claude', fetchedAt: new Date(now), windows: [{ label: '5h', usedPercent: 4, resetsAt: new Date(now + 5 * 3_600_000) }] };
   assert.match(usageDetail(old, current), /5h: 4%/);
   assert.doesNotMatch(usageDetail(old, current), /95%/);
+  const codex = profile({ usage: { provider: 'codex', title: 'Codex', fetchedAt: new Date(now).toISOString(),
+    windows: [{ label: '7d', usedPercent: 80, resetsAt: new Date(now + 24 * 3_600_000).toISOString() }],
+    resetCredits: { availableCount: 1, totalCount: 2, earliestExpiresAt: Math.floor((now + 2 * 3_600_000) / 1000) } } });
+  assert.match(usageDetail(codex), /Earned resets: 1 of 2 observed available \(next expires in 2h\)/);
 });
 
 test('profile actions live in Manage saved profiles and moving a profile updates its order', async () => {

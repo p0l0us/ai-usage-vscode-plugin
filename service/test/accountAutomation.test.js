@@ -19,7 +19,9 @@ function fixture(t, options = {}) {
   let now = Date.now();
   const active = { claude: 'a', codex: 'a' };
   const values = { a: [99.5, 10], b: [10, 10], c: [20, 20], ...options.values };
-  const calls = [], switches = [], refreshed = [], messages = [], problems = [];
+  const calls = [], switches = [], refreshed = [], messages = [], problems = [], resets = [];
+  const credits = { ...options.credits };
+  const redeemedKeys = new Set();
   const settings = Object.fromEntries(['claude', 'codex'].map(provider => [provider, {
     enabled: false, autoRotate: false, fiveHourThresholdPercent: 99.5, weeklyThresholdPercent: 99.5, intervalMs: (provider === 'claude' ? 2 : 6) * 3600000,
     checkIntervalMs: 600000, home: directory, cliPath: provider, model: '', ...options.settings?.[provider]
@@ -43,12 +45,31 @@ function fixture(t, options = {}) {
     return { credential: { ...credential, refreshed: true },
       keepAliveError: keepAlive ? options.keepAliveErrors?.[credential.id] : undefined,
       result: percents
-        ? { kind: 'ok', usage: usage(provider, percents, now) }
+        ? { kind: 'ok', usage: { ...usage(provider, percents, now),
+          ...(provider === 'codex' && credits[credential.id] !== undefined ? { resetCredits: {
+            availableCount: credits[credential.id], ...(options.creditExpiry ? { earliestExpiresAt: options.creditExpiry } : {})
+          } } : {}) } }
         : { kind: 'error', provider, title: provider, message: options.usageErrors?.[credential.id] ?? 'Unavailable',
           transient: Boolean(options.transientErrors?.[credential.id]) } };
   };
   const make = () => {
-    const service = new AccountAutomation(directory, profiles, p => settings[p], async () => {}, m => messages.push(m), probe, () => now);
+    const reset = async (credential, resetSettings, key) => {
+      resets.push([credential.id, key]);
+      if (options.beforeReset) await options.beforeReset(credential, key, resets.length);
+      if (redeemedKeys.has(key)) return { outcome: 'alreadyRedeemed', credential,
+        result: { kind: 'ok', usage: { ...usage('codex', values[credential.id], now),
+          resetCredits: { availableCount: credits[credential.id] } } } };
+      if (credits[credential.id] <= 0) return { outcome: 'noCredit', credential,
+        result: { kind: 'ok', usage: { ...usage('codex', values[credential.id], now), resetCredits: { availableCount: 0 } } } };
+      credits[credential.id]--;
+      redeemedKeys.add(key);
+      values[credential.id] = options.afterReset ?? [0, 10];
+      if (options.resetReadFails && resets.length === 1) return { outcome: 'reset', credential,
+        result: { kind: 'error', provider: 'codex', title: 'Codex', message: 'usage read failed' } };
+      return { outcome: 'reset', credential, result: { kind: 'ok', usage: { ...usage('codex', values[credential.id], now),
+        resetCredits: { availableCount: credits[credential.id] } } } };
+    };
+    const service = new AccountAutomation(directory, profiles, p => settings[p], async () => {}, m => messages.push(m), probe, () => now, reset);
     service.onAccountProblem = (...args) => problems.push(args);
     // With `history`, every instance appends to one history under the state directory, as the service does.
     if (options.history) {
@@ -58,7 +79,7 @@ function fixture(t, options = {}) {
   };
   const service = make();
   t.after(() => service.dispose());
-  return { service, make, options, active, values, calls, switches, refreshed, settings, messages, problems,
+  return { service, make, options, active, values, credits, calls, switches, resets, refreshed, settings, messages, problems,
     /** Every recorded history event, oldest first. */
     events: () => service.history ? [...service.history.events()] : [],
     observe: (provider, percents, id = active[provider]) => service.observe(provider, id, usage(provider, percents, now)),
@@ -415,6 +436,135 @@ test('least waste prefers the most allowance per hour over the soonest reset', a
     await f.service.tick();
     assert.deepEqual(f.switches, [['codex', expected, true]], strategy);
   }
+});
+
+test('Codex waits for an exhausted account that will recover within five minutes, then rechecks it', async t => {
+  const f = fixture(t, { ids: ['a', 'b'], values: { a: [['5h', 100, 1 / 60], ['7d', 10, 48]], b: [10, 10] },
+    settings: { codex: { autoRotate: true, resetAware: true, strategy: 'soonestReset' } } });
+  f.observe('codex', f.values.a);
+  await f.service.tick();
+  assert.deepEqual(f.switches, []);
+  f.values.a = [['5h', 0, 5], ['7d', 10, 48]];
+  f.advance(2 * 60_000);
+  await f.service.tick();
+  assert.deepEqual(f.switches, [], 'a fresh reading after reset keeps the recovered account');
+  assert.deepEqual(f.calls.map((call) => call[1]), ['a'], 'no other account was probed');
+});
+
+test('each Codex strategy skips a candidate whose quota resets in one minute', async t => {
+  for (const strategy of ['sequential', 'soonestReset', 'evenPace', 'leastWaste']) {
+    const f = fixture(t, { values: {
+      a: [['5h', 100, 10], ['7d', 10, 100]],
+      b: [['5h', 10, 1 / 60], ['7d', 10, 1 / 60]],
+      c: [['5h', 10, 4], ['7d', 10, 50]]
+    }, settings: { codex: { autoRotate: true, resetAware: true, strategy } } });
+    f.observeAll('codex');
+    await f.service.tick();
+    assert.deepEqual(f.switches, [['codex', 'c', true]], strategy);
+    assert.ok(!f.calls.some((call) => call[1] === 'b'), strategy);
+  }
+});
+
+test('Codex reset awareness can be disabled and manual rotation bypasses it', async t => {
+  for (const manual of [false, true]) {
+    const f = fixture(t, { ids: ['a', 'b'], values: {
+      a: [['5h', 100, 1 / 60], ['7d', 10, 100]], b: [10, 10]
+    }, settings: { codex: { autoRotate: !manual, resetAware: manual } } });
+    f.observe('codex', f.values.a);
+    if (manual) { assert.deepEqual(await f.service.rotateNow('codex'), { switched: true }); }
+    else { await f.service.tick(); }
+    assert.deepEqual(f.switches, [['codex', 'b', true]]);
+  }
+});
+
+test('Codex automatically redeems only provider-reported earned resets and shows the observed total', async t => {
+  const f = fixture(t, { ids: ['a'], credits: { a: 2 }, values: { a: [['5h', 100, 10], ['7d', 10, 100]] },
+    settings: { codex: { autoReset: true, autoRotate: false, resetAware: true } } });
+  await f.service.tick();
+  assert.equal(f.resets.length, 1);
+  assert.equal(f.credits.a, 1);
+  assert.deepEqual(f.service.usage('codex', 'a').resetCredits, { availableCount: 1, totalCount: 2 });
+  await f.service.tick();
+  assert.equal(f.resets.length, 1, 'a recovered account spends no more credits');
+});
+
+test('Codex rotates before spending a reset credit unless the credit is about to expire', async t => {
+  const later = fixture(t, { ids: ['a', 'b'], credits: { a: 2 },
+    values: { a: [['5h', 100, 10], ['7d', 10, 100]], b: [10, 10] },
+    settings: { codex: { autoReset: true, autoRotate: true, resetAware: true, strategy: 'sequential' } } });
+  await later.service.tick();
+  assert.deepEqual(later.switches, [['codex', 'b', true]]);
+  assert.equal(later.resets.length, 0);
+
+  const urgent = fixture(t, { ids: ['a', 'b'], credits: { a: 2 }, creditExpiry: Math.floor(Date.now() / 1000) + 10 * 60,
+    values: { a: [['5h', 100, 10], ['7d', 10, 100]], b: [10, 10] },
+    settings: { codex: { autoReset: true, autoRotate: true, resetAware: true, strategy: 'leastWaste' } } });
+  urgent.observe('codex', urgent.values.b, 'b');
+  await urgent.service.tick();
+  assert.equal(urgent.resets.length, 1);
+  assert.deepEqual(urgent.switches, []);
+
+  const candidateExpiresFirst = fixture(t, { ids: ['a', 'b'], credits: { a: 2 },
+    creditExpiry: Math.floor(Date.now() / 1000) + 30 * 60,
+    values: { a: [['5h', 100, 10], ['7d', 10, 100]], b: [['5h', 10, 8 / 60], ['7d', 10, 50]] },
+    settings: { codex: { autoReset: true, autoRotate: true, resetAware: true, strategy: 'leastWaste' } } });
+  candidateExpiresFirst.observe('codex', candidateExpiresFirst.values.b, 'b');
+  await candidateExpiresFirst.service.tick();
+  assert.deepEqual(candidateExpiresFirst.switches, [['codex', 'b', true]]);
+  assert.equal(candidateExpiresFirst.resets.length, 0);
+});
+
+test('an earned reset is saved when natural recovery is near or no credits are reported', async t => {
+  const near = fixture(t, { ids: ['a'], credits: { a: 1 }, values: { a: [['5h', 100, 1 / 60], ['7d', 10, 100]] },
+    settings: { codex: { autoReset: true } } });
+  await near.service.tick();
+  assert.equal(near.resets.length, 0);
+  const none = fixture(t, { ids: ['a'], credits: { a: 0 }, values: { a: [['5h', 100, 10], ['7d', 10, 100]] },
+    settings: { codex: { autoReset: true } } });
+  await none.service.tick();
+  assert.equal(none.resets.length, 0);
+});
+
+test('an earned reset waits for another account recovering in one minute', async t => {
+  const f = fixture(t, { ids: ['a', 'b'], credits: { a: 1 },
+    values: { a: [['5h', 100, 10], ['7d', 10, 100]], b: [['5h', 100, 1 / 60], ['7d', 10, 100]] },
+    settings: { codex: { autoReset: true, autoRotate: true, resetAware: true } } });
+  f.observe('codex', f.values.b, 'b');
+  await f.service.tick();
+  assert.equal(f.resets.length, 0);
+  assert.deepEqual(f.switches, []);
+  f.values.b = [['5h', 0, 5], ['7d', 10, 100]];
+  f.advance(2 * 60_000);
+  await f.service.tick();
+  assert.deepEqual(f.switches, [['codex', 'b', true]]);
+  assert.equal(f.resets.length, 0);
+});
+
+test('a failed earned reset retries with the same idempotency key', async t => {
+  let failures = 0;
+  const f = fixture(t, { ids: ['a'], credits: { a: 1 }, values: { a: [['5h', 100, 10], ['7d', 10, 100]] },
+    settings: { codex: { autoReset: true, checkIntervalMs: 60_000 } },
+    beforeReset: () => { if (failures++ === 0) throw new Error('response lost'); } });
+  await f.service.tick();
+  assert.equal(f.resets.length, 1);
+  f.advance(61_000);
+  await f.service.tick();
+  assert.equal(f.resets.length, 2);
+  assert.equal(f.resets[0][1], f.resets[1][1]);
+});
+
+test('a redeemed credit is not spent twice when the follow-up usage read fails', async t => {
+  const f = fixture(t, { ids: ['a'], credits: { a: 2 }, resetReadFails: true,
+    values: { a: [['5h', 100, 10], ['7d', 10, 100]] },
+    settings: { codex: { autoReset: true, checkIntervalMs: 60_000 } } });
+  await f.service.tick();
+  assert.equal(f.credits.a, 1);
+  assert.equal(f.service.accountState('codex', 'a').resetAttemptKey, f.resets[0][1]);
+  f.advance(61_000);
+  await f.service.tick();
+  assert.equal(f.credits.a, 1);
+  assert.equal(f.resets.length, 1, 'fresh recovered usage confirms the previous redemption');
+  assert.equal(f.service.accountState('codex', 'a').resetAttemptKey, undefined);
 });
 
 test('a cached window whose reset has passed ranks as fresh', () => {

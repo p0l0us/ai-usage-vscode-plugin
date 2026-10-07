@@ -26,11 +26,13 @@ import {
   fetchClaudeUsageFromAccountFile,
   fetchCodexUsage,
   fetchCodexUsageCli,
+  fetchCodexResetCreditsCli,
   fetchCodexUsageFromSessionLog,
   fetchCopilotUsage,
   fetchLocalThenApi,
   formatResetIn,
   formatResetRemaining,
+  formatEarnedResets,
   newestValidUsage,
   needsSignIn,
   readableProblem,
@@ -330,17 +332,23 @@ export function activate(context: vscode.ExtensionContext): void {
         if (source === 'cli') {
           return fetchCodexUsageCli(vscode.workspace.getConfiguration().get<string>('aiUsage.codex.cliPath') || 'codex');
         }
+        let result: LiveResult;
         if (source === 'sessionLog') {
-          return fetchCodexUsageFromSessionLog();
-        }
-        if (source === 'both') {
-          return fetchLocalThenApi({
+          result = await fetchCodexUsageFromSessionLog();
+        } else if (source === 'both') {
+          result = await fetchLocalThenApi({
             known, apiCheckIntervalMs, fallback: codexFallbackBudget,
             local: () => fetchCodexUsageFromSessionLog(),
             api: () => fetchCodexUsage()
           });
+        } else {
+          result = await fetchCodexUsage();
         }
-        return fetchCodexUsage();
+        if (result.kind === 'ok' && source !== 'sessionLog') {
+          const credits = await fetchCodexResetCreditsCli(vscode.workspace.getConfiguration().get<string>('aiUsage.codex.cliPath') || 'codex');
+          if (credits) { result.usage.resetCredits = credits; }
+        }
+        return result;
       },
       cacheDiscriminator: async () => cacheDiscriminator(services, 'codex'),
       activeProfileName: () => activeProfileName(services, 'codex'),
@@ -1423,7 +1431,8 @@ function renderLive(provider: LiveProvider): void {
     return;
   }
   item.text = statusText(provider, formatUsageLabel(usage, false, statusBarStyle().usage), usage.title);
-  item.tooltip = buildTooltip(usage, result?.kind === 'error' ? result.message : undefined, provider.activeProfileName?.());
+  item.tooltip = buildTooltip(usage, result?.kind === 'error' ? result.message : undefined,
+    provider.activeProfileName?.(), provider.activeProfileUsage?.());
   item.color = Date.now() - usage.fetchedAt.getTime() >= STALE_AFTER_MS
     ? new vscode.ThemeColor('disabledForeground') : undefined;
 
@@ -1528,7 +1537,7 @@ function statusText(provider: LiveProvider, body: string, title?: string): strin
   return `${icon}${name}${account ? `${account} ` : ''}${body}`.trimEnd();
 }
 
-function buildTooltip(usage: LiveUsage, refreshError?: string, activeProfile?: string): vscode.MarkdownString {
+function buildTooltip(usage: LiveUsage, refreshError?: string, activeProfile?: string, profileUsage?: LiveUsage): vscode.MarkdownString {
   const md = new vscode.MarkdownString(undefined, true);
   if (refreshError) {
     const minutes = Math.round((Date.now() - usage.fetchedAt.getTime()) / 60_000);
@@ -1542,6 +1551,15 @@ function buildTooltip(usage: LiveUsage, refreshError?: string, activeProfile?: s
     const reset = formatResetIn(window.resetsAt);
     const at = reset && window.resetsAt ? ` (${window.resetsAt.toLocaleString()})` : '';
     md.appendMarkdown(`- **${windowName(window.label)}**: ${window.usedPercent}% used${reset ? ` · ${reset}${at}` : ''}\n`);
+  }
+  if (usage.provider === 'codex') {
+    const observed = profileUsage?.resetCredits?.totalCount;
+    const credits = usage.resetCredits ?? (profileUsage && Date.now() - profileUsage.fetchedAt.getTime() < 15 * 60_000 ? profileUsage.resetCredits : undefined);
+    const line = formatEarnedResets(credits, observed);
+    if (line) {
+      const expiry = credits?.earliestExpiresAt ? ` · next credit expires ${new Date(credits.earliestExpiresAt * 1000).toLocaleString()}` : '';
+      md.appendMarkdown(`\n- **Earned resets:** ${line}${expiry}\n`);
+    }
   }
   if (usage.details?.length) {
     md.appendMarkdown('\n');

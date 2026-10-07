@@ -3,7 +3,7 @@ const test = require('node:test');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { probeAccount, isolatedHome, isolatedEnvironment, acquireAccountLock, keepAliveArgs, describeCliFailure, isRevokedCredentialError, loginArgs } = require('../out/accountProbe');
+const { probeAccount, resetCodexAccount, isolatedHome, isolatedEnvironment, acquireAccountLock, keepAliveArgs, describeCliFailure, isRevokedCredentialError, loginArgs } = require('../out/accountProbe');
 
 function temporary(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-probe-'));
@@ -176,7 +176,8 @@ test('Codex keep-alive and app-server use the same isolated account and retain b
         const request = JSON.parse(line);
         console.log(JSON.stringify({id: request.id, result: request.id === 1 ? {} : {
           rateLimits: { primary: { usedPercent: 15.2, windowDurationMins: 300 },
-            secondary: { usedPercent: 99, windowDurationMins: 10080 } }
+            secondary: { usedPercent: 99, windowDurationMins: 10080 } },
+          rateLimitResetCredits: { availableCount: 2, credits: [{ status: 'available', expiresAt: 1900000000 }] }
         }}));
       });
     }
@@ -185,7 +186,39 @@ test('Codex keep-alive and app-server use the same isolated account and retain b
     { home, cliPath, model: '' }, true, new AbortController().signal);
   assert.equal(result.result.kind, 'ok');
   assert.deepEqual(result.result.usage.windows.map(w => [w.label, w.usedPercent]), [['5h', 15.2], ['7d', 99]]);
+  assert.deepEqual(result.result.usage.resetCredits, { availableCount: 2, totalCount: 2, earliestExpiresAt: 1900000000 });
   assert.equal(fs.existsSync(path.join(home, 'called')), true);
+  assert.equal(fs.existsSync(path.join(home, 'auth.json')), false);
+});
+
+test('earned Codex reset uses the staged login, a caller-supplied idempotency key, and rereads limits',
+  { skip: process.platform === 'win32' }, async t => {
+  const root = temporary(t), home = path.join(root, 'codex-tmp');
+  const cliPath = fakeCli(root, `
+    const fs = require('fs'), path = require('path');
+    const home = process.env.CODEX_HOME;
+    const auth = JSON.parse(fs.readFileSync(path.join(home, 'auth.json')));
+    if (auth.tokens.account_id !== 'account-b') process.exit(2);
+    require('readline').createInterface({ input: process.stdin }).on('line', line => {
+      const request = JSON.parse(line);
+      let result = {};
+      if (request.method === 'account/rateLimitResetCredit/consume') {
+        fs.writeFileSync(path.join(home, 'redeemed-key'), request.params.idempotencyKey);
+        result = { outcome: 'reset' };
+      }
+      if (request.method === 'account/rateLimits/read') {
+        result = { rateLimits: { primary: { usedPercent: 0, windowDurationMins: 300 } },
+          rateLimitResetCredits: { availableCount: 1 } };
+      }
+      console.log(JSON.stringify({ id: request.id, result }));
+    });
+  `);
+  const result = await resetCodexAccount({ tokens: { access_token: 'test-token', account_id: 'account-b' } },
+    { home, cliPath, model: '' }, 'fixed-uuid', new AbortController().signal);
+  assert.equal(result.outcome, 'reset');
+  assert.equal(result.result.kind, 'ok');
+  assert.deepEqual(result.result.usage.resetCredits, { availableCount: 1 });
+  assert.equal(fs.readFileSync(path.join(home, 'redeemed-key'), 'utf8'), 'fixed-uuid');
   assert.equal(fs.existsSync(path.join(home, 'auth.json')), false);
 });
 

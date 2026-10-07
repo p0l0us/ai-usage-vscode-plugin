@@ -4,7 +4,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { ApiCallBudget } from './apiBudget';
 import { AuthProvider, StoredCredential, nativeCredentialPath, parseCredentialJson, writeJsonAtomically } from './authFiles';
-import { LiveResult, fetchClaudeUsage, fetchCodexUsageCli, resolveCli } from './live';
+import { LiveResult, consumeCodexResetCredit, fetchClaudeUsage, fetchCodexUsageCli, resolveCli } from './live';
 
 export type ProbeSettings = { home: string; cliPath: string; model: string };
 export type ProbeResult = { result: LiveResult; credential: StoredCredential; keepAliveError?: string };
@@ -293,6 +293,32 @@ export async function probeAccount(provider: AuthProvider, credential: StoredCre
       writeJsonAtomically(file, updatedCredential);
     }
     return { result, credential: updatedCredential, keepAliveError };
+  } finally {
+    try { if (staged) { fs.unlinkSync(file); } } finally { lock.release(); }
+  }
+}
+
+/** Redeem an earned reset against one saved Codex login, then read the provider's actual new limits. */
+export async function resetCodexAccount(credential: StoredCredential, settings: ProbeSettings, idempotencyKey: string,
+  signal: AbortSignal): Promise<{ outcome: 'reset' | 'alreadyRedeemed' | 'nothingToReset' | 'noCredit'; result: LiveResult; credential: StoredCredential }> {
+  if (signal.aborted) { throw new Error('Account reset cancelled.'); }
+  const home = isolatedHome('codex', settings.home);
+  const lock = acquireAccountLock(path.join(home, '.ai-usage.lock'));
+  if (!lock) { throw new Error('Another account check is using the keep-alive home.'); }
+  const file = stagedCredentialPath('codex', home);
+  let staged = false;
+  try {
+    writeJsonAtomically(file, credential);
+    staged = true;
+    const cli = resolveCli(settings.cliPath);
+    if (!cli) { throw new Error('Codex CLI not found. Check its configured path.'); }
+    const env = isolatedEnvironment('codex', home);
+    const outcome = await consumeCodexResetCredit(cli, home, env, idempotencyKey);
+    const result = await fetchCodexUsageCli(settings.cliPath, home, env, home);
+    let refreshed = credential;
+    try { refreshed = parseCredentialJson('codex', fs.readFileSync(file, 'utf8')); }
+    catch { /* A completed redemption remains valid even if the CLI removed the staged file. */ }
+    return { outcome, result, credential: refreshed };
   } finally {
     try { if (staged) { fs.unlinkSync(file); } } finally { lock.release(); }
   }

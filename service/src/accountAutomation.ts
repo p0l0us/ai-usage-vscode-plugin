@@ -1,10 +1,10 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { createHash } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import { AuthProvider, StoredCredential, writeJsonAtomically } from './authFiles';
 import { CacheEntry, deserializeUsage } from './cache';
 import { formatResetRemaining, LiveUsage, usageHasExpiredReset, UsageWindow } from './live';
-import { AccountLock, ProbeSettings, ProbeResult, acquireAccountLock, explainAccountProblem, isLoginProblem, needsSignIn, probeAccount } from './accountProbe';
+import { AccountLock, ProbeSettings, ProbeResult, acquireAccountLock, explainAccountProblem, isLoginProblem, needsSignIn, probeAccount, resetCodexAccount } from './accountProbe';
 import { sleep } from './apiBudget';
 import type { ActivationChange } from './profileStore';
 import { HistoryAccount, HistoryCandidate, ReadingSource, RotationSnapshot, UsageHistory, usageSnapshot } from './usageHistory';
@@ -30,8 +30,11 @@ export type RotationLimits = {
 export type AutomationSettings = ProbeSettings & RotationLimits & {
   enabled: boolean;
   autoRotate: boolean;
+  autoReset?: boolean;
   strategy?: RotationStrategy;
   trigger?: RotationTrigger;
+  /** Codex: avoid a short-lived switch immediately before a reported quota reset. */
+  resetAware?: boolean;
   /** Proactive switching leaves a newly active account alone for at least this long. */
   minStayMs?: number;
   intervalMs: number;
@@ -66,6 +69,10 @@ export type AccountState = CacheEntry & {
   problemNotified?: string;
   /** Rotation bookkeeping only: the account `checkedAt` started counting the stay of. */
   activeId?: string;
+  /** Reused if a redemption response is lost, so a retry cannot spend a second credit. */
+  resetAttemptKey?: string;
+  /** Largest available-credit count seen during the current continuous availability episode. */
+  resetCreditTotal?: number;
 };
 
 function fingerprint(credential: StoredCredential): string {
@@ -136,6 +143,21 @@ function limitedUntil(usage: LiveUsage, now: number, limits: RotationLimits): Da
   return until;
 }
 
+/** The first counted quota reset in the next five minutes, if the provider reported one. */
+function imminentReset(usage: LiveUsage, now: number, limits: RotationLimits): Date | undefined {
+  return counted(usage, limits).map((window) => window.resetsAt)
+    .filter((reset): reset is Date => reset !== undefined && reset.getTime() > now && reset.getTime() - now <= RESET_GUARD_MS)
+    .sort((a, b) => a.getTime() - b.getTime())[0];
+}
+
+/** Recovery time when every currently limiting window has a known reset within the guard. */
+function imminentRecovery(usage: LiveUsage, now: number, limits: RotationLimits): Date | undefined {
+  const limiting = counted(usage, limits).filter((window) => window.usedPercent >= windowThreshold(window.label, limits));
+  if (!limiting.length || limiting.some((window) => !window.resetsAt || window.resetsAt.getTime() <= now ||
+    window.resetsAt.getTime() - now > RESET_GUARD_MS)) { return undefined; }
+  return new Date(Math.max(...limiting.map((window) => window.resetsAt!.getTime())));
+}
+
 /** How a check requested by hand treats the account lock held by a running sweep: wait up to `waitMs`, give up on `signal`. */
 export type LockWait = { waitMs?: number; signal?: AbortSignal; onWait?: () => void };
 
@@ -143,6 +165,8 @@ export type LockWait = { waitMs?: number; signal?: AbortSignal; onWait?: () => v
 const LOCK_POLL_MS = 500;
 /** An active-account reading at most this old decides rotation without reading the account again. */
 const RECENT_READING_MS = 2 * 60_000;
+/** A switch this close to a known quota reset is unlikely to pay for its session disruption. */
+const RESET_GUARD_MS = 5 * 60_000;
 /** A hold whose client never lifts it, such as a sign-in whose window closed, ends by itself after this long. */
 const HOLD_MAX_MS = 20 * 60_000;
 /** How much better a candidate must score before proactive rotation leaves a working account. */
@@ -205,7 +229,8 @@ export class AccountAutomation {
     private readonly afterActivate: (provider: AuthProvider, change: ActivationChange) => Promise<void>,
     private readonly log: (message: string) => void,
     private readonly probe: typeof probeAccount = probeAccount,
-    private readonly now: () => number = Date.now
+    private readonly now: () => number = Date.now,
+    private readonly reset: typeof resetCodexAccount = resetCodexAccount
   ) {}
 
   /**
@@ -220,6 +245,7 @@ export class AccountAutomation {
    * thresholds, so rotation keeping the active account is not silent. Told again after a switch or a recovery.
    */
   onNoCandidate?: (provider: AuthProvider, detail: string) => void;
+  onEarnedReset?: (id: string, outcome: 'reset' | 'alreadyRedeemed' | 'nothingToReset' | 'noCredit', available?: number) => void;
 
   /** Set by the service: where readings, switches, sweeps and exhausted stretches are recorded for later analysis. */
   history?: UsageHistory;
@@ -297,6 +323,8 @@ export class AccountAutomation {
   private rotationSnapshot(settings: AutomationSettings): RotationSnapshot {
     return { strategy: settings.strategy ?? 'sequential', trigger: settings.trigger ?? 'limit',
       fiveHourThresholdPercent: settings.fiveHourThresholdPercent, weeklyThresholdPercent: settings.weeklyThresholdPercent,
+      ...(settings.autoReset !== undefined ? { autoReset: settings.autoReset } : {}),
+      ...(settings.resetAware !== undefined ? { resetAware: settings.resetAware } : {}),
       ...(settings.minStayMs !== undefined ? { minStayMinutes: settings.minStayMs / 60_000 } : {}) };
   }
 
@@ -408,11 +436,13 @@ export class AccountAutomation {
     const state = this.read(provider, id);
     const previous = deserializeUsage(state);
     if (previous && previous.fetchedAt > usage.fetchedAt) { return; }
-    this.write(provider, id, { ...state, usage: this.serialize(usage), checkedAt: usage.fetchedAt.getTime(), lastError: undefined });
+    const counted = this.countResetCredits(provider, state, usage);
+    this.write(provider, id, { ...state, usage: this.serialize(counted.usage), resetCreditTotal: counted.total,
+      checkedAt: usage.fetchedAt.getTime(), lastError: undefined });
     this.history?.reading(provider, this.account(provider, id), usage, 'status', true);
     // A reading that reaches a threshold starts rotation now, not on the next minute's tick.
     const settings = this.settings(provider);
-    if (settings.autoRotate && this.profiles.activeProfileId(provider) === id && atLimit(usage, settings)) { void this.tick(); }
+    if ((settings.autoRotate || settings.autoReset) && this.profiles.activeProfileId(provider) === id && atLimit(usage, settings)) { void this.tick(); }
   }
 
   /**
@@ -422,7 +452,7 @@ export class AccountAutomation {
    */
   hintLimit(provider: AuthProvider, usage: LiveUsage): void {
     const settings = this.settings(provider);
-    if (!settings.autoRotate || !atLimit(usage, settings)) { this.limitHint.delete(provider); return; }
+    if ((!settings.autoRotate && !settings.autoReset) || !atLimit(usage, settings)) { this.limitHint.delete(provider); return; }
     if (!this.limitHint.has(provider)) { this.log(`${provider}: the status bar reading is at a rotation threshold; checking the active account`); }
     this.limitHint.add(provider);
     void this.tick();
@@ -533,9 +563,16 @@ export class AccountAutomation {
       ({ ...window, resetsAt: window.resetsAt?.toISOString() })) };
   }
 
+  private countResetCredits(provider: AuthProvider, state: AccountState, usage: LiveUsage): { usage: LiveUsage; total?: number } {
+    if (provider !== 'codex' || !usage.resetCredits) { return { usage, total: state.resetCreditTotal }; }
+    const available = usage.resetCredits.availableCount;
+    const total = available > 0 ? Math.max(available, state.resetCreditTotal ?? 0) : undefined;
+    return { usage: { ...usage, resetCredits: { ...usage.resetCredits, ...(total ? { totalCount: total } : {}) } }, total };
+  }
+
   private async checkProvider(provider: AuthProvider): Promise<void> {
     const settings = this.settings(provider);
-    if (!settings.enabled && !settings.autoRotate) { return; }
+    if (!settings.enabled && !settings.autoRotate && !settings.autoReset) { return; }
     if (this.holds.has(provider)) { return; }
     // A keep-alive sent by hand holds the lock for its whole sweep.
     if (this.locks.has(provider)) { return; }
@@ -544,7 +581,7 @@ export class AccountAutomation {
     this.locks.set(provider, lock);
     try {
       // Rotate first so a long keep-alive sweep does not delay an exhausted active account.
-      if (settings.autoRotate) { await this.rotate(provider, settings); }
+      if (settings.autoRotate || settings.autoReset) { await this.rotate(provider, settings); }
       if (settings.enabled) {
         for (const profile of this.profiles.profiles(provider)) {
           if (this.disposed || this.paused || this.holds.has(provider) || !this.settings(provider).enabled) { break; }
@@ -555,7 +592,7 @@ export class AccountAutomation {
           if (!due()) { continue; }
           // A sweep takes minutes per account, so an active account that reaches its limit meanwhile is rotated
           // away now, not once the sweep ends. The rotation may verify this very account, which then needs no keep-alive.
-          if (settings.autoRotate) { await this.rotate(provider, settings); }
+          if (settings.autoRotate || settings.autoReset) { await this.rotate(provider, settings); }
           const state = due();
           if (!state) { continue; }
           // Persist before starting so a failed call or window restart cannot create a retry storm.
@@ -563,7 +600,7 @@ export class AccountAutomation {
           await this.checkAccount(provider, profile.id, settings, true);
         }
       }
-      if (settings.autoRotate && !this.disposed && !this.paused) { await this.rotate(provider, settings); }
+      if ((settings.autoRotate || settings.autoReset) && !this.disposed && !this.paused) { await this.rotate(provider, settings); }
     } finally { this.locks.delete(provider); lock.release(); }
   }
 
@@ -600,8 +637,14 @@ export class AccountAutomation {
     const result = outcome.result;
     const usageError = result.kind === 'ok' ? undefined
       : result.kind === 'error' ? result.message : result.reason ?? 'Usage unavailable.';
+    const credited = result.kind === 'ok' ? this.countResetCredits(provider, state, result.usage) : undefined;
+    const beforeCredits = deserializeUsage(state)?.resetCredits?.availableCount;
+    const resetConfirmed = credited && (!atLimit(credited.usage, settings) ||
+      (beforeCredits !== undefined && (credited.usage.resetCredits?.availableCount ?? beforeCredits) < beforeCredits));
     this.write(provider, id, { ...state, checkedAt: this.now(),
-      usage: result.kind === 'ok' ? this.serialize(result.usage) : state.usage,
+      usage: credited ? this.serialize(credited.usage) : state.usage,
+      resetCreditTotal: credited ? credited.total : state.resetCreditTotal,
+      resetAttemptKey: resetConfirmed ? undefined : state.resetAttemptKey,
       nextAllowedAt: result.kind === 'error' && result.transient
         ? this.now() + Math.max(settings.checkIntervalMs, result.retryAfterMs ?? 0) : undefined,
       lastError: usageError,
@@ -653,6 +696,47 @@ export class AccountAutomation {
       : group(a) - group(b) || (a.score ?? 0) - (b.score ?? 0) || a.index - b.index);
   }
 
+  /** One provider-authorized earned reset, with a stable key across crashes and lost responses. */
+  private async redeemReset(active: string, settings: AutomationSettings, before: LiveUsage, reason: string): Promise<string> {
+    if (this.profiles.activeProfileId('codex') !== active || !await this.profiles.matchesNative('codex', active)) {
+      return 'the active login changed before an earned reset could be used';
+    }
+    const previous = this.read('codex', active);
+    const key = previous.resetAttemptKey ?? randomUUID();
+    this.write('codex', active, { ...previous, resetAttemptKey: key });
+    this.locks.get('codex')?.touch();
+    try {
+      const credential = await this.profiles.credential('codex', active);
+      if (!credential) { throw new Error('Saved credential is missing.'); }
+      const redeemed = await this.reset(credential, settings, key, this.abort.signal);
+      await this.profiles.refreshedCredential('codex', active, credential, redeemed.credential);
+      const state = this.read('codex', active);
+      const { resetAttemptKey: _used, ...rest } = state;
+      const credited = redeemed.result.kind === 'ok' ? this.countResetCredits('codex', state, redeemed.result.usage) : undefined;
+      const countAfter = credited?.usage.resetCredits?.availableCount;
+      const confirmed = credited && (!atLimit(credited.usage, settings) ||
+        (countAfter !== undefined && countAfter < (before.resetCredits?.availableCount ?? Infinity)));
+      this.write('codex', active, { ...rest, checkedAt: this.now(),
+        usage: credited ? this.serialize(credited.usage) : state.usage,
+        resetCreditTotal: credited ? credited.total : state.resetCreditTotal,
+        resetAttemptKey: redeemed.outcome === 'noCredit' || redeemed.outcome === 'nothingToReset' || confirmed ? undefined : key });
+      if (credited) {
+        this.history?.reading('codex', this.account('codex', active), credited.usage, 'rotation', true);
+      }
+      const outcome = redeemed.outcome;
+      this.log(`codex: earned rate-limit reset for "${this.account('codex', active).name}": ${outcome} (${reason}; ${before.resetCredits?.availableCount ?? 0} available before)`);
+      this.onEarnedReset?.(active, outcome, credited?.usage.resetCredits?.availableCount);
+      if ((outcome === 'reset' || outcome === 'alreadyRedeemed') && credited && !atLimit(credited.usage, settings)) {
+        this.clearExhausted('codex', active, 'reset');
+      }
+      return `earned rate-limit reset: ${outcome}`;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown reset error';
+      this.log(`codex: earned rate-limit reset failed for "${this.account('codex', active).name}": ${message}`);
+      return `earned rate-limit reset failed: ${message}`;
+    }
+  }
+
   /** How long `active` has been the active account, as far as rotation has watched; manual switches restart it. */
   private stayedMs(provider: AuthProvider, active: string): number {
     const state = this.read(provider, 'rotation-stay');
@@ -665,18 +749,19 @@ export class AccountAutomation {
     if (this.disposed || this.paused) { return 'the service is busy'; }
     const held = this.heldFor(provider);
     if (held) { return held; }
-    if (!this.rotationAllowed(provider)) { return 'automatic rotation is off'; }
+    if (!this.rotationAllowed(provider) && !settings.autoReset) { return 'automatic rotation and earned resets are off'; }
     const forced = this.forced.has(provider);
     const active = this.profiles.activeProfileId(provider);
     if (!active) { return 'no saved profile is active'; }
-    if (this.profiles.profiles(provider).length < 2) { return 'fewer than two profiles are saved'; }
+    if (this.profiles.profiles(provider).length < 2 && !settings.autoReset) { return 'fewer than two profiles are saved'; }
     if (!await this.profiles.matchesNative(provider, active)) { return 'the native login is not the active profile\'s'; }
     const strategy = settings.strategy ?? 'sequential';
-    const proactive = settings.trigger === 'proactive' && strategy !== 'sequential';
+    const proactive = settings.autoRotate && settings.trigger === 'proactive' && strategy !== 'sequential';
     const margin = strategy === 'sequential' ? 0 : SWITCH_MARGIN[strategy];
     const usage = deserializeUsage(this.read(provider, active));
     // A sweep requested by hand reads the active account itself instead of trusting a stored reading.
-    const hinted = this.limitHint.has(provider) || forced;
+    const hinted = this.limitHint.has(provider) || forced || Boolean(settings.autoReset &&
+      (!usage || this.now() - usage.fetchedAt.getTime() >= settings.checkIntervalMs));
     if (!usage && !hinted) { return 'the active account has no stored reading yet'; }
     if (!hinted && !atLimit(usage!, settings)) {
       // The stretch with every account at its limit ends as soon as the active account reads below its thresholds
@@ -719,6 +804,15 @@ export class AccountAutomation {
     }
     const exhausted = atLimit(current, settings);
     if (!exhausted) { this.clearExhausted(provider, active, 'reset'); }
+    if ((settings.resetAware || settings.autoReset) && !forced) {
+      // An exhausted account can recover only after its last limiting window resets. A proactive switch can
+      // wait for any imminent window reset and compare the new readings on the next scheduler tick.
+      const reset = exhausted ? imminentRecovery(current, this.now(), settings) : imminentReset(current, this.now(), settings);
+      if (reset && reset.getTime() > this.now() && reset.getTime() - this.now() <= RESET_GUARD_MS) {
+        this.write(provider, rotationId, { checkedAt: sweepStart, nextAllowedAt: reset.getTime() + 1000 });
+        return `waiting for the active account's usage reset in ${formatResetRemaining(reset, new Date(this.now()))}`;
+      }
+    }
     if (!exhausted && !proactive) {
       // The cached reading was out of date and has now been replaced; nothing was spent on candidates.
       this.write(provider, rotationId, { checkedAt: sweepStart });
@@ -731,10 +825,28 @@ export class AccountAutomation {
     // A working account is only left for one that scores clearly better on a fresh reading too.
     const own = exhausted ? undefined : rotationScore(strategy, current, this.now(), settings);
     if (!exhausted && (!proactive || own === undefined)) { return 'the active account reports no weekly window to compare'; }
+    const ranked = settings.autoRotate ? this.ranked(provider, active, settings) : [];
+    const limitingWindows = counted(current, settings).filter((window) => window.usedPercent >= windowThreshold(window.label, settings));
+    const canRedeem = provider === 'codex' && !forced && settings.autoReset && exhausted &&
+      limitingWindows.every((window) => window.usedPercent >= 100) &&
+      (current.resetCredits?.availableCount ?? 0) >= limitingWindows.length;
+    const creditExpiresAt = current.resetCredits?.earliestExpiresAt;
+    const naturalReset = limitedUntil(current, this.now(), settings)?.getTime();
+    const preferred = ranked.find((candidate) => candidate.usable);
+    const unknownCandidate = ranked.some((candidate) => !deserializeUsage(this.read(provider, candidate.id)));
+    const preferredUsage = preferred ? deserializeUsage(this.read(provider, preferred.id)) : undefined;
+    const preferredReset = preferredUsage ? counted(preferredUsage, settings).map((window) => window.resetsAt?.getTime())
+      .filter((time): time is number => time !== undefined && time > this.now()).sort((a, b) => a - b)[0] : undefined;
+    const creditUrgent = canRedeem && creditExpiresAt !== undefined && creditExpiresAt * 1000 - this.now() <= 30 * 60_000 &&
+      (naturalReset === undefined || naturalReset > creditExpiresAt * 1000) &&
+      !unknownCandidate && (!preferred || (preferredReset !== undefined && preferredReset > creditExpiresAt * 1000));
+    if (canRedeem && (!settings.autoRotate || creditUrgent)) {
+      return this.redeemReset(active, settings, current, creditUrgent ? 'credit expiring' : 'rotation disabled');
+    }
     const requiredWindows = counted(current, settings).map((window) => window.label);
     const skipped: string[] = [];
     const limited: string[] = [];
-    const ranked = this.ranked(provider, active, settings);
+    let deferredUntil: Date | undefined;
     // What the sweep knew about each candidate and did with it, in the order it preferred them, for the history.
     const evaluated: HistoryCandidate[] = ranked.map((candidate) => ({
       account: this.account(provider, candidate.id), usable: candidate.usable,
@@ -761,6 +873,14 @@ export class AccountAutomation {
         this.log(`${provider}: not rotating to "${candidate.name}": its last check failed (${label})`);
         continue;
       }
+      const cachedUsage = deserializeUsage(this.read(provider, candidate.id));
+      const nearReset = settings.resetAware && !forced && cachedUsage ? imminentReset(cachedUsage, this.now(), settings) : undefined;
+      if (nearReset) {
+        entry.outcome = 'resetSoon';
+        entry.detail = `usage resets in ${formatResetRemaining(nearReset, new Date(this.now()))}`;
+        if (!deferredUntil || nearReset < deferredUntil) { deferredUntil = nearReset; }
+        continue;
+      }
       // Usage in a window only rises until its reset, so an account whose stored reading is still at a threshold with
       // the reset ahead cannot qualify yet, whatever a new reading would say; it costs nothing until that reset.
       if (own === undefined && candidate.limitedUntil) {
@@ -782,6 +902,13 @@ export class AccountAutomation {
         if (!candidateUsage) { entry.detail = checked.usageError ?? 'usage unavailable'; }
         continue;
       }
+      const freshReset = settings.resetAware && !forced ? imminentReset(candidateUsage, this.now(), settings) : undefined;
+      if (freshReset) {
+        entry.outcome = 'resetSoon';
+        entry.detail = `usage resets in ${formatResetRemaining(freshReset, new Date(this.now()))}`;
+        if (!deferredUntil || freshReset < deferredUntil) { deferredUntil = freshReset; }
+        continue;
+      }
       const score = rotationScore(strategy, candidateUsage, this.now(), settings);
       if (score !== undefined) { entry.freshScore = score; }
       if (own !== undefined && !(score !== undefined && score + margin < own)) {
@@ -794,10 +921,17 @@ export class AccountAutomation {
       this.write(provider, candidate.id, { ...this.read(provider, candidate.id), lastKeepAliveAt: this.now() });
       calls++;
       const verified = await this.checkAccount(provider, candidate.id, settings, true, { ignoreBackoff: true, verifying: true, source: 'rotation' });
-      if (verified.keepAliveError || !verified.usage) {
+      if (verified.keepAliveError || !verified.usage || !eligibleAccount(verified.usage, this.now(), settings)) {
         entry.outcome = 'keepAliveFailed';
         entry.detail = verified.keepAliveError ?? verified.usageError ?? 'usage unavailable';
         this.log(`${provider}: not rotating to "${candidate.name}": ${entry.detail}`);
+        continue;
+      }
+      const verifiedReset = settings.resetAware && !forced ? imminentReset(verified.usage, this.now(), settings) : undefined;
+      if (verifiedReset) {
+        entry.outcome = 'resetSoon';
+        entry.detail = `usage resets in ${formatResetRemaining(verifiedReset, new Date(this.now()))}`;
+        if (!deferredUntil || verifiedReset < deferredUntil) { deferredUntil = verifiedReset; }
         continue;
       }
       if (this.profiles.activeProfileId(provider) !== active || !await this.profiles.matchesNative(provider, active)) { return 'the active login changed during the sweep'; }
@@ -816,6 +950,13 @@ export class AccountAutomation {
       }
       return `"${candidate.name}" could not be activated`; // At most one switch per sweep, including when every account is exhausted.
     }
+    if (deferredUntil) {
+      this.write(provider, rotationId, { checkedAt: sweepStart, nextAllowedAt: deferredUntil.getTime() + 1000 });
+    }
+    if (canRedeem && deferredUntil && (creditExpiresAt === undefined || creditExpiresAt * 1000 > deferredUntil.getTime())) {
+      return `waiting for another account's usage reset in ${formatResetRemaining(deferredUntil, new Date(this.now()))}`;
+    }
+    if (canRedeem) { return this.redeemReset(active, settings, current, 'no eligible account to rotate to'); }
     if (exhausted) {
       const over = counted(current, settings).filter((window) => window.usedPercent >= windowThreshold(window.label, settings));
       const reached = over.map((window) => `${window.label} ${window.usedPercent}% ≥ ${windowThreshold(window.label, settings)}%`).join(', ');

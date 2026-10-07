@@ -17,7 +17,7 @@ Each service has a `source` setting that selects where its usage is read from:
 | Setting | Options | Default | Notes |
 |---|---|---|---|
 | `aiUsage.claude.source` | `both`, `cli`, `api`, `accountFile` | `both` | `cli` runs Claude Code's own `/usage` (set `aiUsage.claude.cliPath` if it is not on PATH): no model is called and nothing is billed, but Claude Code reaches the usage endpoint to answer it, so it is spaced like `api`. `accountFile` reads the usage Claude Code itself cached in `~/.claude.json` — no network call, so it can be polled every few seconds (`aiUsage.claude.accountFile.checkIntervalSeconds`), but it is only as fresh as Claude Code's own last request, and Claude Code drops that cache on an account switch until something asks it for usage again. |
-| `aiUsage.codex.source` | `both`, `cli`, `api`, `sessionLog` | `both` | `cli` runs `codex app-server` (set `aiUsage.codex.cliPath` if it is not on PATH). `sessionLog` is offline but only as fresh as your last Codex turn. |
+| `aiUsage.codex.source` | `both`, `cli`, `api`, `sessionLog` | `both` | `cli` runs `codex app-server` (set `aiUsage.codex.cliPath` if it is not on PATH). The status bar reads earned-reset availability through app-server with `both`, `cli` or `api`. `sessionLog` makes no extra status-bar request, but is only as fresh as your last Codex turn; a separately running account service may still check a saved active profile when auto-reset is on. |
 | `aiUsage.copilot.source` | `api` | `api` | The Copilot CLI has no headless usage command. |
 
 `both` combines the two: the local file is re-read on every check and used while its reading is no older than that
@@ -453,14 +453,16 @@ in between two accounts. Once the wait runs out, the notification says that the 
 | Setting suffix (`aiUsage.claude.` / `aiUsage.codex.`) | Claude default | Codex default | Purpose |
 | --- | --- | --- | --- |
 | `keepAlive.enabled` | `false` | `false` | Periodically check every saved account, including inactive ones. |
-| `autoRotate.enabled` | `false` | `false` | Switch accounts automatically once the active one reaches a threshold. |
+| `autoRotate.enabled` | `false` | `false` | Switch accounts automatically at a threshold or, with `proactive`, when another account scores clearly better. |
+| `autoReset.enabled` | — | `true` | Automatically redeem an earned Codex rate-limit reset credit when the active saved account is limited and the timing rules favor a reset. |
+| `autoRotate.resetAware` | — | `true` | Avoid automatic Codex switches in the five minutes before a reported quota reset; recheck after it. |
 | `keepAlive.periodHours` | `2` | `6` | Per-account keep-alive period, minimum 0.25 hours. |
 | `autoRotate.fiveHourThresholdPercent` | `95` | `100` | Threshold for the 5h window; Codex's default rotates only on a used-up window. |
 | `autoRotate.weeklyThresholdPercent` | `99.5` | `99` | Threshold for the weekly windows (`7d`, and `7d Fable` when it counts). |
 | `autoRotate.modelLimits` | `auto` | — | Whether `7d Fable` counts: `auto` (when Claude Code's `model` is Fable or unset), `always`, `never`. |
-| `autoRotate.strategy` | `soonestReset` | — | How the next account is chosen: `soonestReset`, `evenPace`, `leastWaste` or `sequential`. |
-| `autoRotate.trigger` | `limit` | — | `limit` switches only at a threshold; `proactive` also switches to a clearly better account. |
-| `autoRotate.minStayMinutes` | `30` | — | With `proactive`, how long a newly active account is kept before another proactive switch. |
+| `autoRotate.strategy` | `soonestReset` | `sequential` | How the next account is chosen: `soonestReset`, `evenPace`, `leastWaste` or `sequential`. |
+| `autoRotate.trigger` | `limit` | `limit` | `limit` switches only at a threshold; `proactive` also switches to a clearly better account (except with `sequential`). |
+| `autoRotate.minStayMinutes` | `30` | `30` | With `proactive`, how long a newly active account is kept before another proactive switch. |
 | `keepAlive.home` | `~/.claude-tmp` | `~/.codex-tmp` | Dedicated CLI home; must be separate from the native home. |
 | `keepAlive.model` | `haiku` | `gpt-5.6-luna` | Select a subscription model for the small request. |
 | `cliPath` | `claude` | `codex` | CLI command or executable path. |
@@ -489,6 +491,12 @@ provider check interval and any longer `Retry-After`.
 ### Rotation strategies and thresholds
 
 Full description with worked examples: **[Account rotation: strategies and thresholds](ROTATION.md)**.
+Codex's reset-aware timing applies to all four strategies. Codex renews quota naturally at its reported reset time.
+When Codex reports earned rate-limit reset credits, AI Usage can ask Codex to redeem one for a limited saved account.
+The status bar tooltip and Codex profile rows show the available count; `x of y observed` means `y` is the largest
+available count AI Usage has seen while credits remained available, because Codex reports the current count but not
+the original grant size. The earliest credit expiry is shown when Codex supplies it. The exact choices between
+waiting, rotating and redeeming are described in [Codex reset-aware timing](ROTATION.md#codex-reset-aware-timing).
 
 - **When.** The active account rotates as soon as any counted window reaches its threshold (`usage ≥ threshold`):
   Claude 95% in `5h` or 99.5% weekly, Codex 99% weekly or a used-up `5h`. See [Thresholds](ROTATION.md#thresholds).
