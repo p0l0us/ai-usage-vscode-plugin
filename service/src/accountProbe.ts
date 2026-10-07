@@ -297,3 +297,10 @@ export async function probeAccount(provider: AuthProvider, credential: StoredCre
     try { if (staged) { fs.unlinkSync(file); } } finally { lock.release(); }
   }
 }
+
+/** A keep-alive or usage-check error for a notification: "Insufficient credits. <what to do>", else the vendor's text. */
+export function readableProblem(raw: string): string {
+  const problem = explainAccountProblem(raw);
+  const text = problem.advice ? `${problem.label}. ${problem.advice}` : problem.label;
+  return /[.!?]$/.test(text) ? text : `${text}.`;
+}

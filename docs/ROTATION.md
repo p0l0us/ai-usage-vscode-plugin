@@ -306,10 +306,10 @@ apply.
 A proactive switch changes the login mid-session. Claude picks up the new login on its next request; see
 [Safety](#safety) for Codex.
 
-The usage history (**AI Usage: Show Usage History…**) shows what a setup did: the switches by reason with the median
-stay, how long every account was at its limit at once, each account's weekly peaks, every candidate a sweep
-considered with why it was or was not chosen, and an estimate of how many accounts the observed use needs. See
-[Usage history](CONFIGURATION.md#usage-history).
+The usage history (**AI Usage: Show Usage History…**, `ai-usage history`) shows what a setup did: the switches by
+reason with the median stay, how long every account was at its limit at once, each account's weekly peaks, every
+candidate a sweep considered with why it was or was not chosen, and an estimate of how many accounts the observed
+use needs. See [Usage history](CONFIGURATION.md#usage-history).
 
 ## Safety
 

@@ -50,7 +50,7 @@ function fixture(t, options = {}) {
   const make = () => {
     const service = new AccountAutomation(directory, profiles, p => settings[p], async () => {}, m => messages.push(m), probe, () => now);
     service.onAccountProblem = (...args) => problems.push(args);
-    // With `history`, every instance appends to one history under the state directory, as the windows of a host do.
+    // With `history`, every instance appends to one history under the state directory, as the service does.
     if (options.history) {
       service.history = new UsageHistory(path.join(directory, 'history'), { enabled: true, retentionMs: 365 * 86400000 }, m => messages.push(m), () => now);
     }
@@ -86,6 +86,16 @@ test('disabled automation performs no background calls', async t => {
   assert.deepEqual(f.calls, []);
 });
 
+test('a stored reading from before reset no longer blocks the profile', async t => {
+  const f = fixture(t);
+  f.observe('claude', [['5h', 100, 5], ['7d', 10, 168]]);
+  assert.equal(f.service.limitState('claude', 'a').readOnly, true);
+  f.advance(6 * 3_600_000);
+  assert.equal(f.service.limitState('claude', 'a').readOnly, false);
+  assert.equal(f.service.usage('claude', 'a'), undefined);
+  assert.match(f.service.usageDetail('claude', 'a'), /Usage reset/);
+});
+
 test('per-account 2h/6h schedule persists across service restarts and includes inactive accounts', async t => {
   const f = fixture(t, { settings: { claude: { enabled: true }, codex: { enabled: true } } });
   await f.service.tick();
@@ -103,16 +113,6 @@ test('per-account 2h/6h schedule persists across service restarts and includes i
   f.advance(4 * 3600000);
   await restarted.tick();
   assert.equal(f.calls.filter(c => c[0] === 'codex').length, 6);
-});
-
-test('the active menu detail can use the status bar reading while inactive profiles keep their own', t => {
-  const f = fixture(t);
-  f.observe('claude', [0, 0], 'a');
-  f.observe('claude', [58, 37], 'b');
-  const displayed = usage('claude', [93, 61], Date.now());
-  assert.match(f.service.usageDetail('claude', 'a', displayed), /5h: 93%.*7d: 61%/);
-  assert.match(f.service.usageDetail('claude', 'b'), /5h: 58%.*7d: 37%/);
-  assert.match(f.service.usageDetail('claude', 'a'), /5h: 0%.*7d: 0%/);
 });
 
 test('a profile reading from before reset cannot block activation or show the old percentage', t => {
@@ -519,7 +519,7 @@ test('a keep-alive sweep rotates as soon as the active account reaches its limit
   assert.ok(order.indexOf('c:ka') > order.lastIndexOf('b:ka'), order.join(' '));
 });
 
-test('a hold stops the service\'s sweeps and rotation and refuses hand-run keep-alives until it is resumed or runs out', async t => {
+test('a hold stops the service\'s sweeps and rotation and refuses hand-run checks until it is resumed or runs out', async t => {
   const f = fixture(t, { values: { a: [99.5, 10], b: [10, 10] }, settings: { codex: { enabled: true, autoRotate: true } } });
   f.service.hold('codex', 'a Codex sign-in is in progress', 60_000);
   f.observe('codex', [99.5, 10]);
@@ -527,6 +527,7 @@ test('a hold stops the service\'s sweeps and rotation and refuses hand-run keep-
   assert.deepEqual(f.calls, []);
   assert.deepEqual(f.switches, []);
   await assert.rejects(f.service.sendKeepAliveNow('codex', 'b'), /A Codex sign-in is in progress; keep-alives wait until it finishes\./);
+  assert.deepEqual(await f.service.rotateNow('codex'), { switched: false, reason: 'a Codex sign-in is in progress' });
   // The other service is not held.
   f.settings.claude.enabled = true;
   await f.service.tick();
@@ -534,7 +535,7 @@ test('a hold stops the service\'s sweeps and rotation and refuses hand-run keep-
   f.service.resume('codex');
   await f.service.tick();
   assert.deepEqual(f.switches, [['codex', 'b', true]]);
-  // A hold whose window never lifts it runs out by itself.
+  // A hold whose client never lifts it runs out by itself.
   f.service.hold('codex', 'a Codex sign-in is in progress', 20);
   assert.equal(f.service.heldFor('codex'), 'a Codex sign-in is in progress');
   await new Promise(resolve => setTimeout(resolve, 60));
@@ -606,13 +607,13 @@ test('accounts still at their limit by their last reading are named with their r
   assert.match(notices[0], /still at their limit by their last reading: "b" \(resets in 2d\)/);
 });
 
-test('a keep-alive by hand waits for a check running in another window, then holds the lock for its whole sweep', async t => {
+test('a keep-alive by hand waits for a running sweep, then holds the lock for its whole sweep', async t => {
   let release;
   const wait = new Promise(resolve => { release = resolve; });
   const f = fixture(t, { settings: { claude: { enabled: true } }, beforeProbe: () => wait });
   const other = f.make();
   t.after(() => other.dispose());
-  // The other window's sweep holds claude's lock while its first probe is blocked.
+  // Another service instance's sweep holds claude's lock while its first probe is blocked.
   const sweep = other.tick();
   await assert.rejects(f.service.sendKeepAliveNow('claude', 'b'), /already running/);
   const events = [];
@@ -644,7 +645,7 @@ test('a keep-alive by hand gives up on the lock after its wait, and at once when
   await cancelled;
   release();
   await sweep;
-  // The periodic sweep in this window does not run while a sweep by hand holds the lock, and resumes afterwards.
+  // The periodic sweep does not run while a sweep by hand holds the lock, and resumes afterwards.
   f.calls.length = 0;
   f.advance(3 * HOUR);
   await f.service.withAccountLock('claude', async () => {
@@ -653,6 +654,25 @@ test('a keep-alive by hand gives up on the lock after its wait, and at once when
   });
   await f.service.tick();
   assert.ok(f.calls.some(call => call[1] === 'b'), JSON.stringify(f.calls));
+});
+
+test('a rotation sweep by hand waits for a running sweep too, and reports a hold instead of waiting', async t => {
+  let release;
+  const wait = new Promise(resolve => { release = resolve; });
+  const f = fixture(t, { values: { a: [99.5, 10], b: [10, 10] }, settings: { codex: { enabled: true } }, beforeProbe: () => wait });
+  const other = f.make();
+  t.after(() => other.dispose());
+  const sweep = other.tick();
+  await assert.rejects(f.service.rotateNow('codex'), /already running/);
+  const events = [];
+  const byHand = f.service.rotateNow('codex', { waitMs: 5000, onWait: () => events.push('waiting') });
+  await new Promise(resolve => setTimeout(resolve, 30));
+  release();
+  await sweep;
+  assert.equal((await byHand).switched, true);
+  assert.deepEqual(events, ['waiting']);
+  f.service.hold('codex', 'a Codex sign-in is in progress', 60_000);
+  assert.deepEqual(await f.service.rotateNow('codex'), { switched: false, reason: 'a Codex sign-in is in progress' });
 });
 
 test('the history records the readings of a sweep and the switch with every candidate and its outcome', async t => {

@@ -65,16 +65,16 @@ log and settings actions in one picker. A service's **Accounts** row opens its A
 Run **AI Usage: Manage Claude/Codex Authentication Profiles** from the Command Palette, click the Claude or Codex
 status bar item, or choose a service's **Accounts** row in the AI Usage menu, to open that service's **Accounts**
 menu. You can save and name the current login, import a credential JSON file, export every saved profile to a file
-and import it on another computer, and switch among up to 20 profiles per service. A profile is **private**, kept in
-this VS Code client's SecretStorage, or a **project** profile, kept with its login in the workspace folder's
-`.ai-usage.profiles.json` and listed whenever that folder is open; see
+and import it on another computer, and switch among up to 20 profiles per service. A profile is **private**, kept by
+the [account service](#the-account-service-and-the-ai-usage-command) on this host, or a **project** profile, kept
+with its login in the workspace folder's `.ai-usage.profiles.json` and listed whenever that folder is open; see
 [Private and project profiles](docs/CONFIGURATION.md#private-and-project-profiles). Every saved profile is listed
 with its login email, its last usage reading and check time, and the active one is marked:
 
 ![Claude Accounts menu with five saved profiles, their usage and the manage and account feature actions](images/screenshots/accounts-claude.png)
 
-Saved copies live in VS Code `SecretStorage`, not in project files, workspace settings, or the extension's ordinary
-global storage. Activating a profile atomically updates the native file already shared by the CLI and vendor
+Saved copies live with the account service in `~/.ai-usage/profiles.json` (mode 0600), or in a project's profile
+file, never in workspace settings or the extension's ordinary storage. Activating a profile atomically updates the native file already shared by the CLI and vendor
 extension (`~/.claude/.credentials.json` / `$CLAUDE_CONFIG_DIR`, or `~/.codex/auth.json` / `$CODEX_HOME`). The file
 is forced to mode `0600` on Linux/macOS and inherits the user-profile ACL on Windows. Claude MCP credentials in the
 same file are preserved. This native active copy remains plaintext because Claude Code and Codex require that
@@ -87,21 +87,51 @@ and save again. An imported profile is saved but not activated until you choose 
 per turn, so open Claude chats and CLI sessions use a switched login from their next turn, with no restart. Codex
 keeps its login in memory, so open Codex chats follow a switch only through the optional **Codex account
 proxy** (`aiUsage.codex.proxy.enabled`), which routes their requests through AI Usage and attaches the active login
-per request; without it, AI Usage offers an extension-host restart. VS Code keeps the saved profiles and their
-logins with the VS Code client, the computer in front of you, also in a Remote-SSH, WSL or container window;
-activating a profile writes the native credential file of the host that window is connected to.
+per request; without it, AI Usage offers an extension-host restart. The saved profiles and their logins are kept
+by the [account service](#the-account-service-and-the-ai-usage-command) on the host the extension runs on (the
+remote in a Remote-SSH, WSL or container window), so every window connected to that host and the `ai-usage`
+command there share them.
 
 **Save current login…** offers to create a new profile or to replace one that is already saved, which is also how
 a profile whose token has expired is repaired after signing in with that account again:
 
 ![Save current login picker with Create a new profile… and an existing profile to update](images/screenshots/save-current-login.png)
 
-**Manage saved profiles…** includes **Import credential JSON…** and **Export or import saved profiles…**. The latter
-leads to both transfer actions. **Export saved profiles…** writes the saved
+**Manage saved profiles…** contains **Import credential JSON…**, **Export or import saved profiles…**, sign-in,
+rename, move and delete. The transfer item leads to both actions. **Export saved profiles…** writes the saved
 Claude and Codex profiles, logins included, to a JSON file and opens it in the editor, and **Import saved
 profiles…** reads it on another computer: profiles not saved there are added, and a saved profile whose login is missing gets it back. Nothing is activated. The file holds live login tokens in plain text, so delete
 it once imported, and mind that a copied login is the same session on both computers; see
 [Moving profiles to another computer](docs/CONFIGURATION.md#moving-profiles-to-another-computer).
+
+### The account service and the `ai-usage` command
+
+Account management runs in a small background service, not in the extension host, so keep-alives and rotation
+keep going while VS Code is closed and a terminal can drive them. On first use the extension asks once to install
+it (**Install**, **Not now** or **Don't ask again**; `aiUsage.accountService.enabled` is the switch): the service
+goes to `~/.ai-usage`, is registered to start when you sign in (a systemd user unit, a launchd agent or a Run
+registry value), and receives the profiles the extension had saved before. Each extension update upgrades it.
+**AI Usage: Account Service…** shows its status and log and starts, stops, reinstalls or uninstalls it; the
+service needs Node.js 20 or newer, and uses VS Code's own runtime when no other is found.
+
+The service comes with the `ai-usage` command, on the PATH of every VS Code terminal (add `~/.ai-usage/bin` to
+your own PATH for other terminals). `ai-usage` alone opens a live view of both services with keys to switch,
+send keep-alives, run a rotation sweep and toggle keep-alive or rotation; `ai-usage status`, `list`, `use`,
+`save`, `login`, `keepalive`, `rotate`, `export`, `import-profiles`, `config`, `service` and `log` do the same
+from arguments, with `--json` where it helps, and `--project` names a project folder whose profiles to list or
+save into. Settings changed with `ai-usage config` show up in VS Code's settings and the other way round.
+Details: [Account service](docs/CONFIGURATION.md#account-service).
+
+### AI agents: the MCP server (experimental)
+
+An AI agent can do the same through the Model Context Protocol: `ai-usage mcp` is a stdio MCP server whose tools
+list every saved profile with its usage windows, read a fresh reading for one of them and, when you allow it,
+switch the active account or run a rotation sweep. It is off by default (`aiUsage.mcp.enabled`); while it is on,
+agents in the VS Code window see it as **AI Usage accounts** without any configuration. Choose **Set up MCP
+server…** in the top-level AI Usage menu to install and enable it, then register it with the Claude or Codex CLI
+for terminal sessions. The CLI registration also appears in that service's Accounts menu.
+`aiUsage.mcp.switching` decides whether agents may switch at all. Details:
+[MCP server for AI agents](docs/MCP.md).
 
 ### Account keep-alives and automatic rotation
 
@@ -136,7 +166,7 @@ marked **Login problem**; choosing it opens a small menu instead of activating i
 login in a terminal with a separate home inside the keep-alive home and stores the new login in the profile,
 **Try a keep-alive** sends a keep-alive, which refreshes an expired token and, when the login cannot be refreshed,
 offers **Sign in again** in its failure notification, **Select anyway** activates the login as it is, and **Back**
-returns to the accounts. The same sign-in is available for any profile as **Sign in again…** under Manage; either
+returns to the accounts. The same sign-in is available for any profile as **Sign in again…** under **Manage saved profiles…**; either
 way the active login is replaced only when that profile is the active one.
 
 ![Active Claude profile row with its 5h, 7d and 7d Fable usage and reset countdowns](images/screenshots/accounts-row-active.png)
@@ -144,24 +174,25 @@ way the active login is replaced only when that profile is the active one.
 
 **Usage history.** Every reading of every saved account, every switch (by hand, or by rotation with the accounts it
 considered and why it did or did not pick them), the sweeps that switched nothing and the stretches with every
-account at its limit are kept for a year in one file per month, so you can see how much of each account you use and
-how well rotation works. **AI Usage: Show Usage History…** (also **Usage history** in the details panel) summarizes
-a period, with an estimate of how many accounts your weekly use needs, and exports CSV or JSON Lines. Settings:
-`aiUsage.history.*`; file format and figures in [Usage history](docs/CONFIGURATION.md#usage-history).
+account at its limit are kept by the service for a year in one file per month, so you can see how much of each
+account you use and how well rotation works. **AI Usage: Show Usage History…** (also **Usage history** in the
+details panel) and `ai-usage history` summarize a period, with an estimate of how many accounts your weekly use
+needs, and export CSV or JSON Lines. Settings: `aiUsage.history.*`; file format and figures in
+[Usage history](docs/CONFIGURATION.md#usage-history).
 
 Models, keep-alive periods, rotation thresholds, CLI paths, dedicated homes and usage sources are configurable
 under `aiUsage.claude.*` and `aiUsage.codex.*`; see
 [account automation settings](docs/CONFIGURATION.md#account-automation).
-Background checks swap credentials only inside the dedicated home, save refreshed tokens back to SecretStorage,
-and remove the staged credential file afterward. For a checked active account, refreshed tokens are also written
-back to its native login when that login has not changed during the check. Schedules persist across restarts and
-checks are coordinated between the windows connected to the same host; a check left behind by a window that stopped
-responding is taken over after 10 minutes.
+Background checks swap credentials only inside the dedicated home, save refreshed tokens back to the profile, and
+remove the staged credential file afterward. For a checked active account, refreshed tokens are also written back
+to its native login when that login has not changed during the check. The account service runs the schedule,
+whether VS Code is open or not, and persists it across restarts.
 
 ### Authentication profile examples
 
-The Codex Accounts menu also marks the current account as **Active** and offers **Save current login…**,
-**Manage saved profiles…**, account features and settings.
+The Codex Accounts menu marks the current account as **Active** and offers **Save current login…**,
+**Manage saved profiles…**, account features and settings. Profile order can be changed from the management submenu
+or with `ai-usage move <service> <profile> up|down`.
 
 After activation, the AI Usage menu names the selected profile beside **Accounts**, shows its detected plan on the
 right, and follows with its usage and the source of the reading:
@@ -197,8 +228,8 @@ it is installed and runs on the remote machine, so:
   not appear; install the extension locally too, or sign in on the remote side.
 - Copilot uses the GitHub account VS Code is signed in with; that works in remote windows as usual.
 - Settings for sources and intervals belong in **Remote Settings**, not the local user settings.
-- Authentication profiles and their SecretStorage entries belong to that extension host too. A Remote-SSH window
-  manages the remote machine's profiles; a normal Windows/macOS/Linux window manages the local machine's profiles.
+- Authentication profiles belong to that extension host's account service too. A Remote-SSH window manages the
+  remote machine's profiles; a normal Windows/macOS/Linux window manages the local machine's profiles.
 - The **Agents window** is the exception: it runs only *local* extensions, and blocks extensions with code until
   you allow them. The chip there needs a local install plus a one-time allow step; run
   **AI Usage: Agents Window Setup Guide** from the Command Palette or see

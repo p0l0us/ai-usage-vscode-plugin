@@ -6,7 +6,7 @@ import { CacheEntry, deserializeUsage } from './cache';
 import { formatResetRemaining, LiveUsage, usageHasExpiredReset, UsageWindow } from './live';
 import { AccountLock, ProbeSettings, ProbeResult, acquireAccountLock, explainAccountProblem, isLoginProblem, needsSignIn, probeAccount } from './accountProbe';
 import { sleep } from './apiBudget';
-import type { ActivationChange } from './authProfiles';
+import type { ActivationChange } from './profileStore';
 import { HistoryAccount, HistoryCandidate, ReadingSource, RotationSnapshot, UsageHistory, usageSnapshot } from './usageHistory';
 
 /** How rotation picks the next account; `sequential` is saved-profile order. */
@@ -58,7 +58,7 @@ export interface AutomationProfiles {
   activateProfile(provider: AuthProvider, id: string, automatic?: boolean): Promise<boolean>;
 }
 
-type AccountState = CacheEntry & {
+export type AccountState = CacheEntry & {
   lastKeepAliveAt?: number;
   checkedAt?: number;
   keepAliveError?: string;
@@ -121,7 +121,6 @@ export function eligibleAccount(usage: LiveUsage, now = Date.now(), limits: numb
 
 /** Ahead of an even spend by more than this many points, with over half the week to go, is spending too early. */
 const PACE_MARGIN = 10;
-/** An active-account reading at most this old decides rotation without reading the account again. */
 /**
  * The latest reset still ahead among the counted windows at or over their threshold. Usage in a window only rises
  * until its reset, so the account cannot qualify for rotation before then, whatever a new reading would say.
@@ -137,11 +136,12 @@ function limitedUntil(usage: LiveUsage, now: number, limits: RotationLimits): Da
   return until;
 }
 
-/** How a check requested by hand treats the account lock held by another window: wait up to `waitMs`, give up on `signal`. */
+/** How a check requested by hand treats the account lock held by a running sweep: wait up to `waitMs`, give up on `signal`. */
 export type LockWait = { waitMs?: number; signal?: AbortSignal; onWait?: () => void };
 
 /** How often a waiting check retries the account lock. */
 const LOCK_POLL_MS = 500;
+/** An active-account reading at most this old decides rotation without reading the account again. */
 const RECENT_READING_MS = 2 * 60_000;
 /** A hold whose client never lifts it, such as a sign-in whose window closed, ends by itself after this long. */
 const HOLD_MAX_MS = 20 * 60_000;
@@ -221,7 +221,7 @@ export class AccountAutomation {
    */
   onNoCandidate?: (provider: AuthProvider, detail: string) => void;
 
-  /** Set by extension.ts: where readings, switches, sweeps and exhausted stretches are recorded for later analysis. */
+  /** Set by the service: where readings, switches, sweeps and exhausted stretches are recorded for later analysis. */
   history?: UsageHistory;
 
   /** A reading that belongs to no known profile (Codex session logs) showed the limit; the next sweep reads the active account. */
@@ -230,6 +230,8 @@ export class AccountAutomation {
   private readonly locks = new Map<AuthProvider, AccountLock>();
   /** Per service whose lock `withAccountLock` holds: the checks queued under it, which run one at a time. */
   private readonly queued = new Map<AuthProvider, Promise<unknown>>();
+  /** Providers whose sweep was requested by hand, which runs even with rotation off and ignores the sweep spacing. */
+  private readonly forced = new Set<AuthProvider>();
   /** Providers whose checks wait for something interactive, such as a sign-in, with the reason a refused action reads. */
   private readonly holds = new Map<AuthProvider, { reason: string; timer: NodeJS.Timeout }>();
 
@@ -244,8 +246,8 @@ export class AccountAutomation {
 
   /**
    * Keeps every keep-alive, sweep and rotation of the provider from starting until `resume`, and for `maxMs` at
-   * most: a window that closed in the middle of a sign-in must not stop the automation for good. A running sweep
-   * stops at its next account; a keep-alive requested by hand is refused with the reason meanwhile.
+   * most: a client that vanished in the middle of a sign-in must not stop the automation for good. A running sweep
+   * stops at its next account; a keep-alive or sweep requested by hand is refused with the reason meanwhile.
    */
   hold(provider: AuthProvider, reason: string, maxMs = HOLD_MAX_MS): void {
     this.resume(provider, true);
@@ -271,6 +273,64 @@ export class AccountAutomation {
   /** Why the provider's checks are on hold, when they are. */
   heldFor(provider: AuthProvider): string | undefined { return this.holds.get(provider)?.reason; }
 
+  /** The stored reading and check record of one account; no credential is ever part of it. */
+  accountState(provider: AuthProvider, id: string): AccountState { return this.read(provider, id); }
+
+  /** The account's stored reading, when it has one. */
+  usage(provider: AuthProvider, id: string): LiveUsage | undefined {
+    const usage = deserializeUsage(this.read(provider, id));
+    return usage && !usageHasExpiredReset(usage, this.now()) ? usage : undefined;
+  }
+
+  /** How long `active` has been the active account as far as rotation watched it; undefined when it has not watched it. */
+  stayed(provider: AuthProvider, active: string): number | undefined {
+    const state = this.read(provider, 'rotation-stay');
+    return state.activeId === active && state.checkedAt !== undefined ? this.now() - state.checkedAt : undefined;
+  }
+
+  /** An account as the history names it: id, name and email, never its login. */
+  account(provider: AuthProvider, id: string): HistoryAccount {
+    const profile = this.profiles.profiles(provider).find((candidate) => candidate.id === id);
+    return { id, name: profile?.name ?? id, ...(profile?.email ? { email: profile.email } : {}) };
+  }
+
+  private rotationSnapshot(settings: AutomationSettings): RotationSnapshot {
+    return { strategy: settings.strategy ?? 'sequential', trigger: settings.trigger ?? 'limit',
+      fiveHourThresholdPercent: settings.fiveHourThresholdPercent, weeklyThresholdPercent: settings.weeklyThresholdPercent,
+      ...(settings.minStayMs !== undefined ? { minStayMinutes: settings.minStayMs / 60_000 } : {}) };
+  }
+
+  /** Ends the stretch with every account at its limit, when one was open; `by` says what ended it. */
+  private clearExhausted(provider: AuthProvider, active: string, by: 'reset' | 'switch'): void {
+    const since = this.read(provider, 'rotation-exhausted').checkedAt;
+    if (since === undefined) { return; }
+    this.write(provider, 'rotation-exhausted', {});
+    this.history?.record({ type: 'recovered', provider, active: this.account(provider, active), by, afterMs: this.now() - since });
+  }
+
+  /** True while rotation may run for the provider: it is on, or a sweep was requested by hand. */
+  private rotationAllowed(provider: AuthProvider): boolean {
+    return this.forced.has(provider) || this.settings(provider).autoRotate;
+  }
+
+  /**
+   * Runs one rotation sweep now, whatever the schedule says and even while automatic rotation is off: the active
+   * account is read fresh and, when it is at its limit, the best eligible account is switched to. Resolves to
+   * whether a switch was made and otherwise why not.
+   */
+  async rotateNow(provider: AuthProvider, wait?: LockWait): Promise<{ switched: boolean; reason?: string }> {
+    if (this.disposed) { throw new Error('Account automation is no longer running.'); }
+    const held = this.heldFor(provider);
+    if (held) { return { switched: false, reason: held }; }
+    return this.withAccountLock(provider, async () => {
+      this.forced.add(provider);
+      try {
+        const reason = await this.rotate(provider, { ...this.settings(provider), autoRotate: true });
+        return reason === undefined ? { switched: true } : { switched: false, reason };
+      } finally { this.forced.delete(provider); }
+    }, wait);
+  }
+
   async withPaused<T>(operation: () => Promise<T>): Promise<T> {
     this.paused++;
     try { await this.pending; return await operation(); }
@@ -287,10 +347,10 @@ export class AccountAutomation {
     return this.pending;
   }
 
-  usageDetail(provider: AuthProvider, id: string, displayedUsage?: LiveUsage): string | undefined {
+  usageDetail(provider: AuthProvider, id: string): string | undefined {
     const state = this.read(provider, id);
-    const candidate = displayedUsage ?? deserializeUsage(state);
-    const usage = candidate && !usageHasExpiredReset(candidate) ? candidate : undefined;
+    const candidate = deserializeUsage(state);
+    const usage = this.usage(provider, id);
     const parts: string[] = [];
     if (candidate && !usage) { parts.push('Usage reset; waiting for a new reading'); }
     if (usage) {
@@ -311,41 +371,12 @@ export class AccountAutomation {
     return parts.join(' · ') || undefined;
   }
 
-  /** The account's stored reading, when it has one. */
-  usage(provider: AuthProvider, id: string): LiveUsage | undefined { return deserializeUsage(this.read(provider, id)); }
-
-  /** How long `active` has been the active account as far as rotation watched it; undefined when it has not watched it. */
-  stayed(provider: AuthProvider, active: string): number | undefined {
-    const state = this.read(provider, 'rotation-stay');
-    return state.activeId === active && state.checkedAt !== undefined ? this.now() - state.checkedAt : undefined;
-  }
-
-  private account(provider: AuthProvider, id: string): HistoryAccount {
-    const profile = this.profiles.profiles(provider).find((candidate) => candidate.id === id);
-    return { id, name: profile?.name ?? id, ...(profile?.email ? { email: profile.email } : {}) };
-  }
-
-  private rotationSnapshot(settings: AutomationSettings): RotationSnapshot {
-    return { strategy: settings.strategy ?? 'sequential', trigger: settings.trigger ?? 'limit',
-      fiveHourThresholdPercent: settings.fiveHourThresholdPercent, weeklyThresholdPercent: settings.weeklyThresholdPercent,
-      ...(settings.minStayMs !== undefined ? { minStayMinutes: settings.minStayMs / 60_000 } : {}) };
-  }
-
-  /** Ends the stretch with every account at its limit, when one was open; `by` says what ended it. */
-  private clearExhausted(provider: AuthProvider, active: string, by: 'reset' | 'switch'): void {
-    const since = this.read(provider, 'rotation-exhausted').checkedAt;
-    if (since === undefined) { return; }
-    this.write(provider, 'rotation-exhausted', {});
-    this.history?.record({ type: 'recovered', provider, active: this.account(provider, active), by, afterMs: this.now() - since });
-  }
-
   /**
    * 100% in the 5h window or the all-models 7d window leaves nothing to use at all: `readOnly`. 100% in a
    * model-scoped weekly window (7d Fable) only blocks that model; other models may still work, so it just `dimmed`.
    */
   limitState(provider: AuthProvider, id: string): ProfileLimitState {
-    const candidate = deserializeUsage(this.read(provider, id));
-    const usage = candidate && !usageHasExpiredReset(candidate) ? candidate : undefined;
+    const usage = this.usage(provider, id);
     let readOnly = false, dimmed = false;
     for (const window of usage?.windows ?? []) {
       if (!Number.isFinite(window.usedPercent) || window.usedPercent < 100) { continue; }
@@ -409,6 +440,16 @@ export class AccountAutomation {
     return this.checkNow(provider, id, true, (state) => ({ ...state, lastKeepAliveAt: this.now() }), !callerReports, wait);
   }
 
+  /**
+   * Reads an account's usage from the vendor now, without a keep-alive prompt: what an agent asks for before it
+   * decides to switch. Costs one usage read (budgeted for Claude), not a model call.
+   */
+  readUsageNow(provider: AuthProvider, id: string, wait?: LockWait): Promise<KeepAliveNowResult> {
+    const held = this.heldFor(provider);
+    if (held) { return Promise.reject(new Error(`${held.charAt(0).toUpperCase()}${held.slice(1)}; account checks wait until it finishes.`)); }
+    return this.checkNow(provider, id, false, (state) => state, true, wait);
+  }
+
   /** After a new sign-in replaced a profile's login: forget the dead one's errors and read its usage right away. */
   credentialReplaced(provider: AuthProvider, id: string): Promise<KeepAliveNowResult> {
     return this.checkNow(provider, id, false, (state) =>
@@ -428,11 +469,11 @@ export class AccountAutomation {
   }
 
   /**
-   * Runs `operation` holding the service's account lock, which account checks in every window share, so a sweep
-   * of several checks is not interleaved with another window's. `sendKeepAliveNow` calls made meanwhile run under
-   * the same lock, one at a time, and the lock is released once they are done. With `wait`, a lock held by a check
-   * elsewhere is waited for, up to `waitMs` and until `signal` aborts; `onWait` is told once when that wait starts.
-   * Throws when the lock was not obtained.
+   * Runs `operation` holding the service's account lock, which every check of the service shares, so a sweep of
+   * several checks is not interleaved with another one. Checks requested meanwhile run under the same lock, one at
+   * a time, and the lock is released once they are done. With `wait`, a lock held by a running sweep is waited for,
+   * up to `waitMs` and until `signal` aborts; `onWait` is told once when that wait starts. Throws when the lock was
+   * not obtained.
    */
   async withAccountLock<T>(provider: AuthProvider, operation: () => Promise<T>, wait: LockWait = {}): Promise<T> {
     const queue = this.queued.get(provider);
@@ -456,7 +497,7 @@ export class AccountAutomation {
     }
   }
 
-  /** Takes the service's account lock, waiting as `wait` says while another window, or a sweep in this one, holds it. */
+  /** Takes the service's account lock, waiting as `wait` says while a sweep holds it. */
   private async acquireLock(provider: AuthProvider, { waitMs = 0, signal, onWait }: LockWait): Promise<AccountLock> {
     const file = path.join(this.directory, `${provider}.lock`);
     const attempt = () => this.locks.has(provider) ? undefined : acquireAccountLock(file);
@@ -496,7 +537,7 @@ export class AccountAutomation {
     const settings = this.settings(provider);
     if (!settings.enabled && !settings.autoRotate) { return; }
     if (this.holds.has(provider)) { return; }
-    // A keep-alive sent by hand in this window holds the lock for its whole sweep.
+    // A keep-alive sent by hand holds the lock for its whole sweep.
     if (this.locks.has(provider)) { return; }
     const lock = acquireAccountLock(path.join(this.directory, `${provider}.lock`));
     if (!lock) { return; }
@@ -620,32 +661,40 @@ export class AccountAutomation {
     return 0;
   }
 
-  private async rotate(provider: AuthProvider, settings: AutomationSettings): Promise<void> {
-    if (this.disposed || this.paused || this.holds.has(provider) || !this.settings(provider).autoRotate) { return; }
+  private async rotate(provider: AuthProvider, settings: AutomationSettings): Promise<string | undefined> {
+    if (this.disposed || this.paused) { return 'the service is busy'; }
+    const held = this.heldFor(provider);
+    if (held) { return held; }
+    if (!this.rotationAllowed(provider)) { return 'automatic rotation is off'; }
+    const forced = this.forced.has(provider);
     const active = this.profiles.activeProfileId(provider);
-    if (!active || this.profiles.profiles(provider).length < 2 || !await this.profiles.matchesNative(provider, active)) { return; }
+    if (!active) { return 'no saved profile is active'; }
+    if (this.profiles.profiles(provider).length < 2) { return 'fewer than two profiles are saved'; }
+    if (!await this.profiles.matchesNative(provider, active)) { return 'the native login is not the active profile\'s'; }
     const strategy = settings.strategy ?? 'sequential';
     const proactive = settings.trigger === 'proactive' && strategy !== 'sequential';
     const margin = strategy === 'sequential' ? 0 : SWITCH_MARGIN[strategy];
     const usage = deserializeUsage(this.read(provider, active));
-    const hinted = this.limitHint.has(provider);
-    if (!usage && !hinted) { return; }
+    // A sweep requested by hand reads the active account itself instead of trusting a stored reading.
+    const hinted = this.limitHint.has(provider) || forced;
+    if (!usage && !hinted) { return 'the active account has no stored reading yet'; }
     if (!hinted && !atLimit(usage!, settings)) {
       // The stretch with every account at its limit ends as soon as the active account reads below its thresholds
       // again, so the next one is reported again and the history records when this one ended.
       this.clearExhausted(provider, active, 'reset');
-      if (!proactive || this.stayedMs(provider, active) < (settings.minStayMs ?? 30 * 60_000)) { return; }
+      if (!proactive) { return 'the active account is below its thresholds'; }
+      if (this.stayedMs(provider, active) < (settings.minStayMs ?? 30 * 60_000)) { return 'the active account has not been active for the minimum stay yet'; }
       // Only spend endpoint calls when the cached readings already show a clearly better account.
       const own = rotationScore(strategy, usage!, this.now(), settings);
       if (own === undefined || !this.ranked(provider, active, settings).some((candidate) =>
-        candidate.usable && candidate.score !== undefined && candidate.score + margin < own)) { return; }
+        candidate.usable && candidate.score !== undefined && candidate.score + margin < own)) { return 'no stored reading shows a clearly better account'; }
     }
     // The sweep record throttles all-exhausted and error cases across windows/restarts. Records from before
     // `nextAllowedAt` was kept wait a full interval after `checkedAt`.
     const rotationId = 'rotation-sweep';
     const sweep = this.read(provider, rotationId);
     const retryAt = sweep.nextAllowedAt ?? (sweep.checkedAt !== undefined ? sweep.checkedAt + settings.checkIntervalMs : undefined);
-    if (retryAt !== undefined && this.now() < retryAt) { return; }
+    if (!forced && retryAt !== undefined && this.now() < retryAt) { return `the last sweep was less than ${Math.round(settings.checkIntervalMs / 60_000)} minutes ago`; }
     const sweepStart = this.now();
     this.write(provider, rotationId, { checkedAt: sweepStart, nextAllowedAt: sweepStart + settings.checkIntervalMs });
     this.limitHint.delete(provider);
@@ -656,16 +705,17 @@ export class AccountAutomation {
     // ago (the status bar's) is as good as a new one and spares the rate-limited endpoint, unless a reset has passed.
     const recent = !hinted && usage !== undefined && this.now() - usage.fetchedAt.getTime() <= RECENT_READING_MS &&
       usage.windows.every((window) => !window.resetsAt || window.resetsAt.getTime() > this.now());
-    let current = usage;
+    let activeCheck: KeepAliveNowResult = { usage };
     if (!recent) {
       calls++;
-      current = (await this.checkAccount(provider, active, settings, false, { source: 'rotation' })).usage;
+      activeCheck = await this.checkAccount(provider, active, settings, false, { ignoreBackoff: forced, source: 'rotation' });
     }
+    const current = activeCheck.usage;
     if (!current) {
       // Not a real sweep: try again as soon as the active account can be read, not a full interval later.
       const readableAt = this.read(provider, active).nextAllowedAt;
       if (readableAt !== undefined) { this.write(provider, rotationId, { checkedAt: sweepStart, nextAllowedAt: readableAt }); }
-      return;
+      return `the active account could not be read: ${activeCheck.usageError ?? 'usage unavailable'}`;
     }
     const exhausted = atLimit(current, settings);
     if (!exhausted) { this.clearExhausted(provider, active, 'reset'); }
@@ -676,11 +726,11 @@ export class AccountAutomation {
         this.history?.record({ type: 'sweep', provider, active: this.account(provider, active), outcome: 'activeRecovered',
           usage: usageSnapshot(current), settings: snapshot, calls });
       }
-      return;
+      return 'the active account is below its thresholds';
     }
     // A working account is only left for one that scores clearly better on a fresh reading too.
     const own = exhausted ? undefined : rotationScore(strategy, current, this.now(), settings);
-    if (!exhausted && (!proactive || own === undefined)) { return; }
+    if (!exhausted && (!proactive || own === undefined)) { return 'the active account reports no weekly window to compare'; }
     const requiredWindows = counted(current, settings).map((window) => window.label);
     const skipped: string[] = [];
     const limited: string[] = [];
@@ -695,11 +745,11 @@ export class AccountAutomation {
     const sweepEvent = (outcome: 'noBetterCandidate' | 'noCandidate') => {
       if (!calls) { return; }
       this.history?.record({ type: 'sweep', provider, active: this.account(provider, active), outcome,
-        usage: usageSnapshot(current!), settings: snapshot, candidates: evaluated, calls });
+        usage: usageSnapshot(current), settings: snapshot, candidates: evaluated, calls });
     };
     for (const [index, candidate] of ranked.entries()) {
       const entry = evaluated[index];
-      if (this.disposed || this.paused || this.holds.has(provider) || !this.settings(provider).autoRotate) { return; }
+      if (this.disposed || this.paused || this.holds.has(provider) || !this.rotationAllowed(provider)) { return 'the sweep was interrupted'; }
       // Never switch to an account whose last check failed, and spend nothing on it: its next successful keep-alive,
       // periodic or by hand, makes it a candidate again.
       const problem = this.checkProblem(provider, candidate.id);
@@ -738,7 +788,7 @@ export class AccountAutomation {
         entry.outcome = 'notBetter';
         continue;
       }
-      if (this.disposed || this.paused || this.holds.has(provider) || !this.settings(provider).autoRotate) { return; }
+      if (this.disposed || this.paused || this.holds.has(provider) || !this.rotationAllowed(provider)) { return 'the sweep was interrupted'; }
       // A usage reading does not prove that the login still works; a real model call does. Never switch to a
       // broken login: report it and try the next account. The call counts as the account's periodic keep-alive.
       this.write(provider, candidate.id, { ...this.read(provider, candidate.id), lastKeepAliveAt: this.now() });
@@ -750,7 +800,7 @@ export class AccountAutomation {
         this.log(`${provider}: not rotating to "${candidate.name}": ${entry.detail}`);
         continue;
       }
-      if (this.profiles.activeProfileId(provider) !== active || !await this.profiles.matchesNative(provider, active)) { return; }
+      if (this.profiles.activeProfileId(provider) !== active || !await this.profiles.matchesNative(provider, active)) { return 'the active login changed during the sweep'; }
       if (await this.profiles.activateProfile(provider, candidate.id, true)) {
         entry.outcome = 'chosen';
         entry.usage = usageSnapshot(verified.usage);
@@ -762,8 +812,9 @@ export class AccountAutomation {
           reason: exhausted ? 'limit' : 'proactive', automatic: true, ...(stayedMs !== undefined ? { stayedMs } : {}),
           fromUsage: usageSnapshot(current), toUsage: usageSnapshot(verified.usage), settings: snapshot, candidates: evaluated, calls });
         await this.afterActivate(provider, { kind: 'activated', accountChanged: true });
+        return undefined;
       }
-      return; // At most one switch per sweep, including when every account is exhausted.
+      return `"${candidate.name}" could not be activated`; // At most one switch per sweep, including when every account is exhausted.
     }
     if (exhausted) {
       const over = counted(current, settings).filter((window) => window.usedPercent >= windowThreshold(window.label, settings));
@@ -782,8 +833,9 @@ export class AccountAutomation {
       } else {
         sweepEvent('noCandidate');
       }
-    } else {
-      sweepEvent('noBetterCandidate');
+      return detail;
     }
+    sweepEvent('noBetterCandidate');
+    return 'no candidate scored clearly better than the active account';
   }
 }

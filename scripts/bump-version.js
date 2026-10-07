@@ -1,7 +1,6 @@
 // Bumps the extension version in package.json and package-lock.json and opens a matching
 // section in CHANGELOG.md. Usage: npm run bump [patch|minor|major|x.y.z] [--carry]   (default: patch)
-// --carry moves an open "(unreleased)" section of the current version to the new one instead of
-// dating it, for bumps of a version that was never published (dev installs, a minor release).
+// --carry moves an open "(unreleased)" section to the new version instead of dating it.
 // Nothing is committed or tagged; review the diff, fill in the changelog, then commit.
 const fs = require('fs');
 const path = require('path');
@@ -32,6 +31,14 @@ if (/^\d+\.\d+\.\d+$/.test(arg)) {
 pkg.version = next;
 fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n');
 
+// The bundled account service carries the same version, so the extension can tell an outdated install.
+const servicePkgPath = path.join(root, 'service', 'package.json');
+if (fs.existsSync(servicePkgPath)) {
+  const servicePkg = JSON.parse(fs.readFileSync(servicePkgPath, 'utf8'));
+  servicePkg.version = next;
+  fs.writeFileSync(servicePkgPath, JSON.stringify(servicePkg, null, 2) + '\n');
+}
+
 const lockPath = path.join(root, 'package-lock.json');
 if (fs.existsSync(lockPath)) {
   const lock = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
@@ -48,7 +55,7 @@ if (fs.existsSync(changelogPath)) {
   const today = new Date().toISOString().slice(0, 10);
   const unreleased = new RegExp(`^## ${current.replace(/\./g, '\\.')} \\(unreleased\\)`, 'm');
   if (unreleased.test(changelog)) {
-    // The current version was still marked unreleased: carry its notes to the new one, or date it and move on.
+    // A dev install or minor release carries open notes; a normal bump dates the previous section.
     changelog = changelog.replace(unreleased, carry && !changelog.includes(`## ${next}`) ? `## ${next} (unreleased)` : `## ${current} (${today})`);
   }
   if (!changelog.includes(`## ${next}`)) {

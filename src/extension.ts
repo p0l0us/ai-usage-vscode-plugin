@@ -2,31 +2,25 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { ApiCallBudget } from './apiBudget';
 import { registerBridgeIntegration } from './bridgeIntegration';
 import { registerBridgeModels } from './bridgeModels';
-import { AuthProvider, readNativeCredential } from './authFiles';
-import { ActivationChange, AuthProfileManager, ProfileMetadata } from './authProfiles';
-import { activateClaudeAccountMetadata, claudeAccountFileConfirms } from './accountIdentity';
-import { AccountAutomation, AutomationSettings, KeepAliveNowResult, LockWait, modelWindowFilter, RotationStrategy, RotationTrigger } from './accountAutomation';
-import { UsageHistory, eventsCsv, historyFileStart, readingsCsv, usageSnapshot } from './usageHistory';
-import { Thresholds, renderHistoryReport, summarizeHistory } from './usageHistoryReport';
-import { signInIsolated } from './accountLogin';
-import { explainAccountProblem, needsSignIn, probeAccount } from './accountProbe';
-import { SharedCache, deserializeUsage } from './cache';
-import { codexConfigPath } from './codexConfig';
-import { findStaleCodexProcesses } from './codexProcesses';
-import { CodexProxyRuntime } from './codexProxyRuntime';
-import { applyCodexSettingsToFile, readCodexSettingAssignments } from './codexSettings';
-import { applyClaudeSettingsToFile, readClaudeSettingAssignments } from './claudeSettings';
-import { openAiUsageSettings } from './settingsLink';
 import {
+  ActivationChange,
+  ApiCallBudget,
+  AuthProvider,
   GitHubAccount,
+  KeepAliveAllResult,
+  KeepAliveResult,
   LiveResult,
   LiveUsage,
   ProviderId,
+  SerializedUsage,
+  ServiceEvent,
+  SharedCache,
+  activationMessage,
   claudeConfigDir,
   codexHomeDir,
+  deserializeUsage,
   fetchClaudeUsage,
   fetchClaudeUsageCli,
   fetchClaudeUsageFromAccountFile,
@@ -38,10 +32,24 @@ import {
   formatResetIn,
   formatResetRemaining,
   newestValidUsage,
+  needsSignIn,
+  readableProblem,
   refreshCodexNativeLogin,
-  usageHasExpiredReset,
-  verifyCodexNativeAccount
-} from './live';
+  serviceHome,
+  stateDir,
+  usageHasExpiredReset
+} from '../service/out';
+import { AccountsMenu } from './accountsMenu';
+import { signInWithTerminal } from './accountLogin';
+import { codexConfigPath } from './codexConfig';
+import { findStaleCodexProcesses } from './codexProcesses';
+import { CodexProxyRuntime } from './codexProxyRuntime';
+import { applyCodexSettingsToFile, readCodexSettingAssignments } from './codexSettings';
+import { applyClaudeSettingsToFile, readClaudeSettingAssignments } from './claudeSettings';
+import { registerMcpProvider } from './mcpProvider';
+import { MCP_SERVER_NAME, mcpCli, mcpLauncher, readMcpRegistration, registerMcpServer, unregisterMcpServer } from './mcpRegistration';
+import { ServiceManager } from './serviceManager';
+import { openAiUsageSettings } from './settingsLink';
 import { compactTokenCount, readCurrentSessionTokens, SessionTokenUsage } from './sessionTokens';
 
 type BillingPeriod = 'daily' | 'weekly' | 'monthly';
@@ -198,20 +206,12 @@ function formatInterval(ms: number): string {
 
 /** After this long, a reading shown in place of a failed refresh is greyed out. */
 const STALE_AFTER_MS = 15 * 60_000;
-/** Pause between accounts when a keep-alive is sent to all of them at once. */
-const KEEP_ALIVE_ALL_SPACING_MS = 3_000;
-/** How long a keep-alive sent by hand waits for an account check running in another window to finish. */
-const MANUAL_CHECK_LOCK_WAIT_MS = 3 * 60_000;
 const GITHUB_ACCESS_REQUESTED_KEY = 'aiUsage.githubAccessRequested';
 /** Last Codex profile switch, shared by every window so each can check its own Codex process (non-secret). */
 const CODEX_SWITCH_KEY = 'aiUsage.codexSwitch.v1';
 /** `switchedAt` of the switch this window has already warned about; at most one warning per switch per window. */
 const CODEX_SWITCH_NOTIFIED_KEY = 'aiUsage.codexSwitchNotified.v1';
 type CodexSwitchRecord = { switchedAt: number; profileName: string };
-/** Shortest gap between background attempts to confirm the activated Claude login. */
-const CLAUDE_METADATA_RETRY_MS = 60_000;
-/** Attempts before the background identity sync gives up until the next switch. */
-const CLAUDE_METADATA_RETRY_LIMIT = 10;
 /** Scopes used when asking the user to grant access; Copilot itself signs in with these. */
 const GITHUB_CONNECT_SCOPES = ['user:email'];
 
@@ -225,42 +225,19 @@ export function activate(context: vscode.ExtensionContext): void {
   registerBridgeModels(context);
   output = vscode.window.createOutputChannel('AI Usage');
   context.subscriptions.push(output);
-  let automation: AccountAutomation;
-  /** Set while a switched Claude login still has to be confirmed against the OAuth profile endpoint. */
-  let claudeMetadataRetry: { nextAttemptAt: number; attempts: number } | undefined;
-  const authProfiles: AuthProfileManager = new AuthProfileManager(context, log, (provider, id) => {
-    const live = liveProviders.find((candidate) => candidate.id === provider);
-    const displayed = live && authProfiles.activeProfileId(provider) === id ? visibleUsage(live) : undefined;
-    return automation?.usageDetail(provider, id, displayed);
-  },
-    async (provider, credential, expected) => {
-      if (provider === 'codex') {
-        // A fresh app-server must see the login that was just written; report a mismatch instead of success.
-        return verifyCodexNativeAccount(credential, vscode.workspace.getConfiguration().get<string>('aiUsage.codex.cliPath') || 'codex');
-      }
-      // Claude Code renders /status and /usage identity from its separate account file. Keep that metadata and its
-      // account-bound caches aligned with the exact OAuth token that activation just wrote.
-      const outcome = await activateClaudeAccountMetadata(credential, expected);
-      if (outcome.status === 'synced') {
-        claudeMetadataRetry = undefined;
-        return { status: 'match' as const, detail: outcome.detail, ...outcome.identity };
-      }
-      // The identity is unconfirmed, usually because the endpoint is rate-limiting this account. Keep asking in the
-      // background so /status and /usage stop lagging behind the switch without the user doing anything.
-      claudeMetadataRetry = { nextAttemptAt: Date.now() + Math.max(outcome.retryAfterMs ?? 0, CLAUDE_METADATA_RETRY_MS), attempts: 0 };
-      return { status: 'unverified' as const, detail: outcome.detail };
-    });
-  void authProfiles.migrateAutomationSettings().catch((error) =>
-    log(`could not move the account feature switches to settings: ${error instanceof Error ? error.message : String(error)}`));
+  // Saved profiles, keep-alives and rotation live in the account service, a background process this extension
+  // installs and manages; see serviceManager.ts. The Accounts menus and the status bar are its clients.
+  const services = new ServiceManager(context, log);
+  context.subscriptions.push(services);
+  // Offers the service's MCP server to the agents of this window while aiUsage.mcp.enabled is on (experimental).
+  registerMcpProvider(context, services, log);
+  const accountsMenu = new AccountsMenu(services, log);
   // Routes the Codex extension's model calls through a local proxy that reads auth.json per request, so a profile
   // switch reaches open Codex chats on their next turn (aiUsage.codex.proxy.enabled). Opt-in; see codexProxy.ts.
   const codexProxy = new CodexProxyRuntime(context, log, codexHomeDir,
     () => refreshCodexNativeLogin(vscode.workspace.getConfiguration().get<string>('aiUsage.codex.cliPath') || 'codex'),
     String((context.extension.packageJSON as { version?: string }).version ?? '0'));
   context.subscriptions.push(codexProxy);
-  authProfiles.codexChatsFollowSwitch = () => codexProxy.active;
-  authProfiles.limitState = (provider, id) => automation?.limitState(provider, id);
-  authProfiles.loginProblem = (provider, id) => automation?.loginProblem(provider, id);
   void codexProxy.sync();
   // Writes the aiUsage.codexConfig.* values that are set into Codex's config.toml; unset ones leave the file alone.
   const syncCodexSettings = () => {
@@ -297,8 +274,9 @@ export function activate(context: vscode.ExtensionContext): void {
   status.command = 'aiUsage.showDetails';
   status.name = 'AI Usage';
   context.subscriptions.push(status);
+  // The ledger lives in the service home, so the service's account probes and the status bar space their calls together.
   const claudeBudget = new ApiCallBudget(
-    path.join(context.globalStorageUri.fsPath, 'claude-api-budget.json'), claudeMinIntervalMs);
+    path.join(stateDir(serviceHome()), 'claude-api-budget.json'), claudeMinIntervalMs);
   // Spacing for the service call the `both` source falls back to: the provider's own check interval,
   // so the endpoint is called no more often than with the `api` source.
   const claudeFallbackBudget = new ApiCallBudget(
@@ -333,14 +311,11 @@ export function activate(context: vscode.ExtensionContext): void {
       // "api" and "cli" both reach the rate-limited endpoint on every check; "accountFile" is a
       // local read with nothing to space out, and "both" claims its slot only when it falls back.
       budget: () => (claudeSpendsEndpointQuota(settingsFor('claude').source) ? claudeBudget : undefined),
-      cacheDiscriminator: async () => authProfiles.cacheDiscriminator('claude'),
-      activeProfileName: () => authProfiles.activeProfileName('claude'),
-      activeProfileId: () => authProfiles.activeProfileId('claude'),
-      activeProfileUsage: () => {
-        const id = authProfiles.activeProfileId('claude');
-        return id && authProfiles.activeProfileNumber('claude') !== undefined ? automation?.usage('claude', id) : undefined;
-      },
-      accountNumber: () => accountNumberLabel(authProfiles, 'claude')
+      cacheDiscriminator: async () => cacheDiscriminator(services, 'claude'),
+      activeProfileName: () => activeProfileName(services, 'claude'),
+      activeProfileId: () => services.views.claude?.activeProfileId,
+      activeProfileUsage: () => accountUsage(services, 'claude'),
+      accountNumber: () => accountNumberLabel(services, 'claude')
     },
     {
       id: 'codex',
@@ -364,14 +339,11 @@ export function activate(context: vscode.ExtensionContext): void {
         }
         return fetchCodexUsage();
       },
-      cacheDiscriminator: async () => authProfiles.cacheDiscriminator('codex'),
-      activeProfileName: () => authProfiles.activeProfileName('codex'),
-      activeProfileId: () => authProfiles.activeProfileId('codex'),
-      activeProfileUsage: () => {
-        const id = authProfiles.activeProfileId('codex');
-        return id && authProfiles.activeProfileNumber('codex') !== undefined ? automation?.usage('codex', id) : undefined;
-      },
-      accountNumber: () => accountNumberLabel(authProfiles, 'codex')
+      cacheDiscriminator: async () => cacheDiscriminator(services, 'codex'),
+      activeProfileName: () => activeProfileName(services, 'codex'),
+      activeProfileId: () => services.views.codex?.activeProfileId,
+      activeProfileUsage: () => accountUsage(services, 'codex'),
+      accountNumber: () => accountNumberLabel(services, 'codex')
     },
     {
       id: 'copilot',
@@ -425,7 +397,7 @@ export function activate(context: vscode.ExtensionContext): void {
     if (provider.inFlight) {
       return provider.inFlight;
     }
-    if (provider.id !== 'copilot' && automation?.isCheckingActive(provider.id) && !afterRotation) {
+    if (provider.id !== 'copilot' && services.views[provider.id]?.checkingActive && !afterRotation) {
       return Promise.resolve();
     }
     let retryForNewProfile = false;
@@ -441,11 +413,12 @@ export function activate(context: vscode.ExtensionContext): void {
       // Show the chat chip right away; until the first reading arrives a click says it is waiting.
       await updateChipContext(provider, config.get<boolean>('aiUsage.chatChips.enabled', true));
 
-      // A switch made outside this window (another window, the vendor CLI) is followed before the reading is keyed.
-      if (provider.id !== 'copilot') {
-        await authProfiles.followNative(provider.id);
+      // A switch made outside this window (the command line, another window, the vendor CLI) is followed by the
+      // service; its view is refreshed here so the reading is keyed by the profile that is active now.
+      if (provider.id !== 'copilot' && services.connected) {
+        await services.refreshViews(provider.id);
       }
-      const profileId = provider.id === 'copilot' ? undefined : authProfiles.activeProfileId(provider.id);
+      const profileId = provider.id === 'copilot' ? undefined : services.views[provider.id]?.activeProfileId;
       if (provider.id !== 'copilot' && provider.readingProfileId !== profileId) {
         provider.last = undefined;
         provider.lastGood = undefined;
@@ -519,7 +492,7 @@ export function activate(context: vscode.ExtensionContext): void {
       }
 
       if (result) {
-        if (provider.id !== 'copilot' && authProfiles.activeProfileId(provider.id) !== profileId) {
+        if (provider.id !== 'copilot' && services.views[provider.id]?.activeProfileId !== profileId) {
           provider.last = undefined;
           provider.lastGood = undefined;
           provider.readingProfileId = undefined;
@@ -534,12 +507,13 @@ export function activate(context: vscode.ExtensionContext): void {
           // Codex session-log records carry no account of their own, so they are never attributed to
           // the active profile — including as the local half of "both".
           const logSourced = source === 'sessionLog' || (provider.id === 'codex' && source === 'both');
-          if (profileId && provider.id !== 'copilot' && !logSourced &&
-            authProfiles.activeProfileId(provider.id) === profileId && await authProfiles.matchesNative(provider.id, profileId)) {
-            automation.observe(provider.id, profileId, result.usage);
-          } else if (logSourced && provider.id === 'codex') {
+          const client = services.connected;
+          if (client && profileId && provider.id !== 'copilot' && !logSourced && services.views[provider.id]?.activeProfileId === profileId) {
+            // The service checks that the profile still owns the native login before it keeps the reading.
+            client.observe(provider.id, profileId, serializeUsage(result.usage)).catch((error: unknown) => log(`${provider.id}: could not hand the reading to the service: ${String(error)}`));
+          } else if (client && logSourced && provider.id === 'codex') {
             // Session logs name no account, but a limit they show still starts a sweep that reads the active account.
-            automation.hintLimit(provider.id, result.usage);
+            client.hintLimit(provider.id, serializeUsage(result.usage)).catch(() => undefined);
           }
         }
       }
@@ -554,7 +528,6 @@ export function activate(context: vscode.ExtensionContext): void {
 
   const refreshLive = async (force = false): Promise<void> => {
     await Promise.all(liveProviders.map((provider) => refreshProvider(provider, force)));
-    void automation.tick();
   };
 
   /** Manual refresh: bypass cache freshness but still respect a shared backoff. */
@@ -603,207 +576,237 @@ export function activate(context: vscode.ExtensionContext): void {
       await vscode.commands.executeCommand('workbench.action.restartExtensionHost');
     }
   };
-  /**
-   * Retries the Claude identity sync for a switch whose profile lookup failed. The native credential is re-read every
-   * attempt, so a token the CLI refreshed in the meantime is used, and a later switch simply retargets the retry.
-   */
-  const retryClaudeAccountMetadata = async (): Promise<void> => {
-    const pending = claudeMetadataRetry;
-    if (!pending || Date.now() < pending.nextAttemptAt) {
-      return;
-    }
-    const expected = authProfiles.activeIdentity('claude');
-    // Claude Code refreshes its own profile after a switch; once it has, there is nothing left to correct.
-    if (claudeAccountFileConfirms(expected)) {
-      claudeMetadataRetry = undefined;
-      log(`claude: account metadata already names the activated login (${expected.email ?? expected.accountId})`);
-      return;
-    }
-    let credential;
-    try {
-      credential = readNativeCredential('claude');
-    } catch (error) {
-      claudeMetadataRetry = undefined;
-      log(`claude: stopped confirming the activated login, no readable native credential: ${error instanceof Error ? error.message : String(error)}`);
-      return;
-    }
-    const outcome = await activateClaudeAccountMetadata(credential, expected);
-    if (outcome.status === 'synced') {
-      claudeMetadataRetry = undefined;
-      log(`claude: account metadata confirmed on retry — ${outcome.detail}`);
-      return;
-    }
-    pending.attempts += 1;
-    if (pending.attempts >= CLAUDE_METADATA_RETRY_LIMIT) {
-      claudeMetadataRetry = undefined;
-      log(`claude: gave up confirming the activated login after ${pending.attempts} attempts — ${outcome.detail}`);
-      return;
-    }
-    // Back off linearly, and never sooner than the endpoint asked for.
-    pending.nextAttemptAt = Date.now() + Math.max(outcome.retryAfterMs ?? 0, CLAUDE_METADATA_RETRY_MS * Math.min(pending.attempts, 5));
-    log(`claude: could not confirm the activated login (attempt ${pending.attempts}) — ${outcome.detail}`);
-  };
   const afterProfileActivated = async (provider: AuthProvider, change: ActivationChange = { kind: 'activated', accountChanged: true }) => {
     const live = liveProviders.find((candidate) => candidate.id === provider)!;
     await live.inFlight;
     live.last = undefined;
     live.lastGood = undefined;
+    live.readingProfileId = undefined;
     renderLive(live);
     await updateChipContext(live, vscode.workspace.getConfiguration().get<boolean>('aiUsage.chatChips.enabled', true));
     // Claude Code re-reads its credential file, so a switch reaches open chats by itself. Codex's app-server does
     // not, and only a real account change may reset the baseline its stale-process check measures against: saving
     // or re-selecting the active login starts nothing on a new account and would flag processes that are fine.
     if (provider === 'codex' && change.accountChanged) {
-      const record: CodexSwitchRecord = { switchedAt: Date.now(), profileName: authProfiles.activeProfileName('codex') ?? 'the selected profile' };
+      const record: CodexSwitchRecord = { switchedAt: Date.now(), profileName: activeProfileName(services, 'codex') ?? 'the selected profile' };
       await context.globalState.update(CODEX_SWITCH_KEY, record);
       void warnAboutStaleCodexProcesses();
     }
     await refreshProvider(live, true, true);
   };
-  automation = new AccountAutomation(path.join(context.globalStorageUri.fsPath, 'account-usage'), authProfiles,
-    (provider) => automationSettings(provider, authProfiles), afterProfileActivated, log, async (provider, credential, settings, keepAlive, signal) => {
-      await liveProviders.find((candidate) => candidate.id === provider)?.inFlight;
-      return probeAccount(provider, credential, settings, keepAlive, signal, provider === 'claude' ? claudeBudget : undefined);
-    });
-  context.subscriptions.push(automation);
-  // Readings, switches and rotation sweeps are appended to month files for later analysis (aiUsage.history.*).
-  const history = new UsageHistory(historyDirectory(context), historyOptions(), log);
-  automation.history = history;
-  history.prune();
-  log(`usage history: ${history.enabled ? history.location : 'off'}`);
-  // Switches by hand, and switches followed from outside this window; rotation records its own with more detail.
-  authProfiles.onActivated = (provider, change) => {
-    const live = liveProviders.find((candidate) => candidate.id === provider);
-    if (live) {
-      live.last = undefined;
-      live.lastGood = undefined;
-      live.readingProfileId = undefined;
-      renderLive(live);
-    }
-    if (change.automatic || change.previous?.id === change.profile.id) { return; }
-    const account = (profile: ProfileMetadata) => ({ id: profile.id, name: profile.name, ...(profile.email ? { email: profile.email } : {}) });
-    const stayedMs = change.previous ? automation.stayed(provider, change.previous.id) : undefined;
-    history.record({ type: 'switch', provider, reason: change.external ? 'external' : 'manual', automatic: false,
-      ...(change.previous ? { from: account(change.previous) } : {}), to: account(change.profile),
-      ...(stayedMs !== undefined ? { stayedMs } : {}),
-      fromUsage: change.previous ? usageSnapshot(automation.usage(provider, change.previous.id)) : undefined,
-      toUsage: usageSnapshot(automation.usage(provider, change.profile.id)) });
-  };
   /**
-   * Runs the vendor's login in a terminal with an isolated home and stores the result in the saved profile, replacing
-   * the native login too when that profile is active. Resolves to whether the profile's login was replaced; every
-   * outcome is reported to the user here.
+   * Runs the vendor's login in a terminal with the isolated home the service prepared and stores the result in the
+   * saved profile, replacing the native login too when that profile is active. Resolves to whether the profile's
+   * login was replaced; every outcome is reported to the user here.
    */
   const signInAgain = async (provider: AuthProvider, id: string): Promise<boolean> => {
-    const profile = authProfiles.profile(provider, id);
-    if (!profile) { return false; }
     const title = provider === 'claude' ? 'Claude' : 'Codex';
+    let client;
+    try { client = services.require(); } catch (error) { void vscode.window.showErrorMessage(`AI Usage: ${error instanceof Error ? error.message : String(error)}`); return false; }
+    const profile = (services.views[provider] ?? await client.list(provider)).profiles.find((candidate) => candidate.id === id);
+    if (!profile) { return false; }
     const who = `“${profile.name}”${profile.email ? ` (${profile.email})` : ''}`;
-    // The user is about to attend a browser sign-in; this service's keep-alives and rotation wait until it is over,
-    // so no check competes with it and no notification about another account interrupts it.
-    automation.hold(provider, `a ${title} sign-in is in progress`);
     try {
-      const credential = await signInIsolated(provider, automationSettings(provider, authProfiles), `${title} ${who}`);
-      if (!credential) {
+      const result = await signInWithTerminal(client, provider, id, `${title} ${who}`, async (message) =>
+        (await vscode.window.showWarningMessage(`${message} Replace its login anyway?`, { modal: true }, 'Replace')) === 'Replace');
+      if (!result || result.status !== 'replaced') {
         void vscode.window.showWarningMessage(`AI Usage: sign-in for the ${title} account ${who} was not completed; the profile is unchanged.`);
         return false;
       }
-      const identity = await authProfiles.identity(provider, credential);
-      const current = authProfiles.profile(provider, id);
-      if (!current) { return false; }
-      const otherAccount = (current.accountId && identity.accountId && current.accountId !== identity.accountId) ||
-        (current.email && identity.email && current.email.toLowerCase() !== identity.email.toLowerCase());
-      if (otherAccount) {
-        const replace = await vscode.window.showWarningMessage(
-          `You signed in as ${identity.email ?? identity.accountId}, but the profile “${current.name}” holds ${current.email ?? current.accountId}. Replace its login anyway?`,
-          { modal: true }, 'Replace');
-        if (replace !== 'Replace') { return false; }
-      }
-      const active = await automation.withPaused(() => authProfiles.replaceCredential(provider, id, credential));
-      automation.resume(provider);
-      if (active) { await afterProfileActivated(provider, { kind: 'saved', accountChanged: false }); }
-      // The login is saved either way; a busy check elsewhere only delays the usage reading.
-      const result = await automation.credentialReplaced(provider, id).catch((error: unknown) =>
-        ({ usage: undefined, usageError: error instanceof Error ? error.message : String(error) }));
-      const signedInAs = identity.email ? ` as ${identity.email}` : '';
-      void vscode.window.showInformationMessage(`AI Usage: ${title} profile “${current.name}” signed in again${signedInAs}.${result.usage
-        ? ' Usage statistics updated.' : result.usageError ? ` Usage could not be read yet: ${readableProblem(result.usageError)}` : ''}`);
-      void automation.tick();
+      if (result.active) { await afterProfileActivated(provider, { kind: 'saved', accountChanged: false }); }
+      void vscode.window.showInformationMessage(`AI Usage: ${result.message}`);
       return true;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       log(`${provider}: signing in again for "${profile.name}" failed: ${message}`);
       void vscode.window.showErrorMessage(`AI Usage: could not sign in again for the ${title} account ${who}: ${message}`);
       return false;
-    } finally { automation.resume(provider); }
+    }
   };
   /** A broken saved login is reported by name and email; one that needs a new sign-in is offered it right away. */
-  const reportAccountProblem = async (provider: AuthProvider, id: string, reason: string, revoked: boolean) => {
-    const profile = authProfiles.profile(provider, id);
-    if (!profile) { return; }
-    const title = provider === 'claude' ? 'Claude' : 'Codex';
-    const who = `“${profile.name}”${profile.email ? ` (${profile.email})` : ''}`;
-    if (!revoked) {
-      void vscode.window.showWarningMessage(
-        `AI Usage: automatic rotation will not switch to the ${title} account ${who}: its keep-alive failed. ${readableProblem(reason)}`);
+  const reportAccountProblem = async (event: Extract<ServiceEvent, { event: 'accountProblem' }>) => {
+    const title = event.provider === 'claude' ? 'Claude' : 'Codex';
+    const who = `“${event.name}”${event.email ? ` (${event.email})` : ''}`;
+    if (!event.revoked) {
+      void vscode.window.showWarningMessage(`AI Usage: automatic rotation will not switch to the ${title} account ${who}: its keep-alive failed. ${event.readable}`);
       return;
     }
     const choice = await vscode.window.showWarningMessage(
-      `AI Usage: the saved ${title} login for ${who} no longer works and cannot be used or rotated to: ${readableProblem(reason)}`,
+      `AI Usage: the saved ${title} login for ${who} no longer works and cannot be used or rotated to: ${event.readable}`,
       'Sign in again', 'Skip');
-    if (choice === 'Sign in again') { await signInAgain(provider, id); }
+    if (choice === 'Sign in again') { await signInAgain(event.provider, event.id); }
   };
-  automation.onAccountProblem = (provider, id, reason, revoked) => { void reportAccountProblem(provider, id, reason, revoked); };
-  automation.onNoCandidate = (provider, detail) => {
-    const title = provider === 'claude' ? 'Claude' : 'Codex';
-    void vscode.window.showWarningMessage(`AI Usage: not rotating ${title}: ${detail}.`, 'Accounts', 'Settings').then((choice) => {
-      if (choice === 'Accounts') { void vscode.commands.executeCommand('aiUsage.manageAuthProfiles', provider); }
-      if (choice === 'Settings') { void openAiUsageSettings(`aiUsage.${provider}.autoRotate`); }
-    });
-  };
+  // What the service announces, whoever asked for it (this window, another one, or the ai-usage command).
+  context.subscriptions.push(services.onEvent((event) => {
+    switch (event.event) {
+      case 'activated': {
+        const message = event.level === 'info'
+          ? activationMessage(event.provider, event.name, event.automatic, event.provider === 'codex' && codexProxy.active)
+          : event.message;
+        if (event.level === 'error') { void vscode.window.showErrorMessage(`AI Usage: ${message}`); }
+        else if (event.level === 'warning') { void vscode.window.showWarningMessage(`AI Usage: ${message}`); }
+        else { void vscode.window.showInformationMessage(`AI Usage: ${message}`); }
+        void afterProfileActivated(event.provider, { kind: 'activated', accountChanged: event.accountChanged });
+        break;
+      }
+      case 'accountProblem': void reportAccountProblem(event); break;
+      case 'noCandidate': {
+        const title = event.provider === 'claude' ? 'Claude' : 'Codex';
+        void vscode.window.showWarningMessage(`AI Usage: not rotating ${title}: ${event.detail}.`, 'Accounts', 'Settings').then((choice) => {
+          if (choice === 'Accounts') { void vscode.commands.executeCommand('aiUsage.manageAuthProfiles', event.provider); }
+          if (choice === 'Settings') { void openAiUsageSettings(`aiUsage.${event.provider}.autoRotate`); }
+        });
+        break;
+      }
+      case 'notice': {
+        const show = event.level === 'error' ? vscode.window.showErrorMessage : event.level === 'warning' ? vscode.window.showWarningMessage : vscode.window.showInformationMessage;
+        void show(`AI Usage: ${event.message}`);
+        break;
+      }
+      default: break;
+    }
+  }));
+  // A refreshed view changes the account number and name the status bar shows.
+  context.subscriptions.push(services.onStateChanged(() => { for (const provider of liveProviders) { renderLive(provider); } }));
   const accountTimer = setInterval(() => {
-    void automation.tick();
+    services.tick();
     void warnAboutStaleCodexProcesses();
-    void retryClaudeAccountMetadata();
-    history.pruneIfDue();
     // Retries a blocked port and takes the proxy over when the window that served it has closed.
     void codexProxy.sync();
   }, 60_000);
   context.subscriptions.push({ dispose: () => clearInterval(accountTimer) });
+  /**
+   * Registers the service's MCP server with the provider's CLI through the CLI's own `mcp add`, so Claude Code or
+   * Codex in a terminal gets the account tools. Offered by the Accounts menu while aiUsage.mcp.enabled is on; when
+   * the CLI already runs this launcher, the same item offers to register again or to remove the entry.
+   */
+  const registerMcpWithCli = async (provider: AuthProvider): Promise<void> => {
+    const title = provider === 'claude' ? 'Claude' : 'Codex';
+    const launcher = mcpLauncher(services.home);
+    if (!services.isInstalled() || !fs.existsSync(launcher)) {
+      void vscode.window.showWarningMessage(`AI Usage: the account service is not installed, so there is no ai-usage command to register with the ${title} CLI. Install it from Account service… first.`);
+      return;
+    }
+    const { cli, reason } = mcpCli(provider, vscode.workspace.getConfiguration().get<string>(`aiUsage.${provider}.cliPath`));
+    if (!cli) { void vscode.window.showErrorMessage(`AI Usage: ${reason}`); return; }
+    const where = provider === 'claude' ? 'in its user scope, for every project' : 'in its config.toml';
+    const before = readMcpRegistration(provider, launcher);
+    if (before.current) {
+      const choice = await vscode.window.showInformationMessage(
+        `AI Usage: the ${title} CLI already runs the “${MCP_SERVER_NAME}” MCP server from ${launcher} ${where}.`, 'Register again', 'Remove');
+      if (!choice) { return; }
+      if (choice === 'Remove') {
+        const removed = await unregisterMcpServer(provider, cli);
+        log(`${provider}: ${path.basename(cli)} mcp remove ${MCP_SERVER_NAME}: ${removed.ok ? 'removed' : 'failed'}: ${removed.detail}`);
+        if (removed.ok) { void vscode.window.showInformationMessage(`AI Usage: the “${MCP_SERVER_NAME}” MCP server was removed from the ${title} CLI.`); }
+        else { void vscode.window.showErrorMessage(`AI Usage: could not remove the “${MCP_SERVER_NAME}” MCP server from the ${title} CLI: ${removed.detail}`); }
+        return;
+      }
+    } else if (before.registered) {
+      const current = [before.command, ...(before.args ?? [])].filter(Boolean).join(' ') || 'another command';
+      const choice = await vscode.window.showWarningMessage(
+        `The ${title} CLI already has an MCP server named “${MCP_SERVER_NAME}” that runs ${current}. Replace it with ${launcher} mcp?`, { modal: true }, 'Replace');
+      if (choice !== 'Replace') { return; }
+    }
+    const result = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: `AI Usage: registering the MCP server with the ${title} CLI…` },
+      () => registerMcpServer(provider, cli, launcher));
+    log(`${provider}: registering the MCP server with ${cli}: ${result.ok ? 'registered' : 'failed'}: ${result.detail}`);
+    if (!result.ok) {
+      void vscode.window.showErrorMessage(`AI Usage: could not register the MCP server with the ${title} CLI: ${result.detail}`);
+      return;
+    }
+    const switching = services.config?.mcp.switching ?? true;
+    void vscode.window.showInformationMessage(
+      `AI Usage: the ${title} CLI now has the “${MCP_SERVER_NAME}” MCP server ${where}. New ${title} sessions can list the saved accounts with their usage${switching ? ' and switch between them' : ''}; the tools answer while aiUsage.mcp.enabled is on.`);
+  };
+  context.subscriptions.push(vscode.commands.registerCommand('aiUsage.setupMcp', async () => {
+    while (true) {
+      const installed = services.isInstalled();
+      const client = services.connected;
+      const enabled = services.config?.mcp.enabled ?? false;
+      const items: Array<vscode.QuickPickItem & { action: 'install' | 'connect' | 'enable' | 'claude' | 'codex' | 'settings' }> = [];
+      if (!installed) {
+        items.push({ label: '$(cloud-download) Install the account service…', detail: 'Installs the ai-usage command that serves the MCP tools.', action: 'install' });
+      } else if (!client) {
+        items.push({ label: '$(debug-start) Connect to the account service…', detail: 'Starts the installed service and reads its MCP settings.', action: 'connect' });
+      } else if (!enabled) {
+        items.push({ label: '$(plug) Enable the MCP server…', detail: 'Makes account tools available to agents in this VS Code window and allows CLI registration.', action: 'enable' });
+      } else {
+        for (const provider of ['claude', 'codex'] as const) {
+          const registration = readMcpRegistration(provider, mcpLauncher(services.home));
+          items.push({
+            label: `$(plug) Register with ${provider === 'claude' ? 'Claude' : 'Codex'} CLI…`,
+            description: registration.current ? 'Registered' : registration.registered ? 'Registered with another command' : 'Not registered',
+            detail: `Adds the ${MCP_SERVER_NAME} MCP server to ${provider === 'claude' ? 'Claude Code' : 'Codex'} in terminal sessions.`,
+            action: provider
+          });
+        }
+      }
+      items.push({ label: '$(gear) MCP settings…', description: enabled ? 'Enabled' : 'Disabled', action: 'settings' });
+      const picked = await vscode.window.showQuickPick(items, { title: 'AI Usage · MCP server setup', matchOnDetail: true });
+      if (!picked) { return; }
+      if (picked.action === 'install') {
+        if (!await services.install()) { return; }
+      } else if (picked.action === 'connect') {
+        if (!await services.ensure()) { await services.showMenu(); return; }
+      } else if (picked.action === 'enable') {
+        try {
+          const config = await client!.setConfig({ 'mcp.enabled': true });
+          services.config = config;
+          await services.configSync.pull(config);
+        } catch (error) {
+          void vscode.window.showErrorMessage(`AI Usage: could not enable the MCP server: ${error instanceof Error ? error.message : String(error)}`);
+          return;
+        }
+      } else if (picked.action === 'claude' || picked.action === 'codex') {
+        await registerMcpWithCli(picked.action);
+      } else {
+        await openAiUsageSettings('aiUsage.mcp');
+        return;
+      }
+    }
+  }));
   context.subscriptions.push(vscode.commands.registerCommand('aiUsage.manageAuthProfiles', async (value?: unknown) => {
     const initial = value === 'claude' || value === 'codex' ? value as AuthProvider : undefined;
-    await automation.withPaused(() => authProfiles.show(initial, {
-      beforeList: async (provider) => {
+    await accountsMenu.show(initial, {
+      activeUsage: (provider, id) => {
         const live = liveProviders.find((candidate) => candidate.id === provider);
-        if (live) { renderLive(live); }
+        return live && services.views[provider]?.activeProfileId === id ? visibleUsage(live) : undefined;
       },
       beforeActivate: async (provider) => {
         await liveProviders.find((candidate) => candidate.id === provider)?.inFlight;
       },
-      afterActivate: afterProfileActivated,
+      afterSaved: (provider) => afterProfileActivated(provider, { kind: 'saved', accountChanged: false }),
       back: async () => { await vscode.commands.executeCommand('aiUsage.showDetails'); },
       signIn: async (provider, profile) => { await signInAgain(provider, profile.id); },
+      mcpRegistration: (provider) => readMcpRegistration(provider, mcpLauncher(services.home)),
+      registerMcp: registerMcpWithCli,
       sendKeepAlive: async (provider, profiles) => {
+        const client = services.require();
         const title = provider === 'claude' ? 'Claude' : 'Codex';
         if (profiles.length === 1) {
           const [profile] = profiles;
-          // This one notification reports the outcome, a dead login included, so the automation must not announce
+          // This one notification reports the outcome, a dead login included, so the service must not announce
           // the same failure a second time; it only records the login as reported.
-          const abort = new AbortController();
-          let result: KeepAliveNowResult;
+          const token = `vscode-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+          let result: KeepAliveResult;
+          let cancelled = false;
           try {
             result = await vscode.window.withProgress({
               location: vscode.ProgressLocation.Notification,
               title: `AI Usage: sending ${title} keep-alive for “${profile.name}”…`,
               cancellable: true
-            }, (progress, token) => {
-              token.onCancellationRequested(() => abort.abort());
-              return automation.sendKeepAliveNow(provider, profile.id, { callerReports: true, wait: manualLockWait(title, progress, abort.signal) });
+            }, async (progress, cancel) => {
+              cancel.onCancellationRequested(() => { cancelled = true; void client.cancel(token).catch(() => undefined); });
+              // A check running in the service (a periodic sweep) is waited for; the progress says so.
+              const waiting = services.onEvent((event) => {
+                if (event.event === 'waiting' && event.token === token) { progress.report({ message: `waiting for a running ${title} account check…` }); }
+              });
+              try { return await client.keepAliveNow(provider, profile.id, { callerReports: true, token }); } finally { waiting.dispose(); }
             });
           } catch (error) {
-            if (abort.signal.aborted) { return; }
-            const message = error instanceof Error ? error.message : String(error);
-            void vscode.window.showWarningMessage(`AI Usage: ${title} keep-alive for “${profile.name}” not sent: ${readableProblem(message)}`);
+            if (cancelled) { return; }
+            void vscode.window.showWarningMessage(`AI Usage: ${title} keep-alive for “${profile.name}” not sent: ${readableProblem(error instanceof Error ? error.message : String(error))}`);
             return;
           }
           // Revoked, or expired and not refreshable, found by the keep-alive or by the usage read: only a new sign-in helps.
@@ -830,47 +833,30 @@ export function activate(context: vscode.ExtensionContext): void {
           }
           return;
         }
+        // One sweep in the service, under one lock, so a periodic check cannot cut in between two accounts; the
+        // service spaces the accounts and reports progress through events.
+        const token = `vscode-${Date.now()}-${Math.random().toString(36).slice(2)}`;
         await vscode.window.withProgress({
           location: vscode.ProgressLocation.Notification,
           title: `AI Usage: sending ${title} keep-alives`,
           cancellable: true
-        }, async (progress, token) => {
+        }, async (progress, cancel) => {
+          cancel.onCancellationRequested(() => { void client.cancel(token).catch(() => undefined); });
+          const listener = services.onEvent((event) => {
+            if (event.event === 'waiting' && event.token === token) { progress.report({ message: `waiting for a running ${title} account check…` }); }
+            if (event.event === 'keepAliveProgress' && event.token === token) {
+              progress.report({ message: `${event.index + 1}/${event.total}: “${event.name}”…`, increment: event.index ? 100 / event.total : 0 });
+            }
+          });
+          let sweep: KeepAliveAllResult;
+          try { sweep = await client.keepAliveAll(provider, profiles.map((profile) => profile.id), { token }); } finally { listener.dispose(); }
           const failed: string[] = [];
-          let done = 0;
-          let blocked: string | undefined;
-          const abort = new AbortController();
-          token.onCancellationRequested(() => abort.abort());
-          try {
-            // One lock for the whole sweep, so a periodic check in another window cannot cut in between two accounts.
-            await automation.withAccountLock(provider, async () => {
-              for (const [index, profile] of profiles.entries()) {
-                if (token.isCancellationRequested) { break; }
-                // Space the calls so a sweep of every account does not burst the provider's usage endpoint.
-                if (index > 0) { await new Promise((resolve) => setTimeout(resolve, KEEP_ALIVE_ALL_SPACING_MS)); }
-                if (token.isCancellationRequested) { break; }
-                progress.report({ message: `${index + 1}/${profiles.length}: “${profile.name}”…`, increment: index ? 100 / profiles.length : 0 });
-                try {
-                  const result = await automation.sendKeepAliveNow(provider, profile.id);
-                  const problem = result.keepAliveError ?? (result.usage ? undefined : result.usageError ?? 'usage statistics could not be updated');
-                  if (problem) { failed.push(`“${profile.name}”: ${readableProblem(problem)}`); }
-                } catch (error) {
-                  const message = error instanceof Error ? error.message : String(error);
-                  // A sign-in started meanwhile holds every check of this service; the rest of the sweep would only fail the same way.
-                  if (/sign-in is in progress/i.test(message)) { blocked = message.replace(/\.$/, ''); break; }
-                  failed.push(`“${profile.name}”: ${readableProblem(message)}`);
-                }
-                done++;
-              }
-            }, manualLockWait(title, progress, abort.signal));
-          } catch (error) {
-            const message = error instanceof Error ? error.message : String(error);
-            if (abort.signal.aborted) { /* The summary counts every account as cancelled. */ }
-            else if (/already running/i.test(message)) {
-              blocked = `another ${title} account check was still running after ${Math.round(MANUAL_CHECK_LOCK_WAIT_MS / 60_000)} minutes`;
-            } else { throw error; }
+          for (const result of sweep.results) {
+            const problem = result.error ?? result.keepAliveError ?? (result.usage ? undefined : result.usageError ?? 'usage statistics could not be updated');
+            if (problem) { failed.push(`“${result.name}”: ${readableProblem(problem)}`); }
           }
-          const skipped = profiles.length - done;
-          const summary = `AI Usage: ${title} keep-alive sent to ${done - failed.length} of ${profiles.length} accounts${skipped ? ` (${skipped} ${blocked ? `not sent: ${blocked}` : 'cancelled'})` : ''}.`;
+          const skipped = sweep.total - sweep.done;
+          const summary = `AI Usage: ${title} keep-alive sent to ${sweep.done - failed.length} of ${sweep.total} accounts${skipped ? ` (${skipped} ${sweep.cancelled ? 'cancelled' : `not sent: ${sweep.blocked ?? 'the sweep stopped'}`})` : ''}.`;
           if (failed.length) {
             void vscode.window.showWarningMessage(`${summary} Problems: ${failed.join('; ')}`);
           } else {
@@ -878,18 +864,16 @@ export function activate(context: vscode.ExtensionContext): void {
           }
         });
       }
-    }));
-    void automation.tick();
+    });
   }));
-  context.subscriptions.push(vscode.commands.registerCommand('aiUsage.exportAuthProfiles', () => authProfiles.exportProfiles()));
-  context.subscriptions.push(vscode.commands.registerCommand('aiUsage.importAuthProfiles', async () => {
-    // Paused like the Accounts menu, so a sweep does not read a profile while its login is being written.
-    if (await automation.withPaused(() => authProfiles.importProfiles())) { void automation.tick(); }
-  }));
+  const reportMenuError = (error: unknown) => { void vscode.window.showErrorMessage(`AI Usage: ${error instanceof Error ? error.message : String(error)}`); };
+  context.subscriptions.push(vscode.commands.registerCommand('aiUsage.exportAuthProfiles', () => accountsMenu.exportProfiles().catch(reportMenuError)));
+  context.subscriptions.push(vscode.commands.registerCommand('aiUsage.importAuthProfiles', () => accountsMenu.importProfiles().catch(reportMenuError)));
+  context.subscriptions.push(vscode.commands.registerCommand('aiUsage.installAccountService', () => services.install()));
+  context.subscriptions.push(vscode.commands.registerCommand('aiUsage.accountService', () => services.showMenu()));
   context.subscriptions.push(vscode.commands.registerCommand('aiUsage.openLog', () => output?.show(true)));
-  context.subscriptions.push(vscode.commands.registerCommand('aiUsage.showUsageHistory', () =>
-    showUsageHistory(history, () => ({ claude: automationSettings('claude', authProfiles), codex: automationSettings('codex', authProfiles) }))
-      .catch((error: unknown) => vscode.window.showErrorMessage(`AI Usage: could not show the usage history: ${error instanceof Error ? error.message : String(error)}`))));
+  context.subscriptions.push(vscode.commands.registerCommand('aiUsage.showUsageHistory', () => showUsageHistory(services)
+    .catch((error: unknown) => vscode.window.showErrorMessage(`AI Usage: could not show the usage history: ${error instanceof Error ? error.message : String(error)}`))));
   context.subscriptions.push(vscode.commands.registerCommand('aiUsage.openAgentsWindowSetup', () =>
     vscode.commands.executeCommand('workbench.action.openWalkthrough', `${context.extension.id}#${AGENTS_WINDOW_WALKTHROUGH}`, false)
   ));
@@ -1027,6 +1011,8 @@ export function activate(context: vscode.ExtensionContext): void {
   // The workspace's repositories decide which Copilot account/organization applies.
   context.subscriptions.push(vscode.workspace.onDidChangeWorkspaceFolders(() => void refreshLive()));
   context.subscriptions.push(vscode.workspace.onDidChangeWorkspaceFolders(() => void updateSessionTokens()));
+  // The folders' project profile files are listed by the service while this window has them open.
+  context.subscriptions.push(vscode.workspace.onDidChangeWorkspaceFolders(() => void services.declareFolders()));
 
   // Refresh live data when the GitHub sign-in state changes (affects Copilot).
   context.subscriptions.push(vscode.authentication.onDidChangeSessions((event) => {
@@ -1048,10 +1034,12 @@ export function activate(context: vscode.ExtensionContext): void {
     if (event.affectsConfiguration('aiUsage.claudeConfig')) {
       syncClaudeSettings();
     }
-    if (event.affectsConfiguration('aiUsage.history')) {
-      history.configure(historyDirectory(context), historyOptions());
-      history.prune();
-      log(`usage history: ${history.enabled ? history.location : 'off'}`);
+    if (event.affectsConfiguration('aiUsage.claude') || event.affectsConfiguration('aiUsage.codex') || event.affectsConfiguration('aiUsage.mcp') ||
+      event.affectsConfiguration('aiUsage.history') || event.affectsConfiguration('aiUsage.privateProfiles') || event.affectsConfiguration('aiUsage.projectProfiles')) {
+      void services.pushSettings(event);
+    }
+    if (event.affectsConfiguration('aiUsage.accountService')) {
+      void services.ensure({ promptInstall: true });
     }
     if (
       event.affectsConfiguration('aiUsage.claude') ||
@@ -1111,7 +1099,68 @@ export function activate(context: vscode.ExtensionContext): void {
   scheduleTimer();
   context.subscriptions.push({ dispose: () => timer && clearInterval(timer) });
 
+  void services.ensure({ promptInstall: true }).then(() => refreshLive());
   void refreshAll().then(maybeRequestGitHubAccess).then(() => maybeOfferAgentsWindowSetup(context));
+}
+
+const HISTORY_PERIODS: Array<{ label: string; days?: number }> = [
+  { label: 'Summary of the last 7 days', days: 7 },
+  { label: 'Summary of the last 30 days', days: 30 },
+  { label: 'Summary of the last 90 days', days: 90 },
+  { label: 'Summary of everything kept' }
+];
+
+/** The usage history menu: a summary of a period as a Markdown document, exports, the files and the settings; all from the service. */
+async function showUsageHistory(services: ServiceManager): Promise<void> {
+  const client = services.require();
+  const info = await client.historyInfo();
+  type Item = vscode.QuickPickItem & { action?: 'summary' | 'readings' | 'events' | 'jsonl' | 'file' | 'settings'; days?: number };
+  const items: Item[] = [
+    { label: 'Summary', kind: vscode.QuickPickItemKind.Separator },
+    ...HISTORY_PERIODS.map((period): Item => ({ label: `$(graph) ${period.label}`, action: 'summary', days: period.days })),
+    { label: 'Export', kind: vscode.QuickPickItemKind.Separator },
+    { label: '$(export) Readings as CSV…', description: 'one row per account, reading and window', action: 'readings' },
+    { label: '$(export) Switches, sweeps and check failures as CSV…', action: 'events' },
+    { label: '$(json) Everything as JSON Lines…', description: 'the kept month files in one', action: 'jsonl' },
+    { label: 'Files', kind: vscode.QuickPickItemKind.Separator },
+    { label: '$(file) Open the newest month file', description: info.location, action: 'file' },
+    { label: '$(gear) History settings', description: `aiUsage.history.* · ${info.enabled ? `on, kept ${info.retentionDays} days` : 'off'}`, action: 'settings' }
+  ];
+  const picked = await vscode.window.showQuickPick(items, {
+    title: 'AI Usage · Usage history', matchOnDescription: true,
+    placeHolder: `${info.files.length} month file${info.files.length === 1 ? '' : 's'} in ${info.location}`
+  });
+  if (!picked?.action) { return; }
+  if (picked.action === 'summary') {
+    const result = await client.historySummary(picked.days);
+    const document = await vscode.workspace.openTextDocument({ language: 'markdown', content: result.markdown });
+    try { await vscode.commands.executeCommand('markdown.showPreview', document.uri); }
+    catch { await vscode.window.showTextDocument(document); }
+    return;
+  }
+  if (picked.action === 'file') {
+    const newest = info.files[info.files.length - 1];
+    if (!newest) { void vscode.window.showInformationMessage('AI Usage: no usage history has been recorded yet.'); return; }
+    await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(vscode.Uri.file(newest)));
+    return;
+  }
+  if (picked.action === 'settings') { await openAiUsageSettings('aiUsage.history'); return; }
+  const kind = picked.action;
+  const exported = await client.historyExport(kind);
+  const target = await vscode.window.showSaveDialog({
+    title: 'Export usage history',
+    defaultUri: vscode.Uri.file(path.join(os.homedir(), `ai-usage-${kind}-${new Date().toISOString().slice(0, 10)}.${exported.extension}`)),
+    filters: kind === 'jsonl' ? { 'JSON Lines': ['jsonl'] } : { CSV: ['csv'] }
+  });
+  if (!target) { return; }
+  await vscode.workspace.fs.writeFile(target, Buffer.from(exported.text, 'utf8'));
+  const choice = await vscode.window.showInformationMessage(`AI Usage: usage history exported to ${target.fsPath}.`, 'Open');
+  if (choice === 'Open') { await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(target)); }
+}
+
+/** A reading as the service takes it: ISO dates, nothing else changed. */
+function serializeUsage(usage: LiveUsage): SerializedUsage {
+  return { ...usage, fetchedAt: usage.fetchedAt.toISOString(), windows: usage.windows.map((window) => ({ label: window.label, usedPercent: window.usedPercent, resetsAt: window.resetsAt?.toISOString() })) };
 }
 
 const AGENTS_WINDOW_WALKTHROUGH = 'aiUsage.agentsWindow';
@@ -1286,7 +1335,7 @@ async function updateChipContext(provider: LiveProvider, enabled: boolean): Prom
   }
   if (enabled) {
     const result = provider.last;
-    const usage = result?.kind === 'ok' ? result.usage : result?.kind === 'error' ? provider.lastGood : undefined;
+    const usage = visibleUsage(provider);
     if (usage?.windows.length) {
       const rich = chipStyle().usage === 'rich'
         ? usage.windows.filter((window) => CHIP_WINDOWS[provider.id].includes(window.label))
@@ -1317,9 +1366,9 @@ function clickCommand(provider: LiveProvider): vscode.Command {
 }
 
 function visibleUsage(provider: LiveProvider): LiveUsage | undefined {
-  if (provider.activeProfileId && provider.readingProfileId !== provider.activeProfileId()) { return undefined; }
-  const live = provider.last?.kind === 'ok' ? provider.last.usage
-    : provider.last?.kind === 'error' ? provider.lastGood : undefined;
+  const sameAccount = !provider.activeProfileId || provider.readingProfileId === provider.activeProfileId();
+  const live = sameAccount ? provider.last?.kind === 'ok' ? provider.last.usage
+    : provider.last?.kind === 'error' ? provider.lastGood : undefined : undefined;
   return newestValidUsage(live, provider.activeProfileUsage?.());
 }
 
@@ -1329,6 +1378,7 @@ function renderLive(provider: LiveProvider): void {
     provider.lastGood = undefined;
   }
   const result = provider.last;
+  const usage = visibleUsage(provider);
   const item = provider.status;
   item.color = undefined;
   item.command = clickCommand(provider);
@@ -1337,7 +1387,7 @@ function renderLive(provider: LiveProvider): void {
     return;
   }
 
-  if (!result || result.kind === 'unavailable') {
+  if ((!result || result.kind === 'unavailable') && !usage) {
     if (result?.reason && provider.id === 'copilot') {
       const needsAccess = result.reason.includes('No GitHub sign-in');
       item.text = statusText(provider, needsAccess ? 'connect' : 'n/a', 'Copilot');
@@ -1353,8 +1403,7 @@ function renderLive(provider: LiveProvider): void {
     return;
   }
 
-  const usage = visibleUsage(provider);
-  if (result.kind === 'error' && !usage) {
+  if (result?.kind === 'error' && !usage) {
     item.text = statusText(provider, '$(warning)', result.title);
     item.tooltip = `${result.title}\n${result.message}`;
     item.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
@@ -1362,7 +1411,7 @@ function renderLive(provider: LiveProvider): void {
     return;
   }
   if (!usage) {
-    const title = result.kind === 'ok' ? result.usage.title : result.title;
+    const title = result?.kind === 'ok' ? result.usage.title : result?.kind === 'error' ? result.title : PROVIDER_TITLES[provider.id];
     item.text = statusText(provider, '$(clock)', title);
     item.tooltip = `${title}\nWaiting for a reading from the new quota window.`;
     item.backgroundColor = undefined;
@@ -1370,7 +1419,7 @@ function renderLive(provider: LiveProvider): void {
     return;
   }
   item.text = statusText(provider, formatUsageLabel(usage, false, statusBarStyle().usage), usage.title);
-  item.tooltip = buildTooltip(usage, result.kind === 'error' ? result.message : undefined, provider.activeProfileName?.());
+  item.tooltip = buildTooltip(usage, result?.kind === 'error' ? result.message : undefined, provider.activeProfileName?.());
   item.color = Date.now() - usage.fetchedAt.getTime() >= STALE_AFTER_MS
     ? new vscode.ThemeColor('disabledForeground') : undefined;
 
@@ -1433,13 +1482,28 @@ function formatUsageLabel(usage: LiveUsage, withTitle = true, style: UsageStyle 
 }
 
 /** "#N" for the active saved profile when `aiUsage.<service>.statusBar.accountNumber` is on and several are saved. */
-function accountNumberLabel(authProfiles: AuthProfileManager, provider: AuthProvider): string | undefined {
-  if (!vscode.workspace.getConfiguration().get<boolean>(`aiUsage.${provider}.statusBar.accountNumber`, true) ||
-    authProfiles.profileCount(provider) < 2) {
+function accountNumberLabel(services: ServiceManager, provider: AuthProvider): string | undefined {
+  const view = services.views[provider];
+  if (!view || view.profiles.length < 2 || !vscode.workspace.getConfiguration().get<boolean>(`aiUsage.${provider}.statusBar.accountNumber`, true)) {
     return undefined;
   }
-  const number = authProfiles.activeProfileNumber(provider);
-  return number === undefined ? undefined : `#${number}`;
+  return view.activeNumber === undefined ? undefined : `#${view.activeNumber}`;
+}
+
+function activeProfileName(services: ServiceManager, provider: AuthProvider): string | undefined {
+  return services.views[provider]?.profiles.find((profile) => profile.active)?.name;
+}
+
+function accountUsage(services: ServiceManager, provider: AuthProvider): LiveUsage | undefined {
+  const view = services.views[provider];
+  const reading = view?.activeNumber !== undefined ? view.profiles.find((profile) => profile.id === view.activeProfileId)?.usage : undefined;
+  return reading ? deserializeUsage({ usage: reading }) : undefined;
+}
+
+/** A non-secret cache suffix prevents usage from one account appearing after switching to another. */
+function cacheDiscriminator(services: ServiceManager, provider: AuthProvider): string | undefined {
+  const id = services.views[provider]?.activeProfileId;
+  return id ? `auth-profile:${id}` : undefined;
 }
 
 /** Status bar text: the figures behind whatever `aiUsage.statusBar.labels` puts in front of them, and the account number. */
@@ -1481,7 +1545,7 @@ function buildTooltip(usage: LiveUsage, refreshError?: string, activeProfile?: s
 }
 
 type DetailItem = vscode.QuickPickItem & {
-  action?: 'refresh' | 'refreshProvider' | 'log' | 'history' | 'settings' | 'connect' | 'all' | 'profiles';
+  action?: 'refresh' | 'refreshProvider' | 'log' | 'history' | 'settings' | 'connect' | 'all' | 'profiles' | 'mcp';
   providerId?: ProviderId;
 };
 
@@ -1513,10 +1577,11 @@ function usageIcon(percent: number): string {
 
 function providerItems(provider: LiveProvider): DetailItem[] {
   const result = provider.last;
+  const usage = visibleUsage(provider);
   const items: DetailItem[] = [];
-  const title = result?.kind === 'ok' ? result.usage.title : result?.kind === 'error' ? result.title : provider.id;
-  const plan = result?.kind === 'ok' && result.usage.plan ? ` · ${result.usage.plan}` : '';
-  const who = result?.kind === 'ok' && result.usage.subtitle ? ` · ${result.usage.subtitle}` : '';
+  const title = usage?.title ?? (result?.kind === 'error' ? result.title : provider.id);
+  const plan = usage?.plan ? ` · ${usage.plan}` : '';
+  const who = usage?.subtitle ? ` · ${usage.subtitle}` : '';
   items.push({ label: `${title}${who}${plan}`, kind: vscode.QuickPickItemKind.Separator });
   if (provider.id === 'claude' || provider.id === 'codex') {
     const name = provider.activeProfileName?.();
@@ -1529,11 +1594,11 @@ function providerItems(provider: LiveProvider): DetailItem[] {
     });
   }
 
-  if (!result) {
+  if (!result && !usage) {
     items.push({ label: '$(clock) Waiting for first reading…' });
     return items;
   }
-  if (result.kind === 'unavailable') {
+  if (result?.kind === 'unavailable' && !usage) {
     if (provider.id === 'copilot' && result.reason?.includes('No GitHub sign-in')) {
       items.push({
         label: '$(github) Connect GitHub account',
@@ -1552,8 +1617,7 @@ function providerItems(provider: LiveProvider): DetailItem[] {
     });
     return items;
   }
-  const usage = visibleUsage(provider);
-  if (result.kind === 'error') {
+  if (result?.kind === 'error') {
     items.push({
       label: '$(warning) Last refresh failed',
       detail: usage ? `${result.message} — showing the reading from ${usage.fetchedAt.toLocaleTimeString()}.` : result.message
@@ -1563,12 +1627,7 @@ function providerItems(provider: LiveProvider): DetailItem[] {
     }
   }
   if (!usage) {
-    items.push({
-      label: '$(clock) Waiting for usage after reset',
-      detail: 'Refresh now to check the new quota window.',
-      action: 'refreshProvider',
-      providerId: provider.id
-    });
+    items.push({ label: '$(clock) Waiting for usage after reset', detail: 'Refresh now to check the new quota window.', action: 'refreshProvider', providerId: provider.id });
     return items;
   }
 
@@ -1628,6 +1687,9 @@ async function showDetailsPanel(providers: LiveProvider[], refreshAll: () => Pro
     items.push({ label: '$(refresh) Refresh now', action: 'refresh' });
     items.push({ label: '$(output) Open log', description: 'Output → AI Usage', action: 'log' });
     items.push({ label: '$(history) Usage history', description: 'readings, switches, how well rotation works', action: 'history' });
+    if (!focused) {
+      items.push({ label: '$(plug) Set up MCP server…', description: 'Enable account tools and register them with Claude or Codex', action: 'mcp' });
+    }
     items.push(focused
       ? { label: `$(gear) ${titleFor(focused)} settings`, description: `aiUsage.${focused.id}.*`, action: 'settings', providerId: focused.id }
       : { label: '$(gear) Settings', description: 'aiUsage.*', action: 'settings' });
@@ -1679,6 +1741,8 @@ async function showDetailsPanel(providers: LiveProvider[], refreshAll: () => Pro
       output?.show(true);
     } else if (picked.action === 'history') {
       await vscode.commands.executeCommand('aiUsage.showUsageHistory');
+    } else if (picked.action === 'mcp') {
+      await vscode.commands.executeCommand('aiUsage.setupMcp');
     } else {
       await openAiUsageSettings(picked.providerId && `aiUsage.${picked.providerId}`);
     }
@@ -1734,141 +1798,4 @@ function summarize(accounts: AccountUsage[]): { remainingPercent: number; lines:
 
 export function deactivate(): void {
   // noop
-}
-
-/** A keep-alive or usage-check error for a notification: "Insufficient credits. <what to do>", else the vendor's text. */
-/** The wait a keep-alive sent by hand gives an account check running in another window, told in its progress. */
-function manualLockWait(title: string, progress: vscode.Progress<{ message?: string }>, signal: AbortSignal): LockWait {
-  return { waitMs: MANUAL_CHECK_LOCK_WAIT_MS, signal,
-    onWait: () => progress.report({ message: `waiting for a running ${title} account check…` }) };
-}
-
-function readableProblem(raw: string): string {
-  const problem = explainAccountProblem(raw);
-  const text = problem.advice ? `${problem.label}. ${problem.advice}` : problem.label;
-  return /[.!?]$/.test(text) ? text : `${text}.`;
-}
-
-/** Machine-scoped account automation settings; intervals are bounded even for hand-edited JSON. */
-/** Where the usage history is kept: `aiUsage.history.directory`, or `usage-history` under the extension's global storage. */
-function historyDirectory(context: vscode.ExtensionContext): string {
-  const configured = (vscode.workspace.getConfiguration().get<string>('aiUsage.history.directory', '') ?? '').trim();
-  if (!configured) { return path.join(context.globalStorageUri.fsPath, 'usage-history'); }
-  const expanded = configured === '~' ? os.homedir() : configured.startsWith('~/') ? path.join(os.homedir(), configured.slice(2)) : configured;
-  return path.resolve(os.homedir(), expanded);
-}
-
-function historyOptions(): { enabled: boolean; retentionMs: number } {
-  const config = vscode.workspace.getConfiguration();
-  const days = config.get<number>('aiUsage.history.retentionDays', 365);
-  return { enabled: config.get<boolean>('aiUsage.history.enabled', true), retentionMs: (Number.isFinite(days) ? Math.max(1, days) : 365) * 86_400_000 };
-}
-
-const HISTORY_PERIODS: Array<{ label: string; days?: number }> = [
-  { label: 'Summary of the last 7 days', days: 7 },
-  { label: 'Summary of the last 30 days', days: 30 },
-  { label: 'Summary of the last 90 days', days: 90 },
-  { label: 'Summary of everything kept' }
-];
-
-/** The usage history menu: a summary of a period as a Markdown document, exports, the files and the settings. */
-async function showUsageHistory(history: UsageHistory, thresholds: () => Partial<Record<AuthProvider, Thresholds>>): Promise<void> {
-  type Item = vscode.QuickPickItem & { action?: 'summary' | 'readings' | 'events' | 'jsonl' | 'file' | 'settings'; days?: number };
-  const files = history.files();
-  const retentionDays = Math.round(history.retentionMs / 86_400_000);
-  const items: Item[] = [
-    { label: 'Summary', kind: vscode.QuickPickItemKind.Separator },
-    ...HISTORY_PERIODS.map((period): Item => ({ label: `$(graph) ${period.label}`, action: 'summary', days: period.days })),
-    { label: 'Export', kind: vscode.QuickPickItemKind.Separator },
-    { label: '$(export) Readings as CSV…', description: 'one row per account, reading and window', action: 'readings' },
-    { label: '$(export) Switches, sweeps and check failures as CSV…', action: 'events' },
-    { label: '$(json) Everything as JSON Lines…', description: 'the kept month files in one', action: 'jsonl' },
-    { label: 'Files', kind: vscode.QuickPickItemKind.Separator },
-    { label: '$(file) Open the newest month file', description: history.location, action: 'file' },
-    { label: '$(gear) History settings', description: `aiUsage.history.* · ${history.enabled ? `on, kept ${retentionDays} days` : 'off'}`, action: 'settings' }
-  ];
-  const picked = await vscode.window.showQuickPick(items, {
-    title: 'AI Usage · Usage history', matchOnDescription: true,
-    placeHolder: `${files.length} month file${files.length === 1 ? '' : 's'} in ${history.location}`
-  });
-  if (!picked?.action) { return; }
-  const now = Date.now();
-  if (picked.action === 'summary') {
-    const oldest = files.length ? historyFileStart(path.basename(files[0])) : undefined;
-    const since = picked.days ? now - picked.days * 86_400_000 : oldest ?? now;
-    const summary = summarizeHistory(history.events(since), { since, until: now, thresholds: thresholds() });
-    const content = renderHistoryReport(summary, { label: picked.days ? `the last ${picked.days} days` : 'everything kept',
-      location: history.location, files: files.length, retentionDays });
-    const document = await vscode.workspace.openTextDocument({ language: 'markdown', content });
-    try { await vscode.commands.executeCommand('markdown.showPreview', document.uri); }
-    catch { await vscode.window.showTextDocument(document); }
-    return;
-  }
-  if (picked.action === 'file') {
-    const newest = files[files.length - 1];
-    if (!newest) { void vscode.window.showInformationMessage('AI Usage: no usage history has been recorded yet.'); return; }
-    await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(vscode.Uri.file(newest)));
-    return;
-  }
-  if (picked.action === 'settings') { await openAiUsageSettings('aiUsage.history'); return; }
-  const kind = picked.action;
-  const extension = kind === 'jsonl' ? 'jsonl' : 'csv';
-  const target = await vscode.window.showSaveDialog({
-    title: 'Export usage history',
-    defaultUri: vscode.Uri.file(path.join(os.homedir(), `ai-usage-${kind}-${new Date(now).toISOString().slice(0, 10)}.${extension}`)),
-    filters: kind === 'jsonl' ? { 'JSON Lines': ['jsonl'] } : { CSV: ['csv'] }
-  });
-  if (!target) { return; }
-  const content = kind === 'readings' ? readingsCsv(history.events()) : kind === 'events' ? eventsCsv(history.events())
-    : files.map((file) => fs.readFileSync(file, 'utf8')).join('');
-  await vscode.workspace.fs.writeFile(target, Buffer.from(content, 'utf8'));
-  const choice = await vscode.window.showInformationMessage(`AI Usage: usage history exported to ${target.fsPath}.`, 'Open');
-  if (choice === 'Open') { await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(target)); }
-}
-
-function automationSettings(provider: AuthProvider, authProfiles: AuthProfileManager): AutomationSettings {
-  const config = vscode.workspace.getConfiguration();
-  const prefix = `aiUsage.${provider}`;
-  const defaultHours = provider === 'claude' ? 2 : 6;
-  const periodKey = `${prefix}.keepAlive.periodHours`;
-  const period = config.inspect<number>(periodKey);
-  const configuredPeriod = period?.workspaceFolderValue ?? period?.workspaceValue ?? period?.globalValue;
-  // Versions before 0.0.12 called this intervalHours. Honor a hand-configured legacy value until
-  // the user saves the newly named setting; it is intentionally no longer shown in Settings UI.
-  const legacyPeriod = config.get<number>(`${prefix}.keepAlive.intervalHours`);
-  const hours = configuredPeriod ?? legacyPeriod ?? config.get<number>(periodKey, defaultHours);
-  const threshold = (key: string, fallback: number) => {
-    const value = config.get<number | null>(`${prefix}.autoRotate.${key}`, fallback);
-    return typeof value === 'number' && Number.isFinite(value) ? Math.min(100, Math.max(1, value)) : fallback;
-  };
-  const strategies: RotationStrategy[] = ['sequential', 'soonestReset', 'evenPace', 'leastWaste'];
-  const strategy = config.get<RotationStrategy>(`${prefix}.autoRotate.strategy`, provider === 'claude' ? 'soonestReset' : 'sequential');
-  const minStay = config.get<number>(`${prefix}.autoRotate.minStayMinutes`, 30);
-  return {
-    enabled: authProfiles.automationEnabled(provider, 'keepAlive'),
-    autoRotate: authProfiles.automationEnabled(provider, 'autoRotate'),
-    // Codex defaults to rotating on a used-up 5-hour window only; lower it to leave before the window runs out.
-    fiveHourThresholdPercent: threshold('fiveHourThresholdPercent', provider === 'claude' ? 95 : 100),
-    weeklyThresholdPercent: threshold('weeklyThresholdPercent', provider === 'claude' ? 99.5 : 99),
-    countsWindow: modelWindowFilter(config.get<string>(`${prefix}.autoRotate.modelLimits`, 'auto'),
-      provider === 'claude' ? claudeCodeModel() : undefined),
-    strategy: strategies.includes(strategy) ? strategy : 'sequential',
-    trigger: config.get<RotationTrigger>(`${prefix}.autoRotate.trigger`, 'limit') === 'proactive' ? 'proactive' : 'limit',
-    minStayMs: (Number.isFinite(minStay) ? Math.max(5, minStay) : 30) * 60_000,
-    intervalMs: (Number.isFinite(hours) ? Math.max(0.25, hours) : defaultHours) * 3_600_000,
-    // Account probes always call the service endpoint, whatever source the status bar reads, so they
-    // are spaced by the endpoint's own interval and never by a local file's.
-    checkIntervalMs: settingsFor(provider).apiCheckIntervalMs,
-    home: config.get<string>(`${prefix}.keepAlive.home`, `~/.${provider}-tmp`),
-    cliPath: config.get<string>(`${prefix}.cliPath`, provider),
-    model: config.get<string>(`${prefix}.keepAlive.model`, provider === 'claude' ? 'haiku' : 'gpt-5.6-luna')
-  };
-}
-
-/** The model Claude Code is configured to use (its user settings `model`), or undefined when unset or unreadable. */
-function claudeCodeModel(): string | undefined {
-  try {
-    const settings = JSON.parse(fs.readFileSync(path.join(claudeConfigDir(), 'settings.json'), 'utf8'));
-    return typeof settings?.model === 'string' && settings.model.trim() ? settings.model.trim() : undefined;
-  } catch { return undefined; }
 }

@@ -123,30 +123,34 @@ for details.
 
 Authentication profiles are commands, not settings, because credentials must never appear in `settings.json`.
 Run **AI Usage: Manage Claude/Codex Authentication Profiles** to save the current native login, import a credential
-JSON file, rename/delete profiles, or activate one of up to 20 profiles per service. Profile names and the selected
-profile id are non-secret extension metadata; credential bodies are stored individually in VS Code
-`SecretStorage`.
+JSON file, rename/delete profiles, or activate one of up to 20 profiles per service. The profiles, logins included,
+are kept by the [account service](#account-service) in `~/.ai-usage/profiles.json` (mode 0600), or in a project's
+profile file; the extension and the `ai-usage` command only ever go through the service.
 
 ### Private and project profiles
 
-A profile is either **private** or a **project** profile. Private profiles are the ones described above: their names
-in the extension's global state and their logins in VS Code `SecretStorage`, with the VS Code client. Project
-profiles live in the workspace folder, in `.ai-usage.profiles.json` by default (`aiUsage.projectProfiles.file` sets
-another path, relative to the folder), name and login together (mode `0600` on Linux and macOS; the file has the
-format of a profile export), and are listed whenever that folder is open, on any computer that opens it. Both kinds appear in the same Accounts menu; a project profile shows `project <folder>` beside its
-email. Refreshed tokens, renames and deletions are written back to the file, and a file edited by hand is read again
-when it changes.
+A profile is either **private** or a **project** profile. Private profiles are the ones described above, kept by the
+account service in `~/.ai-usage/profiles.json`. Project profiles live in the workspace folder, in
+`.ai-usage.profiles.json` by default (`aiUsage.projectProfiles.file` sets another path, relative to the folder),
+name and login together (mode `0600` on Linux and macOS; the file has the format of a profile export), and are
+listed whenever a connected window has that folder open, on any computer that opens it, or when `ai-usage` runs
+with `--project[=<dir>]` or from a directory that holds such a file. Both kinds appear in the same Accounts menu
+and in `ai-usage list`; a project profile shows `project <folder>` beside its email. Refreshed tokens, renames and
+deletions are written back to the file, and a file edited by hand is read again when it changes.
 
 **Save current login…** and **Import credential JSON…** ask which kind to create when both kinds are enabled and a
 local folder is open; with only one kind possible, that kind is used without asking. `aiUsage.privateProfiles.enabled`
 and `aiUsage.projectProfiles.enabled`, both on by default, are the switches; turning one off only stops new profiles
 of that kind, and existing ones stay listed (project profiles are not loaded at all while their switch is off).
 **Import saved profiles…** always adds private profiles; to make project profiles from an export, copy the export
-file to the folder's `.ai-usage.profiles.json`.
+file to the folder's `.ai-usage.profiles.json`. From a terminal, `ai-usage save <service> <name> --project` and
+`ai-usage import … --project` keep the new profile in the current directory's file (`--project=<dir>` names
+another folder). The three settings are mirrored to the service's `privateProfiles.enabled`,
+`projectProfiles.enabled` and `projectProfiles.file`.
 
-Known limitation: the extension is one per window, so the project profiles of every folder open in a window are
-merged into one list, and a project can be used with another open project's profiles. Keeping them apart per folder
-may come later.
+Known limitation: the account service is one per host, so the project profiles of every folder open in any
+connected window (and any folder named to `ai-usage --project`) are merged into one list, and a project can be
+used with another open project's profiles. Keeping them apart per folder may come later.
 
 The file holds login tokens in plain text. When the folder is a Git repository, the first project profile saved
 there adds the file's path to the folder's `.gitignore`, and a notification says so. Do not commit the file.
@@ -157,17 +161,16 @@ OAuth profile endpoint (or the local Claude Code account file when offline) when
 refreshed, and once for older profiles when the menu opens. The email is stored with the profile name as non-secret
 metadata.
 
-The Accounts menu lists the saved profiles with their email, last usage reading and check time, marks the active
+The Accounts menu lists the saved profiles with their email, last valid usage reading and check time, marks the active
 one, and follows with **Save current login…** and **Manage saved profiles…**:
 
 ![Codex Accounts menu with the saved profiles and their usage](../images/screenshots/accounts-codex-profiles.png)
 
 ![Save current login… item](../images/screenshots/accounts-save-login.png)
-
-**Manage saved profiles…** contains **Import credential JSON…** and **Export or import saved profiles…** even when
-no profiles are saved. With saved profiles, it also offers **Sign in again…**, **Rename a profile…**,
-**Move a profile up or down…** (from two profiles) and **Delete a saved profile…**. Each action returns to this
-submenu, and **Back** returns to the Accounts menu.
+**Manage saved profiles…** contains credential import and profile transfer even when no profiles are saved. With
+saved profiles it also offers sign-in, rename, move and delete. Moving a profile changes the order used by the
+Accounts menu and sequential rotation; a project profile moves within its own folder. The terminal equivalent is
+`ai-usage move <service> <profile> up|down`.
 
 The AI Usage menu of all services confirms which profile is active and shows its detected plan:
 
@@ -185,9 +188,10 @@ an expired token, and when the login cannot be refreshed its failure notificatio
 **Select anyway** (activates the login as it is) and **Back**. The sign-in runs the vendor CLI's login in a
 terminal whose home is a folder inside the keep-alive
 home, so the active login is not touched; the new login is stored in the profile, and written to the native file
-only when that profile is the active one. While the sign-in is pending, that service's keep-alives and rotation
-wait for it, and a keep-alive started by hand says that a sign-in is in progress; the wait ends with the sign-in,
-or after 20 minutes at most. A keep-alive or usage check that finds a login revoked, or expired and not
+only when that profile is the active one. While the sign-in is pending (from **Sign in again…** or `ai-usage
+login`), that service's keep-alives and rotation wait for it, and a keep-alive or sweep started by hand says that
+a sign-in is in progress; the wait ends with the sign-in, or after 20 minutes at most. A keep-alive or usage check
+that finds a login revoked, or expired and not
 refreshable, says so once in a notification with the same **Sign in again** action. Signing in natively and using
 **Save current login** to replace the profile still works too.
 
@@ -202,16 +206,16 @@ Command Palette has them as **AI Usage: Export Claude/Codex Authentication Profi
 Claude/Codex Authentication Profiles…**. **Export saved profiles…** lists every saved Claude and Codex profile,
 preselected, and writes the chosen ones with their logins to a JSON file, which then opens in the editor; on Linux
 and macOS the file gets mode `0600`. **Import saved profiles…** reads that file and shows what each entry would do before anything is written. A profile not saved here is added with its name (numbered when the name is taken), email and
-account id. A profile that is saved here but has no login in SecretStorage gets the login restored. One whose saved
+account id. A profile that is saved here but has no login stored gets the login restored. One whose saved
 login differs is left unselected and replaces the login only when chosen, and one already saved with the same login
 is skipped. Nothing is activated, and the 20-profile limit per service applies. The export file holds the login
 tokens in plain text: import it, then delete it.
 
-VS Code keeps an extension's global state and its SecretStorage with the VS Code client, the computer that runs
-VS Code, also for a Remote-SSH, WSL or container window. The saved profiles are therefore those of the computer in
-front of you, whichever host the window is connected to, and activating one writes the native credential file of
-that host. Another computer, even one that connects to the same remote host, starts with an empty profile list;
-export and import carry the profiles across.
+The saved profiles belong to the [account service](#account-service) of the host the extension runs on: your
+computer in an ordinary window, the remote host in a Remote-SSH, WSL or container window. Every window connected
+to that host, and the `ai-usage` command there, see the same profiles, and activating one writes that host's
+native credential file. Another computer starts with an empty profile list; export and import carry the profiles
+across.
 
 An exported login is a copy of the same session, not a new sign-in. Both vendors rotate the refresh token whenever
 a login is refreshed, after which a copy that still holds the old refresh token fails its next refresh with
@@ -281,12 +285,14 @@ for reading usage and for its profile commands, so the two windows stay independ
 
 The extension is workspace-first. In Remote-SSH, WSL, and dev-container windows it runs remotely and manages that
 host's native credential files; in an ordinary Windows/macOS/Linux window it runs locally. The saved profiles and
-their logins are kept by the VS Code client either way, so they never reach a remote host's disk, and a profile list
-only moves to another computer through **Export saved profiles…** and **Import saved profiles…** (see
-[Moving profiles to another computer](#moving-profiles-to-another-computer)).
+their logins are kept by the account service of that same host, in `~/.ai-usage/profiles.json` (mode 0600 inside
+a mode 0700 directory), and a profile list only moves to another computer through **Export saved profiles…** and
+**Import saved profiles…** (see [Moving profiles to another computer](#moving-profiles-to-another-computer)).
 
 The active native credential is necessarily still plaintext and readable by processes running as your OS user.
-SecretStorage protects the inactive saved copies from project files and ordinary extension storage; it does not
+The saved copies are in the same class: a mode-0600 file of the same user, like the vendors' own credential files.
+Earlier versions kept them in VS Code's SecretStorage, which protected them from project files and ordinary
+extension storage but not from processes running as you; the service's file does not
 change the security model of the vendor CLI. Credential files selected with **Import** are not deleted by the
 extension.
 
@@ -336,16 +342,83 @@ starts while the setting is set. Invalid values and an `agents = { … }` inline
 AI Usage log.
 
 
+## Account service
+
+Saved profiles, keep-alives and automatic rotation run in a background service, one per host, that the extension
+installs and manages and that the `ai-usage` command controls. It runs whether VS Code is open or not.
+
+**Installation.** On activation, with no service installed, the extension asks once per session: **Install**,
+**Not now** or **Don't ask again** (which turns `aiUsage.accountService.enabled` off; turn it on again to be
+asked again, or run **AI Usage: Install Account Service**). The extension copies the service package it carries to
+`~/.ai-usage/service/<version>`, writes the `ai-usage` launcher to `~/.ai-usage/bin`, registers the service to
+start at sign-in and starts it. It looks for Node.js 20 or newer on the PATH and in the usual install locations
+(`nvm`, `volta`, `/usr/local/bin`, …), and falls back to VS Code's own runtime (`ELECTRON_RUN_AS_NODE`) or, in a
+remote window, the VS Code server's. `AI_USAGE_NODE` names one explicitly. When the extension is updated and
+carries a newer service, the installed one is replaced and restarted without asking. The profiles the extension
+kept in VS Code's SecretStorage before are moved into the service once and removed there.
+
+**Autostart.** Linux: a systemd user unit `ai-usage.service` in `~/.config/systemd/user`, enabled, with
+`loginctl enable-linger` attempted so the service also runs while you are logged out (when that needs a password,
+the log says so and the service runs while you are logged in). macOS: a launchd agent
+`~/Library/LaunchAgents/com.p0l0us.ai-usage.plist`, restarted after a crash but not after a deliberate stop.
+Windows: a value under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` that starts the service hidden.
+Without a systemd user manager (some containers) nothing is registered; the extension and the `ai-usage` command
+start the service when they need it.
+
+**The `ai-usage` command.** `ai-usage --help` lists everything. `ai-usage` alone in a terminal opens the live
+view; `status` and `list` print the same information, `use <service> <profile>` switches (by name, number or
+id), `save`, `import`, `rename`, `delete`, `login`, `keepalive`, `rotate`, `export` and `import-profiles`
+do what the Accounts menus do, `config` shows or changes the settings, `service status|install|uninstall|start|
+stop|restart|run` manages the service, `log` shows its log and `mcp` serves the
+[MCP tools for AI agents](#mcp-server-for-ai-agents-experimental). `--project[=<dir>]` lists a project folder's
+profiles and, with `save` and `import`, keeps the new profile there. VS Code terminals see the command through
+the extension's terminal environment; elsewhere add `~/.ai-usage/bin` to your PATH.
+
+**Settings.** The service keeps its settings in `~/.ai-usage/config.json`; `ai-usage config` reads and writes
+them and the extension keeps them equal to `aiUsage.claude.*`, `aiUsage.codex.*`, the profile scope settings and
+`aiUsage.mcp.*`: the first connection seeds the service from the user settings, after that a change in Settings
+is pushed to the service and a change made with `ai-usage config` is written to the user settings. The usage
+sources of the status bar (`aiUsage.<service>.source`) stay with the extension.
+
+**What is where.** Everything is under `~/.ai-usage` (`AI_USAGE_HOME` moves it): `profiles.json` (the private
+profiles with their logins, mode 0600), `config.json`, `state/` (per-account readings, sweep records, lock files
+and the Claude endpoint call ledger, shared with the extension's status bar reads), `service.log`, `service.sock`
+(a named pipe on Windows) and `service.token`, which clients present first. **AI Usage: Account Service…** shows
+the status, opens the log and starts, stops, restarts, reinstalls or uninstalls the service; uninstalling keeps the
+data files.
+
+| Setting | Default | Purpose |
+| --- | --- | --- |
+| `aiUsage.accountService.enabled` | `true` | Install, start and use the account service. Off: no Accounts menus, keep-alives or rotation. |
+
+## MCP server for AI agents (experimental)
+
+The account service can serve its profiles to AI agents over the Model Context Protocol: `ai-usage mcp` is a stdio
+MCP server whose tools list every saved profile with its usage windows (`list_accounts`), read a fresh reading for
+one profile (`refresh_usage`) and, when allowed, switch the active account (`switch_account`) or run a rotation
+sweep (`rotate_account`). While it is on, the extension also offers the server to the agents of the VS Code window
+as **AI Usage accounts**, so Copilot agent mode and other consumers of the editor's MCP servers see it without any
+configuration. **Set up MCP server…** in the top-level AI Usage menu installs and enables it, then registers it with
+the Claude or Codex CLI. Their Accounts menus offer the same registration while MCP is on. Registration runs the
+CLI's own `mcp add` for `~/.ai-usage/bin/ai-usage mcp`, and other command-line agents register that command
+themselves. The feature is experimental, off by default, and described in [MCP server for AI agents](MCP.md): the tools, their answers, how to register the
+server with Claude Code and Codex, and what a switch by an agent means.
+
+| Setting | Default | Purpose |
+| --- | --- | --- |
+| `aiUsage.mcp.enabled` | `false` | Serve the MCP tools and offer the server to the agents of this window. Mirrored to the service's `mcp.enabled`; checked on every tool call. |
+| `aiUsage.mcp.switching` | `true` | Offer `switch_account` and `rotate_account`; off leaves agents the usage tools only. Mirrored to `mcp.switching`. |
+
 ## Account automation
 
 Save or import each subscription login in **AI Usage: Manage Claude/Codex Authentication Profiles**. Under each
 provider's **Accounts** menu you can switch accounts manually and send a keep-alive on demand; both features are
 turned on in Settings, per provider, and default to off. The menu shows their current state and links to Settings.
 
-Account checks of one service run one at a time across all windows. A keep-alive sent by hand that finds a check
-running in another window waits for it, up to 3 minutes, and says so in its progress notification, which can be
-cancelled; **All accounts** then keeps its turn for the whole sweep, so a periodic check cannot cut in between two
-accounts. Once the wait runs out, the notification says that the accounts were not sent.
+Account checks of one service run one at a time in the account service. A keep-alive sent by hand that finds a
+sweep running waits for it, up to 3 minutes, and says so in its progress notification, which can be cancelled;
+**All accounts** (and `ai-usage keepalive --all`) runs as one sweep in the service, so a periodic check cannot cut
+in between two accounts. Once the wait runs out, the notification says that the accounts were not sent.
 
 ![Send keep-alive now… item under Account features](../images/screenshots/accounts-keep-alive-now.png)
 ![Claude Keep-alive and rotation settings… item: keep-alive on, rotation on with leastWaste and proactive](../images/screenshots/accounts-keep-alive-settings-claude.png)
@@ -381,10 +454,10 @@ expanded. Credentials are staged using an atomic write with mode 0600 on POSIX a
 The CLI may retain its own diagnostic/configuration files there. Refreshed credentials are saved back only if the
 saved profile has not changed in the meantime; an unchanged active native login receives refreshed tokens too.
 
-Per-account readings and attempt timestamps persist in the extension's global storage without credentials.
-A one-minute scheduler checks due accounts; closing all windows pauses it. Reopening runs each overdue account
-once, without replaying missed intervals. Each provider checks its accounts sequentially and uses an exclusive
-lock across windows. Failed keep-alive attempts wait the configured interval; transient usage errors honor the
+Per-account readings and attempt timestamps persist in the service's `state` directory without credentials.
+The service's one-minute scheduler checks due accounts whether VS Code is open or not; after the service was
+stopped, each overdue account is checked once, without replaying missed intervals. Each provider checks its
+accounts sequentially. Failed keep-alive attempts wait the configured interval; transient usage errors honor the
 provider check interval and any longer `Retry-After`.
 
 ### Rotation strategies and thresholds
@@ -411,42 +484,45 @@ and [Claude CLI reference](https://code.claude.com/docs/en/cli-reference).
 
 ## Usage history
 
-On by default (`aiUsage.history.enabled`), the extension appends what it learns about the saved Claude and Codex
-accounts to one JSON Lines file per month, `history-YYYY-MM.jsonl`, in `usage-history` under its global storage on
-the computer it runs on (the remote host in a remote session; **AI Usage: Show Usage History…** shows the path), or
-in `aiUsage.history.directory` (`~` and paths relative to your home work). A file is deleted once its whole month is
-older than `aiUsage.history.retentionDays` (365). No login material is written: an account appears as its profile
-id, name and email. Every window on the host appends to the same files; an `index.json` beside them keeps the last
-recorded reading per account and the last switch per service, so the windows do not each write the same reading.
+On by default (`aiUsage.history.enabled`), the account service appends what it learns about the saved Claude and
+Codex accounts to one JSON Lines file per month, `history-YYYY-MM.jsonl`, in `usage-history` under its home
+(`~/.ai-usage` on the computer the service runs on, the remote host in a remote session; **AI Usage: Show Usage
+History…** and `ai-usage history path` show the path), or in `aiUsage.history.directory` (`~` and paths relative to
+your home work). A file is deleted once its whole month is older than `aiUsage.history.retentionDays` (365). No login
+material is written: an account appears as its profile id, name and email. An `index.json` beside the files keeps the
+last recorded reading per account and the last switch per service, so an unchanged reading is written once an hour at
+most. The three settings are mirrored to the service's `history.enabled`, `history.retentionDays` and
+`history.directory`, which `ai-usage config` sets too.
 
 Each line is one event with `t` (when it was written, ISO 8601), `provider` and `type`:
 
 | `type` | When | What it holds |
 | --- | --- | --- |
 | `reading` | A saved account was read by the status bar (`source: status`), a keep-alive (`keepAlive`), a rotation sweep (`rotation`) or another check (`check`), and its figures changed, or an hour passed since the last recorded reading of that account | `account`, `active` (whether it was the active login), `usage` with the vendor's `at`, `plan` and `windows` (`label`, `usedPercent`, `resetsAt`) |
-| `switch` | The active account changed | `from`, `to`, `reason` (`limit`, `proactive`, `manual`, or `external` for a switch made in another window or with the vendor CLI), `automatic`, `stayedMs` (how long `from` had been active), `fromUsage`, `toUsage`; for rotation also `settings` (strategy, trigger, thresholds, minimum stay), `calls` (endpoint calls the sweep spent) and `candidates`: every other account in the order the strategy preferred them, with its stored `score`, whether it looked `usable`, its fresh `usage` and `freshScore` when it was read, and its `outcome`: `chosen`, `problem` (its last check failed), `limited` (still at a threshold with the reset ahead), `notBetter` (not clearly better for a proactive switch), `ineligible` (at a threshold on the fresh reading, or a window missing), `keepAliveFailed`, `notReached` |
+| `switch` | The active account changed | `from`, `to`, `reason` (`limit`, `proactive`, `manual`, or `external` for a switch made with the vendor CLI or by hand outside the service), `automatic`, `stayedMs` (how long `from` had been active), `fromUsage`, `toUsage`; for rotation also `settings` (strategy, trigger, thresholds, minimum stay), `calls` (endpoint calls the sweep spent) and `candidates`: every other account in the order the strategy preferred them, with its stored `score`, whether it looked `usable`, its fresh `usage` and `freshScore` when it was read, and its `outcome`: `chosen`, `problem` (its last check failed), `limited` (still at a threshold with the reset ahead), `notBetter` (not clearly better for a proactive switch), `ineligible` (at a threshold on the fresh reading, or a window missing), `keepAliveFailed`, `notReached` |
 | `sweep` | A rotation sweep spent endpoint calls and switched nothing | `outcome` (`activeRecovered`: the stored reading was out of date; `noBetterCandidate`; `noCandidate`), `usage`, `candidates`, `calls`, `settings` |
 | `exhausted` | The active account reached a threshold and no saved account could take over; once per such stretch | `active`, `usage`, `reached` (the windows at their threshold), `candidates`, `nextCandidateAt` (the earliest reset among the candidates still at their limit) |
 | `recovered` | That stretch ended | `by` (`reset`: the active account read below its thresholds again; `switch`), `afterMs` |
 | `check` | An account check started failing, failed differently, or works again | `account`, `ok`, `keepAlive`, `error`, `problem` (the error in a few words) |
 
-**AI Usage: Show Usage History…** (also **Usage history** in the details panel) summarizes the last 7, 30 or 90 days
-or everything kept as a Markdown document: per account the time as the active login (measured between switches),
-the weekly cycles seen (one per reset; a cycle is complete once its reset has passed) with their mean peak and how
-many reached the limit, 5-hour cycles at the limit, readings and failed checks; per service the switches by reason
-with the median stay, the time with every account at its limit at once, the sweeps that switched nothing and the
-endpoint calls rotation spent; and an estimate of how many accounts the observed weekly use needs: the accounts'
-mean weekly peaks add up to the weekly demand in account-weeks, an account counts as full at 85%, and one more
-account than saved is needed whenever every account was at its limit at once. The estimate uses weekly windows only;
-5-hour bursts can still force switches, and a proactive strategy spreads use over accounts, so each account's peak
-understates what a single account would have used. The menu also exports the readings (one row per account, reading
-and window) or the other events as CSV, everything as JSON Lines, and opens the newest file.
+**AI Usage: Show Usage History…** (also **Usage history** in the details panel) and `ai-usage history` (the last 30
+days by default, `--days <n>` or `--all`) summarize a period as a Markdown document: per account the time as the
+active login (measured between switches), the weekly cycles seen (one per reset; a cycle is complete once its reset
+has passed) with their mean peak and how many reached the limit, 5-hour cycles at the limit, readings and failed
+checks; per service the switches by reason with the median stay, the time with every account at its limit at once,
+the sweeps that switched nothing and the endpoint calls rotation spent; and an estimate of how many accounts the
+observed weekly use needs: the accounts' mean weekly peaks add up to the weekly demand in account-weeks, an account
+counts as full at 85%, and one more account than saved is needed whenever every account was at its limit at once.
+The estimate uses weekly windows only; 5-hour bursts can still force switches, and a proactive strategy spreads use
+over accounts, so each account's peak understates what a single account would have used. The menu and `ai-usage
+history export readings|events|jsonl [file]` also export the readings (one row per account, reading and window) or
+the other events as CSV, and everything as JSON Lines; the menu opens the newest file.
 
 | Setting | Default | Purpose |
 | --- | --- | --- |
 | `aiUsage.history.enabled` | `true` | Record readings, switches, sweeps, exhausted stretches and check changes. |
 | `aiUsage.history.retentionDays` | `365` | Delete a month's file once the whole month is older than this. |
-| `aiUsage.history.directory` | *(empty)* | Where the files go; empty is `usage-history` under the extension's global storage. A changed directory is used from the next event on; existing files are not moved. |
+| `aiUsage.history.directory` | *(empty)* | Where the files go; empty is `usage-history` under the service home. A changed directory is used from the next event on; existing files are not moved. |
 
 Copilot CLI bridge also exposes per-backend `subagentsEnabled` (default true in VS Code), `requestTimeoutMinutes`, and `toolTimeoutMinutes` (both default 60, range 1–1440). Native children delegate through Copilot’s tool relay. The `list_cli_subagents` tool shows native children and saved branches; `fork_cli_session` runs an analysis branch from a completed saved session.
 

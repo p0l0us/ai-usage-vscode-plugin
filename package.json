@@ -2,7 +2,7 @@
   "name": "ai-usage-vscode-plugin",
   "displayName": "AI subscription management and usage",
   "description": "Manage your Claude Code, Codex and GitHub Copilot subscriptions and see what is left of them: switch between saved accounts without signing in again, keep them warm, rotate on exhaustion, and read live 5h/7d windows, premium requests and org billing in the status bar and chat input. Open source, contributions welcome.",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "publisher": "p0l0us",
   "license": "GPL-3.0-only",
   "repository": {
@@ -85,6 +85,14 @@
       {
         "command": "aiUsage.importAuthProfiles",
         "title": "AI Usage: Import Claude/Codex Authentication Profiles…"
+      },
+      {
+        "command": "aiUsage.installAccountService",
+        "title": "AI Usage: Install Account Service"
+      },
+      {
+        "command": "aiUsage.accountService",
+        "title": "AI Usage: Account Service…"
       },
       {
         "command": "aiUsage.checkCopilotIntegration",
@@ -6910,6 +6918,12 @@
         "title": "General",
         "order": 1,
         "properties": {
+          "aiUsage.accountService.enabled": {
+            "type": "boolean",
+            "default": true,
+            "order": 0,
+            "markdownDescription": "**Manage Claude and Codex accounts through the background account service.** The service keeps the saved profiles, sends keep-alives and rotates accounts while VS Code is closed, and is controlled by the `ai-usage` command as well as by this extension. The extension installs it under `~/.ai-usage` with your permission and registers it to start when you sign in. Off: the extension neither installs nor starts it, and the Accounts menus, keep-alives and rotation are unavailable. See [Account service](https://github.com/p0l0us/ai-usage-vscode-plugin/blob/main/docs/CONFIGURATION.md#account-service)."
+          },
           "aiUsage.chatChips.agentsWindow": {
             "type": "boolean",
             "default": true,
@@ -6934,30 +6948,6 @@
             "minimum": 0.25,
             "order": 3,
             "markdownDescription": "How often (minutes) every window re-reads the shared cache and redraws the status bar and chat chips. Applies to all sources (service API, CLI, session log). The sources themselves are only called when the cached reading is older than the per-service `checkIntervalMinutes`."
-          },
-          "aiUsage.privateProfiles.enabled": {
-            "type": "boolean",
-            "default": true,
-            "order": 90,
-            "markdownDescription": "**Private profiles.** Keep saved Claude and Codex profiles in this VS Code client's SecretStorage, the usual place. When project profiles are enabled too and a local folder is open, saving a profile asks which kind to create; with only one kind possible, that kind is used without asking. Turning this off only stops new private profiles; existing ones stay listed."
-          },
-          "aiUsage.projectProfiles.enabled": {
-            "type": "boolean",
-            "default": true,
-            "order": 91,
-            "markdownDescription": "**Project profiles.** Also load and save Claude and Codex profiles in each open workspace folder's project profile file (`#aiUsage.projectProfiles.file#`, `.ai-usage.profiles.json` by default), login included, so they travel with the project and are listed whenever it is open. Known limitation: the extension is one per window, so the project profiles of every folder open in a window are merged into one list, and a project can be used with another open project's profiles. The file holds login tokens in plain text; when the folder is a Git repository, it is added to its `.gitignore`."
-          },
-          "aiUsage.projectProfiles.file": {
-            "type": "string",
-            "default": ".ai-usage.profiles.json",
-            "order": 92,
-            "markdownDescription": "**Project profile file.** Path of the file that holds a project's profiles, relative to each workspace folder. It has the format of a profile export and is written with mode `0600`; when the folder is a Git repository, the path is added to its `.gitignore` the first time a project profile is saved there."
-          },
-          "aiUsage.serviceProfiles.enabled": {
-            "type": "boolean",
-            "default": true,
-            "order": 93,
-            "markdownDescription": "**Account service profiles.** Also list and use the profiles kept by the AI Usage account service in `~/.ai-usage/profiles.json` (or `$AI_USAGE_HOME`), logins included. A build with the account service moves the saved profiles there once and removes them from SecretStorage; this keeps them listed in builds without the service. Changes such as refreshed logins, renames, reordering and deletions are written back to that file. With the file present, saving a profile also offers it as the place to keep it."
           },
           "aiUsage.statusBar.labels": {
             "type": "string",
@@ -7040,6 +7030,24 @@
               "One chip per window, e.g. \"Claude 4% (5h)\" \"26% (7d)\" (default). VS Code renders each figure as its own toolbar item."
             ],
             "description": "How much of the usage the chat chips show. Copilot has a single monthly window, so both look the same for it."
+          },
+          "aiUsage.privateProfiles.enabled": {
+            "type": "boolean",
+            "default": true,
+            "order": 90,
+            "markdownDescription": "**Private profiles.** Keep saved Claude and Codex profiles privately in the account service's own file (`~/.ai-usage/profiles.json`), the usual place, listed in every window on this host. When project profiles are enabled too and a local folder is open, saving a profile asks which kind to create; with only one kind possible, that kind is used without asking. Turning this off only stops new private profiles; existing ones stay listed. Mirrored to the service's `privateProfiles.enabled` setting."
+          },
+          "aiUsage.projectProfiles.enabled": {
+            "type": "boolean",
+            "default": true,
+            "order": 91,
+            "markdownDescription": "**Project profiles.** Also load and save Claude and Codex profiles in each open workspace folder's project profile file (`#aiUsage.projectProfiles.file#`, `.ai-usage.profiles.json` by default), login included, so they travel with the project and are listed whenever it is open. Known limitation: the account service is one per host, so the project profiles of every folder open in any connected window are merged into one list, and a project can be used with another open project's profiles. The file holds login tokens in plain text; when the folder is a Git repository, it is added to its `.gitignore`. Mirrored to the service's `projectProfiles.enabled` setting."
+          },
+          "aiUsage.projectProfiles.file": {
+            "type": "string",
+            "default": ".ai-usage.profiles.json",
+            "order": 92,
+            "markdownDescription": "**Project profile file.** Path of the file that holds a project's profiles, relative to each workspace folder. It has the format of a profile export and is written with mode `0600`; when the folder is a Git repository, the path is added to its `.gitignore` the first time a project profile is saved there. Mirrored to the service's `projectProfiles.file` setting."
           }
         }
       },
@@ -7675,27 +7683,51 @@
             "type": "boolean",
             "default": true,
             "order": 1,
-            "markdownDescription": "**Usage history.** Record every reading of every saved Claude and Codex account, every account switch (by hand, or by rotation together with the accounts it considered and what it did with each), the rotation sweeps that switched nothing, the stretches with every account at its limit, and checks that start or stop failing, so account use and the rotation rules can be analysed later. **AI Usage: Show Usage History…** summarizes a period and exports CSV or JSON Lines. One file per month in `#aiUsage.history.directory#`, kept for `#aiUsage.history.retentionDays#`. No login material is recorded."
+            "markdownDescription": "**Usage history.** The account service records every reading of every saved Claude and Codex account, every account switch (by hand, or by rotation together with the accounts it considered and what it did with each), the rotation sweeps that switched nothing, the stretches with every account at its limit, and checks that start or stop failing, so account use and the rotation rules can be analysed later. **AI Usage: Show Usage History…** and `ai-usage history` summarize a period and export CSV or JSON Lines. One file per month in `#aiUsage.history.directory#`, kept for `#aiUsage.history.retentionDays#`. No login material is recorded. Mirrored to the service's `history.enabled` setting."
           },
           "aiUsage.history.retentionDays": {
             "type": "number",
             "default": 365,
             "minimum": 1,
             "order": 2,
-            "markdownDescription": "**How long usage history is kept, in days.** A month's file is deleted once the whole month is older than this; 365 keeps a year."
+            "markdownDescription": "**How long usage history is kept, in days.** A month's file is deleted once the whole month is older than this; 365 keeps a year. Mirrored to the service's `history.retentionDays` setting."
           },
           "aiUsage.history.directory": {
             "type": "string",
             "default": "",
             "order": 3,
             "scope": "machine",
-            "markdownDescription": "**Where usage history is written.** Empty: `usage-history` under the extension's global storage on the computer the extension runs on (the remote host in a remote session); the history menu shows the path. Supports `~`; a relative path resolves from your user home. Point it at a synced or shared folder to analyse the files elsewhere. A changed directory is used from the next event on; existing files are not moved."
+            "markdownDescription": "**Where usage history is written.** Empty: `usage-history` under the account service's home (`~/.ai-usage` on the computer the service runs on, the remote host in a remote session); the history menu shows the path. Supports `~`; a relative path resolves from your user home. Point it at a synced or shared folder to analyse the files elsewhere. A changed directory is used from the next event on; existing files are not moved. Mirrored to the service's `history.directory` setting."
+          }
+        }
+      },
+      {
+        "title": "AI agents (experimental)",
+        "order": 9,
+        "properties": {
+          "aiUsage.mcp.enabled": {
+            "type": "boolean",
+            "default": false,
+            "order": 0,
+            "tags": [
+              "experimental"
+            ],
+            "markdownDescription": "**Experimental.** Offer AI agents an MCP server whose tools list every saved Claude Code and Codex profile with its usage windows and, when `#aiUsage.mcp.switching#` allows, switch the active account. Agents of this VS Code window (Copilot agent mode and every other consumer of the editor's MCP servers) see it as **AI Usage accounts** as soon as this is on; the Claude and Codex Accounts menus register it with their CLIs (**Register the MCP server with the … CLI…**), and other command-line agents register `ai-usage mcp` themselves. Needs the account service. Mirrored to the service's `mcp.enabled` setting. See [MCP server for AI agents](https://github.com/p0l0us/ai-usage-vscode-plugin/blob/main/docs/MCP.md)."
+          },
+          "aiUsage.mcp.switching": {
+            "type": "boolean",
+            "default": true,
+            "order": 1,
+            "tags": [
+              "experimental"
+            ],
+            "markdownDescription": "Let agents change the active account through the MCP server (`switch_account` and `rotate_account`). Off: only the usage tools (`list_accounts` and `refresh_usage`) are offered. Mirrored to the service's `mcp.switching` setting."
           }
         }
       },
       {
         "title": "Advanced",
-        "order": 9,
+        "order": 10,
         "properties": {
           "aiUsage.chatChips.debug": {
             "type": "boolean",
@@ -20169,11 +20201,17 @@
         "displayName": "AI Usage CLI Bridge",
         "managementCommand": "aiUsage.refreshBridgeModels"
       }
+    ],
+    "mcpServerDefinitionProviders": [
+      {
+        "id": "aiUsage.accounts",
+        "label": "AI Usage accounts"
+      }
     ]
   },
   "scripts": {
-    "compile": "node scripts/generate-manifest.js && tsc -p ./",
-    "test": "npm run compile && node --test test/*.test.js",
+    "compile": "node scripts/generate-manifest.js && tsc -p service && tsc -p ./",
+    "test": "npm run compile && node --test test/*.test.js service/test/*.test.js",
     "watch": "tsc -watch -p ./",
     "generate": "node scripts/generate-manifest.js",
     "dev:install": "node scripts/dev-install.js",
@@ -20185,7 +20223,9 @@
     "publish": "node scripts/publish.js",
     "publish:pre": "node scripts/publish.js --pre-release",
     "publish:all": "node scripts/publish.js --ovsx",
-    "publish:dry": "node scripts/publish.js --dry-run"
+    "publish:dry": "node scripts/publish.js --dry-run",
+    "compile:service": "tsc -p service",
+    "watch:service": "tsc -watch -p service"
   },
   "devDependencies": {
     "@types/node": "^24.4.0",
