@@ -2,7 +2,7 @@
   "name": "ai-usage-vscode-plugin",
   "displayName": "AI subscription management and usage",
   "description": "Manage your Claude Code, Codex and GitHub Copilot subscriptions and see what is left of them: switch between saved accounts without signing in again, keep them warm, rotate on exhaustion, and read live 5h/7d windows, premium requests and org billing in the status bar and chat input. Open source, contributions welcome.",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "publisher": "p0l0us",
   "license": "GPL-3.0-only",
   "repository": {
@@ -6922,7 +6922,7 @@
             "type": "boolean",
             "default": true,
             "order": 0,
-            "markdownDescription": "**Manage Claude and Codex accounts.** The account service keeps the saved profiles (in `~/.ai-usage` as a background service, in VS Code otherwise), sends keep-alives and rotates accounts. It runs in the background or, with `#aiUsage.accountService.background#` off or not installed, inside VS Code while a window is open. Off: no Accounts menus, keep-alives or rotation in this window. See [Account service](https://github.com/p0l0us/ai-usage-vscode-plugin/blob/main/docs/CONFIGURATION.md#account-service)."
+            "markdownDescription": "Use the shared account service as the source of usage, account state, rotation, credentials and runtime ownership. Both background and embedded service modes keep profiles in the service home. Off: the plugin runs the same shared engine directly, including local usage collection and rotation scores. Turning this off does not stop or uninstall a running background service; use Account Service… for that."
           },
           "aiUsage.accountService.background": {
             "type": "boolean",
@@ -7221,6 +7221,15 @@
             "default": "claude",
             "scope": "machine",
             "description": "Command or full path of the Claude CLI, used when `aiUsage.claude.source` is `cli` and for account keep-alives. Bare names are searched on PATH and in common install directories."
+          },
+          "aiUsage.claude.advanced.rotationDiagnostics": {
+            "type": "boolean",
+            "default": false,
+            "scope": "window",
+            "markdownDescription": "Advanced: show every saved account’s rotation score, candidate order, eligibility and the reason the current account is kept in the status bar tooltip. Computed by the service when enabled, or by the same shared engine inside VS Code otherwise.",
+            "tags": [
+              "advanced"
+            ]
           }
         }
       },
@@ -7408,7 +7417,7 @@
             "order": 9
           },
           "aiUsage.codex.proxy.port": {
-            "type": "number",
+            "type": "integer",
             "default": 43117,
             "minimum": 1024,
             "maximum": 65535,
@@ -7416,7 +7425,7 @@
             "tags": [
               "experimental"
             ],
-            "markdownDescription": "Local TCP port of the Codex account proxy (`aiUsage.codex.proxy.enabled`). One AI Usage window serves it and the others share it; a change applies to Codex chats started afterwards.",
+            "markdownDescription": "Local TCP port of the service-owned Codex account proxy. Must be an integer from 1024 through 65535. A user-wide ownership lease prevents a second proxy even on a different port. An unrelated listener is reported as a conflict; AI Usage does not silently choose another port. A change updates native routing for new Codex chats.",
             "order": 9
           },
           "aiUsage.codex.keepAlive.home": {
@@ -7425,6 +7434,15 @@
             "description": "Dedicated CLI home for background account checks. Supports ~; relative paths resolve from your user home. Must be separate from the native CLI home.",
             "scope": "machine",
             "order": 16
+          },
+          "aiUsage.codex.advanced.rotationDiagnostics": {
+            "type": "boolean",
+            "default": false,
+            "scope": "window",
+            "markdownDescription": "Advanced: show every saved account’s rotation score, candidate order, eligibility and the reason the current account is kept in the status bar tooltip. Computed by the service when enabled, or by the same shared engine inside VS Code otherwise.",
+            "tags": [
+              "advanced"
+            ]
           }
         }
       },
@@ -20267,10 +20285,10 @@
     ]
   },
   "scripts": {
-    "compile": "node scripts/generate-manifest.js && tsc -p service && tsc -p ./",
+    "compile": "node scripts/generate-manifest.js && node scripts/generate-service-settings.js && node scripts/package-service-bridge.js && tsc -p service && tsc -p ./",
     "test": "npm run compile && node --test test/*.test.js service/test/*.test.js",
     "watch": "tsc -watch -p ./",
-    "generate": "node scripts/generate-manifest.js",
+    "generate": "node scripts/generate-manifest.js && node scripts/generate-service-settings.js",
     "dev:install": "node scripts/dev-install.js",
     "dev:install:all": "node scripts/dev-install.js --all",
     "bump": "node scripts/bump-version.js",

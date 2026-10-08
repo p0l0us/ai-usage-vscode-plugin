@@ -1,3 +1,8 @@
+import { mcpCli, mcpLauncher, readMcpRegistration, registerMcpServer, unregisterMcpServer } from './mcpRegistration';
+import { findStaleCodexProcesses } from './codexProcesses';
+import { UsageMonitor, UsageContext, UsageStateView, nativeUsageIdentity, serializeUsageState } from './usageMonitor';
+import { ServiceRuntime } from './runtime';
+import { readCurrentSessionTokens } from './sessionTokens';
 import { EventEmitter } from 'events';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -7,11 +12,11 @@ import { AuthProvider, StoredCredential, parseCredentialJson, readNativeCredenti
 import { activateClaudeAccountMetadata, claudeAccountFileConfirms, CredentialIdentity } from './accountIdentity';
 import { AccountAutomation, AutomationProfiles, KeepAliveNowResult, LockWait } from './accountAutomation';
 import {
-  explainAccountProblem, isolatedEnvironment, loginArgs, loginHome, probeAccount, readableProblem, stagedCredentialPath
+  acquireAccountLock, explainAccountProblem, isolatedEnvironment, loginArgs, loginHome, probeAccount, readableProblem, stagedCredentialPath
 } from './accountProbe';
 import { deserializeUsage } from './cache';
 import { ServiceConfig, automationSettings, configFileOf, loadConfig, saveConfig, setConfigValue, strategySummary } from './configStore';
-import { LiveUsage, resolveCli, verifyCodexNativeAccount } from './live';
+import { LiveUsage, LiveResult, ProviderId, newestValidUsage, refreshCodexNativeLogin, resolveCli, verifyCodexNativeAccount } from './live';
 import { ExportedProfile, ImportPlan, parseProfileExport, serializeProfileExport } from './profileTransfer';
 import { ActivationOutcome, PrivateProfileBackend, ProfileMetadata, ProfileStore, PROVIDERS, TITLES, importOutcome } from './profileStore';
 import {
@@ -36,10 +41,13 @@ export const KEEP_ALIVE_ALL_SPACING_MS = 3_000;
 
 export type AccountServiceOptions = {
   home: string;
+  initialConfig?: Record<string, unknown>;
   version: string;
   log: (message: string) => void;
   /** Injected by tests. */
   probe?: typeof probeAccount;
+  fetchUsage?: (provider: ProviderId, context: UsageContext, known?: LiveUsage) => Promise<LiveResult>;
+  usageIdentity?: (provider: AuthProvider) => string;
   identityOf?: (provider: AuthProvider, credential: StoredCredential) => Promise<CredentialIdentity>;
   verifyCodex?: typeof verifyCodexNativeAccount;
   syncClaudeMetadata?: typeof activateClaudeAccountMetadata;
@@ -75,6 +83,10 @@ function isoOrUndefined(value: number | undefined): string | undefined {
  */
 export class AccountService {
   readonly store: ProfileStore;
+  readonly usageMonitor: UsageMonitor;
+  readonly runtime: ServiceRuntime;
+  private usageTimer?: NodeJS.Timeout;
+  private readonly usageContexts = new Map<number, UsageContext>();
   readonly automation: AccountAutomation;
   /** Readings, switches and rotation sweeps, appended to month files for later analysis (`history.*`). */
   readonly history: UsageHistory;
@@ -103,6 +115,8 @@ export class AccountService {
     this.now = options.now ?? Date.now;
     this.configFile = configFileOf(options.home);
     this.config = loadConfig(this.configFile);
+    for (const [key, value] of Object.entries(options.initialConfig ?? {})) this.config = setConfigValue(this.config, key, value);
+    if (options.initialConfig && Object.keys(options.initialConfig).length) saveConfig(this.configFile, this.config);
     this.configStamp = this.stampOfConfigFile();
     this.store = new ProfileStore(profilesFile(options.home), this.log, options.identityOf, {
       projectFileName: () => this.config.projectProfiles.file,
@@ -145,10 +159,60 @@ export class AccountService {
         this.emit({ event: 'notice', level: 'info', message: `Codex: used an earned rate-limit reset for "${name}"${available !== undefined ? ` (${available} available now)` : ''}.` });
       }
     };
+    this.usageMonitor = new UsageMonitor({ directory: states, config: () => this.config, budget: this.claudeBudget,
+      log: this.log, now: this.now, fetch: options.fetchUsage, identity: options.usageIdentity,
+      runFetch: async (provider, fetch) => {
+        if (provider === 'copilot') return fetch();
+        if (this.automation.heldFor(provider)) return undefined;
+        const lock = acquireAccountLock(path.join(states, 'account-usage', `${provider}.lock`));
+        if (!lock) return undefined;
+        try { return await fetch(); } finally { lock.release(); }
+      },
+      changed: provider => this.emit({ event: 'usageChanged', provider }),
+      observe: async (provider, usage, attributable, identity) => {
+        if (identity !== (options.usageIdentity ?? nativeUsageIdentity)(provider)) return;
+        const id = this.store.activeProfileId(provider);
+        if (attributable && id && await this.store.matchesNative(provider, id)) this.automation.observe(provider, id, usage);
+        else if (!attributable) this.automation.hintLimit(provider, usage);
+      } });
+    this.runtime = new ServiceRuntime(options.home, () => this.config, options.version, this.log,
+      message => this.emit({ event: 'notice', level: 'warning', message }),
+      () => [...new Set([...this.foldersByClient.values()].flat())],
+      () => this.automation.withAccountLock('codex', () => refreshCodexNativeLogin(this.config.codex.cliPath), { waitMs: MANUAL_CHECK_WAIT_MS }));
     this.history = new UsageHistory(this.historyDirectory(), this.historyOptions(), this.log, this.now);
     this.automation.history = this.history;
     this.history.prune();
     this.log(`usage history: ${this.history.enabled ? this.history.location : 'off'}`);
+  }
+
+  /** Keep the active native login fresh even without a saved profile or a connected editor. */
+  private async pollUsage(): Promise<void> {
+    if (this.disposed) return;
+    const work: Promise<unknown>[] = PROVIDERS.map(provider => this.liveUsage(provider));
+    for (const clientId of this.usageContexts.keys()) work.push(this.liveUsage('copilot', false, clientId));
+    if (!this.usageContexts.size) work.push(this.liveUsage('copilot'));
+    for (const result of await Promise.allSettled(work)) {
+      if (result.status === 'rejected') this.log(`usage: ${String(result.reason)}`);
+    }
+  }
+
+  async liveUsage(provider: ProviderId, force = false, clientId?: number): Promise<UsageStateView> {
+    let context = this.usageContexts.get(clientId ?? -1);
+    if (provider === 'copilot' && !context) {
+      const token = process.env.GH_TOKEN || process.env.GITHUB_TOKEN;
+      context = { accounts: token ? [{ login: this.config.copilot.account || 'GitHub', token }] : [] };
+    }
+    if (provider !== 'copilot') await this.followNative(provider);
+    const active = provider === 'copilot' ? undefined : this.store.activeProfileId(provider);
+    const state = await this.usageMonitor.read(provider, force, context);
+    if (provider !== 'copilot' && active && active === this.store.activeProfileId(provider) && await this.store.matchesNative(provider, active)) {
+      const usage = newestValidUsage(state.lastGood, this.automation.usage(provider, active), this.now());
+      if (usage) { state.lastGood = usage; if (state.result.kind === 'ok') state.result = { kind: 'ok', usage }; }
+    }
+    if (provider !== 'copilot' && active !== this.store.activeProfileId(provider)) {
+      return serializeUsageState({ identity: (this.options.usageIdentity ?? nativeUsageIdentity)(provider), result: { kind: 'unavailable', provider, reason: 'The active account changed; waiting for its reading.' } });
+    }
+    return { ...serializeUsageState(state), profileId: active };
   }
 
   // --- usage history -----------------------------------------------------------------------------------------
@@ -230,6 +294,10 @@ export class AccountService {
     if (this.timer) { return; }
     this.timer = setInterval(() => void this.tick(), TICK_MS);
     this.timer.unref?.();
+    this.runtime.start();
+    this.usageTimer = setInterval(() => void this.pollUsage(), 5_000);
+    this.usageTimer.unref?.();
+    void this.pollUsage();
     void this.tick();
   }
 
@@ -237,10 +305,17 @@ export class AccountService {
     this.disposed = true;
     if (this.timer) { clearInterval(this.timer); this.timer = undefined; }
     this.automation.dispose();
+    this.usageMonitor.dispose();
+    if (this.usageTimer) clearInterval(this.usageTimer);
+    this.usageContexts.clear();
+    this.runtime.dispose();
   }
 
   emit(event: ServiceEvent): void {
     this.events.emit('event', event);
+    if (event.event === 'stateChanged') {
+      for (const provider of event.provider ? [event.provider] : PROVIDERS) this.events.emit('event', { event: 'usageChanged', provider });
+    }
   }
 
   // --- project folders of the connected clients -----------------------------------------------------------------
@@ -252,6 +327,7 @@ export class AccountService {
   }
 
   forgetFolders(clientId: number): void {
+    this.usageContexts.delete(clientId);
     if (this.foldersByClient.delete(clientId)) { this.applyFolders(); }
   }
 
@@ -323,6 +399,7 @@ export class AccountService {
     await this.automation.tick();
     await this.retryClaudeAccountMetadata();
     this.history.pruneIfDue();
+    await this.runtime.sync();
   }
 
   info(): ServiceInfo {
@@ -459,6 +536,7 @@ export class AccountService {
     this.config = next;
     this.log('config: reloaded config.json after it changed on disk');
     this.applyHistoryConfig();
+    void this.runtime.sync();
     this.emit({ event: 'configChanged', config: this.config });
   }
 
@@ -474,6 +552,8 @@ export class AccountService {
     this.log(`config: changed ${changed.map((key) => `${key} = ${JSON.stringify(getValue(next, key))}`).join(', ')}`);
     if (changed.some((key) => key.startsWith('history.'))) { this.applyHistoryConfig(); }
     this.emit({ event: 'configChanged', config: this.config });
+    void this.runtime.sync();
+    if (this.timer) void this.pollUsage();
     // A switch that was just turned on should act now, not in a minute.
     void this.automation.tick();
     return this.config;
@@ -558,6 +638,39 @@ export class AccountService {
     const paused = <T>(operation: () => Promise<T>) => this.automation.withPaused(operation);
     switch (method) {
       case 'service.info': return this.info();
+      case 'runtime.staleCodex': return findStaleCodexProcesses(Number(params.switchedAt), Number(params.parentPid));
+      case 'mcp.registration': {
+        const provider = providerParam(params), launcher = mcpLauncher(this.options.home);
+        return { launcher, ...mcpCli(provider, this.config[provider].cliPath), registration: readMcpRegistration(provider, launcher) };
+      }
+      case 'mcp.register':
+      case 'mcp.unregister': {
+        const provider = providerParam(params), resolved = mcpCli(provider, this.config[provider].cliPath);
+        if (!resolved.cli) throw new Error(resolved.reason);
+        return method === 'mcp.register' ? registerMcpServer(provider, resolved.cli, mcpLauncher(this.options.home)) : unregisterMcpServer(provider, resolved.cli);
+      }
+      case 'runtime.status': return { codexProxyActive: this.runtime.proxy.active };
+      case 'bridge.ensure': return this.runtime.bridge.ensure();
+      case 'bridge.connection': return this.runtime.bridge.connection();
+      case 'bridge.sync': await this.runtime.bridge.syncSettings(); return { ok: true };
+      case 'usage.context': {
+        if (clientId === undefined) throw new Error('Usage context needs a connected client.');
+        const accounts = Array.isArray(params.accounts) ? params.accounts.filter((a): a is { login: string; token: string } =>
+          !!a && typeof a.login === 'string' && typeof a.token === 'string').slice(0, 20) : [];
+        const workspaceOwners = Array.isArray(params.workspaceOwners) ? params.workspaceOwners.filter((o): o is string => typeof o === 'string').slice(0, 100) : [];
+        this.usageContexts.set(clientId, { accounts, workspaceOwners });
+        return { ok: true };
+      }
+      case 'usage.live': {
+        const provider = params.provider;
+        if (provider !== 'claude' && provider !== 'codex' && provider !== 'copilot') throw new Error('Unknown usage provider.');
+        return this.liveUsage(provider, params.force === true, clientId);
+      }
+      case 'usage.sessionTokens': {
+        const provider = providerParam(params);
+        return readCurrentSessionTokens(provider, this.foldersByClient.get(clientId ?? -1) ?? []) ?? null;
+      }
+      case 'rotation.diagnostics': return this.automation.diagnostics(providerParam(params));
       case 'snapshot': return this.snapshot();
       case 'profiles.list': return this.providerView(providerParam(params));
       case 'session.folders': {
@@ -568,7 +681,7 @@ export class AccountService {
       case 'profiles.activate': {
         const provider = providerParam(params);
         const profile = this.resolveParam(provider, params);
-        const outcome = await paused(() => this.activate(provider, profile.id, false));
+        const outcome = await paused(() => this.automation.withAccountLock(provider, () => this.activate(provider, profile.id, false), { waitMs: MANUAL_CHECK_WAIT_MS }));
         const result: ActivationResult = { profile: { id: outcome.profile.id, name: outcome.profile.name, email: outcome.profile.email },
           verification: outcome.verification, level: outcome.level, message: outcome.message, accountChanged: outcome.accountChanged };
         void this.automation.tick();
@@ -688,23 +801,8 @@ export class AccountService {
         this.emit({ event: 'stateChanged', provider });
         return { profile: { id: profile.id, name: profile.name, email: profile.email }, ...serializeKeepAlive(result) } satisfies UsageReadResult;
       }
-      case 'usage.observe': {
-        const provider = providerParam(params);
-        const id = stringParam(params, 'id');
-        const usage = deserializeUsage({ usage: params.usage as SerializedUsage });
-        if (!usage) { throw new Error('Missing usage.'); }
-        // Live reads belong to the profile captured before the request, never to a newly selected one.
-        if (this.store.activeProfileId(provider) === id && await this.store.matchesNative(provider, id)) {
-          this.automation.observe(provider, id, usage as LiveUsage);
-        }
-        return { ok: true };
-      }
-      case 'usage.hintLimit': {
-        const provider = providerParam(params);
-        const usage = deserializeUsage({ usage: params.usage as SerializedUsage });
-        if (usage) { this.automation.hintLimit(provider, usage as LiveUsage); }
-        return { ok: true };
-      }
+      case 'usage.observe':
+      case 'usage.hintLimit': throw new Error('Usage is collected by the service; use usage.live or usage.read.');
       case 'history.info': return this.historyInfo();
       case 'history.summary': return this.historySummary(typeof params.days === 'number' && params.days > 0 ? params.days : undefined);
       case 'history.export': {

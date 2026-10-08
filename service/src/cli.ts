@@ -58,6 +58,8 @@ History
   history path                    Where the history files are
 
 Settings
+  usage [claude|codex|copilot]      Read current native-login usage (no saved profile required)
+  rotation-weights <service>      Explain scores and current account selection
   config                          List every setting with its value
   config <key>                    Show one value, e.g. claude.autoRotate.strategy
   config <key> <value>            Change it, e.g. claude.autoRotate.enabled true
@@ -503,6 +505,17 @@ export async function main(argv: string[], io?: CliOutput): Promise<number> {
           return 0;
         });
       }
+      case 'usage': {
+        const providers = rest[0] ? [rest[0]] : ['claude', 'codex', 'copilot'];
+        if (providers.some(id => !['claude', 'codex', 'copilot'].includes(id))) throw new UsageError('Choose claude, codex or copilot.');
+        return withClient(home, [], async client => {
+          const result = await Promise.all(providers.map(id => client.liveUsage(id as 'claude' | 'codex' | 'copilot')));
+          printJson(result.length === 1 ? result[0] : result); return 0;
+        }, flags);
+      }
+      case 'rotation-weights': return withClient(home, [], async client => {
+        printJson(await client.call('rotation.diagnostics', { provider: provider(rest[0]) })); return 0;
+      }, flags);
       case 'config': case 'set': case 'get': {
         const args = command === 'config' ? rest : command === 'set' ? ['set', ...rest] : ['get', ...rest];
         const verb = args[0] === 'set' || args[0] === 'get' || args[0] === 'list' ? args.shift() : undefined;
@@ -510,14 +523,14 @@ export async function main(argv: string[], io?: CliOutput): Promise<number> {
           if (!args[0] || verb === 'list') {
             const config = await client.getConfig();
             if (json) { printJson(config); return 0; }
-            out(`${table([['Setting', 'Value', ''], ...listConfig(config).map((entry) => [entry.key, bold(String(entry.value)), dim(entry.schema.description)])])}\n`);
+            out(`${table([['Setting', 'Value', ''], ...listConfig(config).map((entry) => [entry.key, bold(typeof entry.value === 'object' ? JSON.stringify(entry.value) : String(entry.value)), dim(entry.schema.description)])])}\n`);
             return 0;
           }
           if (args.length < 2 || verb === 'get') {
             const config = await client.getConfig();
             const entry = listConfig(config).find((candidate) => candidate.key === args[0]);
             if (!entry) { throw new UsageError(`Unknown setting "${args[0]}". Settings: ${SETTINGS.map((setting) => setting.key).join(', ')} (prefixed with claude. or codex.), ${GLOBAL_SETTINGS.map((setting) => setting.key).join(', ')}.`); }
-            out(json ? `${JSON.stringify(entry.value)}\n` : `${entry.key} = ${bold(String(entry.value))}\n`);
+            out(json ? `${JSON.stringify(entry.value)}\n` : `${entry.key} = ${bold(typeof entry.value === 'object' ? JSON.stringify(entry.value) : String(entry.value))}\n`);
             return 0;
           }
           const config = await client.setConfig({ [args[0]]: args.slice(1).join(' ') });

@@ -10,6 +10,7 @@ const { infoFile, readServiceInfo, socketPath } = require('../out/paths');
 test('an embedded host serves the socket, refuses a second host, and another can take over once it stops', async (t) => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-host-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(home, 'config.json'), JSON.stringify({ claude: { enabled: false }, codex: { enabled: false, autoReset: { enabled: false } }, copilot: { enabled: false }, bridge: { autoStart: false } }));
 
   const host = await startServiceHost({ home, version: '9.9.9', embedded: true });
   t.after(() => host.stop());
@@ -39,6 +40,7 @@ test('an embedded host serves the socket, refuses a second host, and another can
 test('a client asking the embedded host to shut down stops it like the daemon', async (t) => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-host-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(home, 'config.json'), JSON.stringify({ claude: { enabled: false }, codex: { enabled: false, autoReset: { enabled: false } }, copilot: { enabled: false }, bridge: { autoStart: false } }));
   const host = await startServiceHost({ home, embedded: true });
   t.after(() => host.stop());
   const client = await connectService({ home, client: 'test', version: '1' });

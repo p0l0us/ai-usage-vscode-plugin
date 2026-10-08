@@ -30,6 +30,7 @@ const integration = require('../out/bridgeIntegration');
 const agents = require('../out/bridgeAgents');
 const { sessionHeader, stripSessionFooter, resumeCommand } = require('../out/bridgeSessionLinks');
 Module._load = original;
+require('./helpers/bridgeService').bridgeService(test, integration, settings, vscode);
 
 async function setup(t, provider) {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'bridge session UI '));

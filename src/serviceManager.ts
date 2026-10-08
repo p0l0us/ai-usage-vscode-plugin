@@ -2,12 +2,12 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import {
-  AuthProvider, ProviderView, ServiceClient, ServiceConfig, ServiceEvent, ServiceHost, Snapshot, compareVersions, configFileOf, connectService, findNode,
+  defaultConfig, AccountService, AuthProvider, ProviderView, ServiceClient, ServiceConfig, ServiceEvent, ServiceHost, Snapshot, compareVersions, connectService, findNode,
   installService, launcherDir, logFile, readCurrentInstall, readServiceInfo, restartService, serviceHome, serviceStatus, startService, startServiceHost,
   stopService, uninstallService
 } from '../service/out';
 import { ConfigSync, readSettings } from './configSync';
-import { ProfileStoreKind, STORE_TITLES, clientAccess, directAccess, transferProfiles, vscodeProfileBackend, vscodeProfileCount } from './vscodeProfiles';
+import { ProfileStoreKind, STORE_TITLES, clientAccess, directAccess, transferProfiles, vscodeProfileCount } from './vscodeProfiles';
 
 /**
  * The extension's side of the account service: installs the bundled package under the service home (with the
@@ -17,16 +17,14 @@ import { ProfileStoreKind, STORE_TITLES, clientAccess, directAccess, transferPro
  * Without the background service (declined, not installed yet, or `aiUsage.accountService.background` off) the
  * same service runs inside a VS Code window instead: the first window that finds no service answering hosts it on
  * the service socket, the other windows and the `ai-usage` command connect to it, and when that window closes
- * another one takes over. That one keeps the private profiles in VS Code's storage, as the extension did before the
- * service; the background service keeps them in its profiles.json. Project profiles are listed either way. Profiles
- * move between the two only when the user asks (Account service menu, or the offer after an install).
+ * another one takes over. Both modes keep private profiles in the service's profiles.json. Project profiles are listed either way.
+ * Nonconflicting legacy VS Code profiles migrate on connection.
  */
 
 const ENABLED_SETTING = 'aiUsage.accountService.enabled';
 const BACKGROUND_SETTING = 'aiUsage.accountService.background';
 /** How long a window waits before it hosts the service after losing the one it used, so they do not all race. */
 const TAKEOVER_DELAY_MS = 300;
-const SEEDED_KEY = 'aiUsage.accountService.configSeeded.v1';
 const PROVIDERS: AuthProvider[] = ['claude', 'codex'];
 /** How often a lost connection is retried. */
 const RECONNECT_MS = 30_000;
@@ -35,6 +33,8 @@ export class ServiceManager implements vscode.Disposable {
   private client?: ServiceClient;
   /** The service hosted inside this window, when no background service is used. */
   private host?: ServiceHost;
+  private localMode = false;
+  runtimeStatus: { codexProxyActive: boolean } = { codexProxyActive: false };
   private connecting?: Promise<ServiceClient | undefined>;
   private readonly eventEmitter = new vscode.EventEmitter<ServiceEvent>();
   private readonly stateEmitter = new vscode.EventEmitter<AuthProvider | undefined>();
@@ -83,7 +83,7 @@ export class ServiceManager implements vscode.Disposable {
 
   /** One line for the root menu: where the service runs, or why it does not. */
   summary(): string {
-    if (!this.enabled) { return 'turned off'; }
+    if (!this.enabled) { return 'Shared engine running inside VS Code (service connection off)'; }
     const client = this.connected;
     if (!client) { return 'not running'; }
     const where = this.host ? 'inside this VS Code window' : readServiceInfo(this.home)?.embedded ? 'inside a VS Code window' : 'background';
@@ -119,10 +119,22 @@ export class ServiceManager implements vscode.Disposable {
   ensure(options: { promptInstall?: boolean } = {}): Promise<ServiceClient | undefined> {
     if (this.disposed) { return Promise.resolve(undefined); }
     if (!this.enabled) {
-      // Turned off: the service keeps running on its own, but this window stops using it.
+      if (this.localMode && this.connected) return Promise.resolve(this.connected);
+      if (this.connecting) return this.connecting;
       this.client?.close();
-      return Promise.resolve(undefined);
+      this.connecting = (async () => {
+        await this.host?.stop(); this.host = undefined;
+        const engine = new AccountService({ home: this.home,
+          version: this.bundledVersion(), log: this.log });
+        engine.setConfig(readSettings(engine.config));
+        this.localMode = true;
+        const client = ServiceClient.local(engine);
+        await this.adopt(client);
+        return client;
+      })().finally(() => { this.connecting = undefined; });
+      return this.connecting;
     }
+    if (this.localMode) { this.localMode = false; this.client?.close(); }
     if (this.connected) { return Promise.resolve(this.connected); }
     if (this.connecting) { return this.connecting; }
     this.lastAttemptAt = Date.now();
@@ -153,6 +165,11 @@ export class ServiceManager implements vscode.Disposable {
   private async connectExisting(): Promise<ServiceClient | undefined> {
     try {
       const client = await connectService({ home: this.home, client: 'vscode', version: this.extensionVersion(), subscribe: 'all' });
+      if (compareVersions(client.info.version, this.bundledVersion()) < 0) {
+        await client.shutdown(); client.close();
+        await new Promise(resolve => setTimeout(resolve, 150));
+        return undefined;
+      }
       await this.adopt(client);
       return client;
     } catch { return undefined; }
@@ -162,15 +179,13 @@ export class ServiceManager implements vscode.Disposable {
   private async hostHere(): Promise<ServiceClient | undefined> {
     let host: ServiceHost;
     try {
-      const privateProfiles = await vscodeProfileBackend(this.context, this.log);
-      host = await startServiceHost({ home: this.home, version: this.bundledVersion(), embedded: true, privateProfiles });
-      void host.stopped.then(() => privateProfiles.flush());
+      host = await startServiceHost({ home: this.home, version: this.bundledVersion(), embedded: true, initialConfig: readSettings(defaultConfig()) });
     } catch (error) {
       this.log(`service: not hosted in this window: ${error instanceof Error ? error.message : String(error)}`);
       return this.connectExisting();
     }
     this.host = host;
-    this.log(`service: running inside this VS Code window with the profiles saved in VS Code (home ${this.home}); it stops when the window closes`);
+    this.log(`service: running inside this VS Code window with profiles owned by the service (home ${this.home}); it stops when the window closes`);
     void host.stopped.then(() => { if (this.host === host) { this.host = undefined; } });
     return this.connectExisting();
   }
@@ -231,25 +246,24 @@ export class ServiceManager implements vscode.Disposable {
     }
     try {
       await this.syncConfig(client);
-      void this.offerOtherProfiles(client);
+      if (vscodeProfileCount(this.context) > 0) {
+        const source = await directAccess('vscode', this.home, this.context, this.log);
+        const entries = await source.list();
+        const plans = await client.planImport(JSON.stringify({ aiUsageProfiles: 1, profiles: entries }));
+        const chosen = entries.filter(entry => plans.some(plan => plan.provider === entry.provider && plan.id === entry.id && ['new', 'restore', 'same'].includes(plan.kind)));
+        if (chosen.length) await transferProfiles(source, clientAccess(client), chosen, true);
+      }
     } catch (error) {
       this.log(`service: could not finish the first sync: ${error instanceof Error ? error.message : String(error)}`);
     }
     await this.refreshViews();
   }
 
-  /** Seeds the service from the user settings once, then adopts the service's values. */
+  /** Every connection applies the effective VS Code settings; CLI changes are reflected back while connected. */
   private async syncConfig(client: ServiceClient): Promise<void> {
-    const seeded = this.context.globalState.get<boolean>(SEEDED_KEY) || fs.existsSync(configFileOf(this.home));
-    let config = await client.getConfig();
-    if (!seeded) {
-      const values = readSettings(config);
-      config = await client.setConfig(values);
-      await this.context.globalState.update(SEEDED_KEY, true);
-      this.log('service: seeded its settings from the user settings');
-    }
-    this.config = config;
-    await this.configSync.pull(config);
+    const current = await client.getConfig();
+    this.config = await client.setConfig(readSettings(current));
+    this.log('service: applied the effective VS Code settings');
   }
 
   /** Pushes the user-setting values a configuration change carried, if any. */
@@ -408,22 +422,6 @@ export class ServiceManager implements vscode.Disposable {
   }
 
   /** When the store in use is empty but the other one keeps profiles, offers to bring them over, once per session. */
-  private async offerOtherProfiles(client: ServiceClient): Promise<void> {
-    if (this.offeredTransfer) { return; }
-    const current = this.profileStore(client);
-    if (!current) { return; }
-    const other: ProfileStoreKind = current === 'service' ? 'vscode' : 'service';
-    const views = await Promise.all((['claude', 'codex'] as const).map((provider) => client.list(provider)));
-    if (views.some((view) => view.profiles.some((profile) => !profile.folder))) { return; }
-    const count = other === 'vscode' ? vscodeProfileCount(this.context) : (await (await this.access('service')).list()).length;
-    if (!count) { return; }
-    this.offeredTransfer = true;
-    const choice = await vscode.window.showInformationMessage(
-      `AI Usage: ${count} profile${count === 1 ? ' is' : 's are'} saved in ${STORE_TITLES[other]}, but ${current === 'service' ? 'the account service is in use' : 'no background service is in use, so VS Code\'s own profiles are used'}. Bring ${count === 1 ? 'it' : 'them'} over?`,
-      'Move', 'Copy', 'Not now');
-    if (choice === 'Move' || choice === 'Copy') { await this.transfer(other, current, choice === 'Move' ? 'move' : 'copy'); }
-  }
-  private offeredTransfer = false;
 
   /**
    * The Account Service menu: status, profiles and transfers, start, stop, restart, reinstall, uninstall, log.
@@ -449,7 +447,7 @@ export class ServiceManager implements vscode.Disposable {
       detail: store === 'vscode' ? 'No background service is used; the private profiles are in VS Code\'s storage, as before the service. Project profiles are listed too.'
         : store === 'service' ? `The private profiles are in ${this.home}/profiles.json, also without VS Code. Project profiles are listed too.` : undefined });
     items.push({ label: '$(arrow-right) Transfer profiles from VS Code to the account service…', detail: `Copy or move; ${vscodeProfileCount(this.context)} saved in VS Code.`, action: 'toService' });
-    items.push({ label: '$(arrow-left) Transfer profiles from the account service to VS Code…', detail: 'Copy or move the profiles the service keeps into VS Code\'s storage.', action: 'toVscode' });
+
     items.push({ label: 'Actions', kind: vscode.QuickPickItemKind.Separator });
     items.push({ label: status.installed ? '$(sync) Reinstall or upgrade' : '$(cloud-download) Install', detail: `Installs the bundled service ${this.bundledVersion()} and registers it to start at sign-in.`, action: 'install' });
     if (status.installed) {

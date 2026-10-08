@@ -922,3 +922,39 @@ test('a proactive switch is recorded with the stay it ended', async t => {
   assert.equal(sw.candidates.find(c => c.account.id === 'e').outcome, 'chosen');
   assert.equal(f.service.stayed('claude', 'e'), 0);
 });
+
+for (const provider of ['claude', 'codex']) for (const strategy of ['sequential', 'soonestReset', 'evenPace', 'leastWaste']) {
+  test(`${provider} ${strategy}: diagnostics use the rotation scores without probing or switching`, async t => {
+    const f = fixture(t, { values: { a: [20, ['7d', 30, 48]], b: [10, ['7d', 10, 24]], c: [10, ['7d', 20, 72]] },
+      settings: { [provider]: { strategy, autoRotate: false, trigger: 'proactive' } } });
+    f.observeAll(provider);
+    const diagnostic = f.service.diagnostics(provider);
+    assert.equal(diagnostic.strategy, strategy); assert.match(diagnostic.reason, /disabled/);
+    assert.equal(diagnostic.candidates.length, 3); assert.equal(f.calls.length, 0); assert.equal(f.switches.length, 0);
+    for (const candidate of diagnostic.candidates) {
+      assert.equal(candidate.score, rotationScore(strategy, f.service.usage(provider, candidate.id), Date.parse(diagnostic.evaluatedAt), f.settings[provider]));
+    }
+    assert.equal(diagnostic.candidates.find(c => c.id === 'a').active, true);
+    if (strategy === 'sequential') assert.deepEqual(diagnostic.candidates.map(c => c.rank), [undefined, 1, 2]);
+    f.settings[provider].autoRotate = true; f.settings[provider].trigger = 'limit';
+    assert.match(f.service.diagnostics(provider).reason, /below.*thresholds/);
+  });
+}
+test('diagnostics explain imminent resets, unknown accounts and failed checks', async t => {
+  const f = fixture(t, { values: { a: [['5h', 100, 0.04], ['7d', 10, 72]], b: null, c: [10, 10] },
+    settings: { codex: { strategy: 'leastWaste', autoRotate: false, resetAware: true } }, keepAliveErrors: { c: 'OAuth token expired' } });
+  f.observeAll('codex'); await f.service.sendKeepAliveNow('codex', 'c'); f.settings.codex.autoRotate = true;
+  const d = f.service.diagnostics('codex'); assert.match(d.reason, /Waiting.*reset/);
+  assert.match(d.candidates.find(c => c.id === 'b').reason, /No usage/);
+  assert.match(d.candidates.find(c => c.id === 'c').reason, /failed/);
+});
+
+test('independent account operations serialize while nested sweep checks reuse the lock', async t => {
+  const f=fixture(t); const events=[]; let release;
+  const wait=new Promise(resolve=>release=resolve);
+  const first=f.service.withAccountLock('codex',async()=>{events.push('first');await f.service.withAccountLock('codex',async()=>events.push('nested'));await wait;events.push('first done');});
+  await new Promise(resolve=>setImmediate(resolve));
+  const second=f.service.withAccountLock('codex',async()=>events.push('second'));
+  await new Promise(resolve=>setImmediate(resolve));assert.deepEqual(events,['first','nested']);
+  release();await Promise.all([first,second]);assert.deepEqual(events,['first','nested','first done','second']);
+});

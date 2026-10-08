@@ -17,6 +17,7 @@ export type DaemonOptions = {
 
 export type HostOptions = {
   home: string;
+  initialConfig?: Record<string, unknown>;
   version?: string;
   /**
    * Hosted inside another program (the VS Code extension host) instead of its own process: it serves the same
@@ -54,7 +55,7 @@ export async function startServiceHost(options: HostOptions): Promise<ServiceHos
   const logger = new Logger(logFile(home));
   if (options.onLog) { logger.onLine(options.onLog); }
   const token = readOrCreateToken(home);
-  const service = new AccountService({ home, version, log: (message) => logger.log(message), privateProfiles: options.privateProfiles });
+  const service = new AccountService({ home, version, log: (message) => logger.log(message), privateProfiles: options.privateProfiles, initialConfig: options.initialConfig });
   let stopping: Promise<void> | undefined;
   let resolveStopped: () => void = () => undefined;
   const stopped = new Promise<void>((resolve) => { resolveStopped = resolve; });

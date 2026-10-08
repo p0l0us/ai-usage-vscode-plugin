@@ -1,11 +1,11 @@
 import * as vscode from 'vscode';
-import { GLOBAL_SETTINGS, ServiceConfig, SETTINGS, listConfig } from '../service/out';
+import { GLOBAL_SETTINGS, ServiceConfig, SETTINGS, listConfig, defaultConfig, setConfigValue } from '../service/out';
 
 /**
  * Keeps the service's settings and the extension's `aiUsage.<provider>.*` and `aiUsage.mcp.*` settings equal: a
  * change in Settings is pushed to the service, a change made with `ai-usage config` (or a hand-edited config.json)
- * is written back to the user settings. The service's file is the source of truth once it exists; the extension
- * seeds it from the user settings the first time.
+ * is written back to the user settings. The editor applies its effective values on every connection; standalone CLI use
+ * reads the service's persisted configuration.
  */
 
 /** `claude.autoRotate.enabled` ↔ `aiUsage.claude.autoRotate.enabled`, `mcp.enabled` ↔ `aiUsage.mcp.enabled`. */
@@ -29,7 +29,7 @@ export function readSettings(config: ServiceConfig, configuration = vscode.works
   const values: Record<string, unknown> = {};
   for (const entry of listConfig(config)) {
     const value = configuration.get<unknown>(settingKey(entry.key));
-    if (value !== undefined && value !== null) { values[entry.key] = value; }
+    if (value !== undefined) { values[entry.key] = value; }
   }
   return values;
 }
@@ -42,7 +42,7 @@ export function differences(config: ServiceConfig, configuration = vscode.worksp
   const result: Array<{ key: string; value: unknown; current: unknown }> = [];
   for (const entry of listConfig(config)) {
     const current = configuration.get<unknown>(settingKey(entry.key));
-    if (current === undefined || current === null) { continue; }
+    if (current === undefined) { continue; }
     if (JSON.stringify(current) !== JSON.stringify(entry.value)) { result.push({ key: entry.key, value: entry.value, current }); }
   }
   return result;
@@ -83,8 +83,15 @@ export class ConfigSync {
       const key = settingKey(entry.key);
       if (!event.affectsConfiguration(key)) { continue; }
       const value = configuration.get<unknown>(key);
-      if (value !== undefined && value !== null && JSON.stringify(value) !== JSON.stringify(entry.value)) { values[entry.key] = value; }
+      if (value !== undefined && JSON.stringify(value) !== JSON.stringify(entry.value)) { values[entry.key] = value; }
     }
     return values;
   }
+}
+
+/** Reuse service validation and defaults for the local engine and presentation of intervals. */
+export function configFromSettings(configuration = vscode.workspace.getConfiguration()): ServiceConfig {
+  let config = defaultConfig();
+  for (const [key, value] of Object.entries(readSettings(config, configuration))) config = setConfigValue(config, key, value);
+  return config;
 }

@@ -1,3 +1,4 @@
+import { SETTINGS_CATALOG } from './settingsCatalog';
 import * as fs from 'fs';
 import * as path from 'path';
 import { AuthProvider, writeJsonAtomically } from './authFiles';
@@ -10,9 +11,18 @@ import { claudeConfigDir } from './live';
  * reads and writes them directly.
  */
 
+export type UsageSource = 'api' | 'cli' | 'sessionLog' | 'accountFile' | 'both';
+export type CopilotConfig = { enabled: boolean; source: UsageSource; account: string; checkIntervalMinutes: number };
+export type BridgeBackendConfig = { executable: string; persistSessions: boolean; openInCli: boolean; openInExtension: boolean; sessionDirectory: string; subagentsEnabled: boolean; requestTimeoutMinutes: number; toolTimeoutMinutes: number };
+export type BridgeConfig = { modelsEnabled: boolean; autoStart: boolean; url: string; tokenFile: string; codex: BridgeBackendConfig; claude: BridgeBackendConfig };
+
 export type ModelLimits = 'auto' | 'always' | 'never';
 
 export type ProviderConfig = {
+  enabled: boolean;
+  source: UsageSource;
+  accountFile: { checkIntervalSeconds: number };
+  proxy: { enabled: boolean; port: number };
   /** Command or full path of the vendor CLI, for keep-alives, sign-ins and usage reads. */
   cliPath: string;
   /** Spacing of service endpoint calls, and the pause after a transient error, in minutes. */
@@ -63,15 +73,18 @@ export type HistoryConfig = {
   directory: string;
 };
 
-export type ServiceConfig = { version: 1; claude: ProviderConfig; codex: ProviderConfig; mcp: McpConfig; history: HistoryConfig } & ProfileScopesConfig;
+export type ServiceConfig = { version: 1; copilot: CopilotConfig; bridge: BridgeConfig; claude: ProviderConfig; codex: ProviderConfig; mcp: McpConfig; history: HistoryConfig } & ProfileScopesConfig;
 
 import { DEFAULT_PROJECT_PROFILES_FILE, PROVIDERS, TITLES } from './profileStore';
 
-export type SettingType = 'boolean' | 'number' | 'string' | 'enum';
+export type SettingType = 'boolean' | 'number' | 'integer' | 'string' | 'enum' | 'array';
+export type ConfigValue = boolean | number | string | null | unknown[];
 export type SettingSchema = {
   /** Path below the provider, such as `autoRotate.strategy`. */
   key: string;
   type: SettingType;
+  nullable?: boolean;
+  default?: ConfigValue;
   values?: string[];
   min?: number;
   max?: number;
@@ -112,9 +125,19 @@ export const GLOBAL_SETTINGS: SettingSchema[] = [
   { key: 'mcp.switching', type: 'boolean', description: 'Let agents change the active account through MCP (switch_account, rotate_account); off leaves them the usage tools only.' }
 ];
 
+for (const entry of SETTINGS_CATALOG) {
+  const [provider, ...rest] = entry.key.split('.');
+  const covered = (provider === 'claude' || provider === 'codex') && SETTINGS.some(setting =>
+    setting.key === rest.join('.') && (!setting.providers || setting.providers.includes(provider)));
+  if (!covered && !GLOBAL_SETTINGS.some(setting => setting.key === entry.key)) {
+    GLOBAL_SETTINGS.push(entry as SettingSchema);
+  }
+}
+
 export function defaultProviderConfig(provider: AuthProvider): ProviderConfig {
   const claude = provider === 'claude';
   return {
+    enabled: true, source: 'both', accountFile: { checkIntervalSeconds: 15 }, proxy: { enabled: false, port: 43117 },
     cliPath: provider,
     checkIntervalMinutes: claude ? 10 : 5,
     api: { minIntervalSeconds: 30 },
@@ -135,9 +158,13 @@ export function defaultProviderConfig(provider: AuthProvider): ProviderConfig {
 }
 
 export function defaultConfig(): ServiceConfig {
-  return { version: 1, claude: defaultProviderConfig('claude'), codex: defaultProviderConfig('codex'), mcp: { enabled: false, switching: true },
+  const config = { version: 1, claude: defaultProviderConfig('claude'), codex: defaultProviderConfig('codex'), mcp: { enabled: false, switching: true },
     privateProfiles: { enabled: true }, projectProfiles: { enabled: true, file: DEFAULT_PROJECT_PROFILES_FILE },
-    history: { enabled: true, retentionDays: 365, directory: '' } };
+    history: { enabled: true, retentionDays: 365, directory: '' } } as ServiceConfig;
+  for (const entry of SETTINGS_CATALOG) {
+    if (entry.default !== undefined) { assign(config as unknown as Record<string, unknown>, entry.key.split('.'), structuredClone(entry.default)); }
+  }
+  return config;
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -172,7 +199,8 @@ function blockOf(config: ServiceConfig, provider: AuthProvider | undefined): Rec
 }
 
 /** Turns a raw value (a string from the command line, or JSON from a client) into the setting's type, or throws. */
-export function coerceSetting(schema: SettingSchema, raw: unknown): boolean | number | string {
+export function coerceSetting(schema: SettingSchema, raw: unknown): ConfigValue {
+  if (schema.nullable && (raw === null || raw === 'null')) { return null; }
   switch (schema.type) {
     case 'boolean': {
       if (typeof raw === 'boolean') { return raw; }
@@ -181,12 +209,19 @@ export function coerceSetting(schema: SettingSchema, raw: unknown): boolean | nu
       if (['false', 'off', 'no', '0'].includes(text)) { return false; }
       throw new Error(`${schema.key} expects true or false, not "${String(raw)}".`);
     }
+    case 'integer':
     case 'number': {
       const value = typeof raw === 'number' ? raw : Number(String(raw).trim());
       if (!Number.isFinite(value)) { throw new Error(`${schema.key} expects a number, not "${String(raw)}".`); }
+      if (schema.type === 'integer' && !Number.isInteger(value)) { throw new Error(`${schema.key} expects an integer.`); }
       if (schema.min !== undefined && value < schema.min) { throw new Error(`${schema.key} must be at least ${schema.min}.`); }
       if (schema.max !== undefined && value > schema.max) { throw new Error(`${schema.key} must be at most ${schema.max}.`); }
       return value;
+    }
+    case 'array': {
+      const value = typeof raw === 'string' ? JSON.parse(raw) : raw;
+      if (!Array.isArray(value)) { throw new Error(`${schema.key} expects a JSON array.`); }
+      return structuredClone(value);
     }
     case 'enum': {
       const value = String(raw).trim();
@@ -208,14 +243,14 @@ export function normalizeConfig(parsed: unknown): ServiceConfig {
     for (const schema of SETTINGS) {
       if (schema.providers && !schema.providers.includes(provider)) { continue; }
       const raw = lookup(block, schema.key.split('.'));
-      if (raw === undefined || raw === null) { continue; }
+      if (raw === undefined || (raw === null && !schema.nullable)) { continue; }
       try { assign(config[provider] as unknown as Record<string, unknown>, schema.key.split('.'), coerceSetting(schema, raw)); }
       catch { /* An invalid value keeps the default. */ }
     }
   }
   for (const schema of GLOBAL_SETTINGS) {
     const raw = lookup(parsed, schema.key.split('.'));
-    if (raw === undefined || raw === null) { continue; }
+    if (raw === undefined || (raw === null && !schema.nullable)) { continue; }
     try { assign(blockOf(config, undefined), schema.key.split('.'), coerceSetting(schema, raw)); }
     catch { /* An invalid value keeps the default. */ }
   }
@@ -232,9 +267,9 @@ export function saveConfig(file: string, config: ServiceConfig): void {
 }
 
 /** `claude.autoRotate.strategy` or `mcp.enabled` → its value; throws for an unknown key. */
-export function getConfigValue(config: ServiceConfig, dotted: string): boolean | number | string {
+export function getConfigValue(config: ServiceConfig, dotted: string): ConfigValue {
   const { provider, schema } = resolveKey(dotted);
-  return lookup(blockOf(config, provider), schema.key.split('.')) as boolean | number | string;
+  return lookup(blockOf(config, provider), schema.key.split('.')) as ConfigValue;
 }
 
 /** Returns a copy of `config` with the value set; throws for an unknown key or an invalid value. */
@@ -260,16 +295,16 @@ export function resolveKey(dotted: string): { provider?: AuthProvider; schema: S
 }
 
 /** Every applicable dotted key with its value, in schema order, Claude first, then the global settings. */
-export function listConfig(config: ServiceConfig): Array<{ key: string; value: boolean | number | string; schema: SettingSchema }> {
-  const entries: Array<{ key: string; value: boolean | number | string; schema: SettingSchema }> = [];
+export function listConfig(config: ServiceConfig): Array<{ key: string; value: ConfigValue; schema: SettingSchema }> {
+  const entries: Array<{ key: string; value: ConfigValue; schema: SettingSchema }> = [];
   for (const provider of PROVIDERS) {
     for (const schema of SETTINGS) {
       if (schema.providers && !schema.providers.includes(provider)) { continue; }
-      entries.push({ key: `${provider}.${schema.key}`, value: lookup(config[provider], schema.key.split('.')) as boolean | number | string, schema });
+      entries.push({ key: `${provider}.${schema.key}`, value: lookup(config[provider], schema.key.split('.')) as ConfigValue, schema });
     }
   }
   for (const schema of GLOBAL_SETTINGS) {
-    entries.push({ key: schema.key, value: lookup(config, schema.key.split('.')) as boolean | number | string, schema });
+    entries.push({ key: schema.key, value: lookup(config, schema.key.split('.')) as ConfigValue, schema });
   }
   return entries;
 }

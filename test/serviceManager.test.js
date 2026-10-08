@@ -71,6 +71,7 @@ test('without the background service one window hosts the service, the others us
   const previous = process.env.AI_USAGE_HOME;
   process.env.AI_USAGE_HOME = path.join(root, 'home');
   settings.clear();
+  for (const key of ['claude.enabled', 'codex.enabled', 'copilot.enabled', 'codex.autoReset.enabled', 'bridge.autoStart']) settings.set(`aiUsage.${key}`, false);
   settings.set('aiUsage.accountService.background', false);
   const managers = [];
   t.after(() => {
@@ -93,9 +94,10 @@ test('without the background service one window hosts the service, the others us
   assert.equal(first.hosting, true);
   assert.equal(first.isInstalled(), false, 'nothing is installed');
   assert.equal(informationMessages.length, 0, 'no install offer while the background service is off');
-  assert.equal(client.info.profileStore, 'vscode');
+  assert.equal(client.info.profileStore, 'service');
   assert.deepEqual((await client.list('codex')).profiles.map((profile) => profile.name), ['Codex 1'], 'the profiles saved in VS Code are listed');
-  assert.equal(fs.existsSync(path.join(root, 'home', 'profiles.json')), false, 'nothing is written to the service file');
+  assert.equal(fs.existsSync(path.join(root, 'home', 'profiles.json')), true, 'the service owns migrated credentials');
+  assert.equal(user.secrets.has('aiUsage.authProfile.v1.codex.x1'), false, 'the migrated key no longer lives in VS Code');
 
   const second = open('second');
   assert.ok(await second.ensure());
@@ -112,6 +114,7 @@ test('declining the background service offers it once and still gives the window
   const previous = process.env.AI_USAGE_HOME;
   process.env.AI_USAGE_HOME = path.join(root, 'home');
   settings.clear();
+  for (const key of ['claude.enabled', 'codex.enabled', 'copilot.enabled', 'codex.autoReset.enabled', 'bridge.autoStart']) settings.set(`aiUsage.${key}`, false);
   informationMessages.length = 0;
   const manager = new ServiceManager(windowContext(path.join(root, 'window')), () => {});
   t.after(() => {
@@ -131,6 +134,7 @@ test('the Account service menu ends with Back, to the AI Usage menu or to the me
   const previous = process.env.AI_USAGE_HOME;
   process.env.AI_USAGE_HOME = path.join(root, 'home');
   settings.clear();
+  for (const key of ['claude.enabled', 'codex.enabled', 'copilot.enabled', 'codex.autoReset.enabled', 'bridge.autoStart']) settings.set(`aiUsage.${key}`, false);
   const manager = new ServiceManager(windowContext(path.join(root, 'window')), () => {});
   t.after(() => {
     manager.dispose();
@@ -153,4 +157,32 @@ test('the Account service menu ends with Back, to the AI Usage menu or to the me
   });
   await manager.showMenu({ description: 'Codex accounts', run: async () => { returned = true; } });
   assert.equal(returned, true);
+});
+
+test('VS Code settings override persisted service values on connection, then CLI edits propagate back', async t => {
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'ai-usage-config-ui-'));
+  const previous=process.env.AI_USAGE_HOME;process.env.AI_USAGE_HOME=path.join(root,'home');
+  settings.clear();for(const key of ['claude.enabled','codex.enabled','copilot.enabled','codex.autoReset.enabled','bridge.autoStart','accountService.background'])settings.set(`aiUsage.${key}`,false);
+  settings.set('aiUsage.codex.source','cli');settings.set('aiUsage.codex.advanced.rotationDiagnostics',true);
+  const manager=new ServiceManager(windowContext(path.join(root,'window')),()=>{});
+  t.after(()=>{manager.dispose();if(previous===undefined)delete process.env.AI_USAGE_HOME;else process.env.AI_USAGE_HOME=previous;fs.rmSync(root,{recursive:true,force:true});});
+  const client=await manager.ensure();assert.equal((await client.getConfig()).codex.source,'cli');
+  assert.equal((await client.getConfig()).codex.advanced.rotationDiagnostics,true);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(root,'home','config.json'),'utf8')).codex.source,'cli','initial editor settings persist for standalone restarts');
+  await client.setConfig({'codex.source':'sessionLog'});
+  await until(()=>settings.get('aiUsage.codex.source')==='sessionLog');
+});
+
+test('disabling the service connection uses the shared engine locally with the same persisted profiles and settings', async t => {
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'ai-usage-local-ui-'));
+  const previous=process.env.AI_USAGE_HOME;process.env.AI_USAGE_HOME=path.join(root,'home');
+  settings.clear();for(const key of ['claude.enabled','codex.enabled','copilot.enabled','codex.autoReset.enabled','bridge.autoStart','accountService.enabled'])settings.set(`aiUsage.${key}`,false);
+  settings.set('aiUsage.codex.autoRotate.strategy','leastWaste');
+  const manager=new ServiceManager(windowContext(path.join(root,'window')),()=>{});
+  t.after(()=>{manager.dispose();if(previous===undefined)delete process.env.AI_USAGE_HOME;else process.env.AI_USAGE_HOME=previous;fs.rmSync(root,{recursive:true,force:true});});
+  const client=await manager.ensure();assert.ok(client);assert.equal(manager.hosting,false);
+  assert.equal(client.info.profileStore,'service');assert.match(manager.summary(),/inside VS Code/);
+  assert.equal((await client.call('rotation.diagnostics',{provider:'codex'})).strategy,'leastWaste');
+  assert.equal((await client.getConfig()).codex.autoRotate.strategy,'leastWaste');
+  assert.equal(fs.existsSync(path.join(root,'home','service.sock')),false,'local mode serves no service socket');
 });

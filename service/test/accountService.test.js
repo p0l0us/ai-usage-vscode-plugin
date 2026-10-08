@@ -23,7 +23,7 @@ function fixture(t, options = {}) {
   const logs = [], events = [], probes = [];
   const values = { a: [10, 10], b: [10, 10], ...options.values };
   const service = new AccountService({
-    home, version: 'test', log: (message) => logs.push(message),
+    home, version: 'test', fetchUsage: async provider => ({ kind: 'ok', usage: usage(provider, [50, 5]) }), log: (message) => logs.push(message),
     identityOf: async (provider, credential) => provider === 'codex'
       ? { email: `${credential.tokens?.account_id}@example.com`, accountId: credential.tokens?.account_id }
       : { email: `${credential.claudeAiOauth?.accessToken}@example.com`, accountId: `account-${credential.claudeAiOauth?.accessToken}` },
@@ -109,8 +109,7 @@ test('an observed reading of the active account is stored, and a hand-run sweep 
   const work = await f.call('profiles.saveNative', { provider: 'claude', name: 'Work' });
   await f.call('profiles.importCredential', { provider: 'claude', name: 'Backup', credential: claudeLogin('b') });
   const reading = usage('claude', [50, 5]);
-  await f.call('usage.observe', { provider: 'claude', id: work.profile.id, usage: { ...reading, fetchedAt: reading.fetchedAt.toISOString(),
-    windows: reading.windows.map((window) => ({ ...window, resetsAt: window.resetsAt.toISOString() })) } });
+  await f.call('usage.live', { provider: 'claude' });
   let view = await f.call('profiles.list', { provider: 'claude' });
   assert.equal(view.profiles[0].usage.windows[0].usedPercent, 50);
   // Rotation is off, but a sweep requested by hand still runs; it reads the active account fresh (99.5%).
@@ -296,4 +295,14 @@ test('switches by hand and switches followed from outside are recorded, and the 
   await f.call('profiles.activate', { provider: 'claude', id: work.profile.id });
   assert.equal((await f.call('history.info')).location, elsewhere);
   assert.equal(fs.readdirSync(elsewhere).filter((name) => name.startsWith('history-')).length, 1);
+});
+
+test('a native live read waits for saved-account ownership without spending a provider request', async t => {
+  const f=fixture(t); let release;
+  const wait=new Promise(resolve=>release=resolve);
+  const held=f.service.automation.withAccountLock('claude',async()=>wait);
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal((await f.call('usage.live',{provider:'claude',force:true})).result.kind,'unavailable');
+  release();await held;
+  assert.equal((await f.call('usage.live',{provider:'claude',force:true})).result.kind,'ok');
 });

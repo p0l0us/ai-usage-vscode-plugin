@@ -23,8 +23,10 @@ const original = Module._load;
 Module._load = function (id, ...args) { return id === 'vscode' ? vscode : original.call(this, id, ...args); };
 const { BridgeModelProvider, bridgeMessages } = require('../out/bridgeModels');
 const { BridgeRuntime } = require('../out/bridgeRuntime');
+const integration = require('../out/bridgeIntegration');
 const { streamBridge } = require('../out/bridgeTransport');
 Module._load = original;
+require('./helpers/bridgeService').bridgeService(test, integration, settings, vscode);
 const token = { isCancellationRequested: false, onCancellationRequested: () => ({ dispose() {} }) };
 
 for (const backend of ['claude', 'codex']) test(`${backend} shows one child link across tool handoff and provider restart without altering native history`, async t => {

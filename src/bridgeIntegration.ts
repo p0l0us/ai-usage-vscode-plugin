@@ -1,8 +1,7 @@
+import { ServiceClient } from '../service/out';
 import * as vscode from 'vscode';
 import * as http from 'http';
 import * as fs from 'fs/promises';
-import * as os from 'os';
-import * as path from 'path';
 import { agentMap, openAgentMap, sessionLink, agentKey } from './bridgeAgents';
 
 export type Subagent = { id: string; tool_call_id?: string; native_session_id?: string; parent_native_session_id?: string; status: string; label?: string; summary?: string; updated_at?: number };
@@ -18,6 +17,13 @@ export type Session = {
 type Catalog = { id: string; bridge?: { cli_version?: string; image_input?: boolean; reasoning_efforts?: string[] } };
 type Diagnosis = { backend: string; status: string; models?: Catalog[]; code?: string; message?: string };
 
+let serviceConnection: (() => Promise<Pick<ServiceClient, 'call'>>) | undefined;
+export function configureBridgeService(connect: () => Promise<Pick<ServiceClient, 'call'>>): void { serviceConnection = connect; }
+export async function bridgeServiceCall<T>(method: string): Promise<T> {
+  if (!serviceConnection) throw new Error('The AI Usage service connection is not ready.');
+  return (await serviceConnection()).call<T>(method);
+}
+
 // Credentials stay on this host. Never follow redirects or send the local token
 // to a workspace-configured remote endpoint.
 export async function bridgeGet<T>(route: string, cancellation?: vscode.CancellationToken): Promise<T> {
@@ -25,16 +31,8 @@ export async function bridgeGet<T>(route: string, cancellation?: vscode.Cancella
 }
 
 export async function bridgeConnection(): Promise<{ endpoint: URL; token: string }> {
-  const config = vscode.workspace.getConfiguration('aiUsage.bridge');
-  const endpoint = new URL(config.get<string>('url', 'http://127.0.0.1:3210'));
-  if (endpoint.protocol !== 'http:' || !['127.0.0.1', 'localhost', '[::1]'].includes(endpoint.hostname) || endpoint.username || endpoint.password) {
-    throw new Error('The CLI bridge URL must be a loopback HTTP address.');
-  }
-  const tokenFile = config.get<string>('tokenFile', '') || path.join(os.homedir(), '.cli-byok-bridge', 'token');
-  let token: string;
-  try { token = (await fs.readFile(tokenFile, 'utf8')).trim(); }
-  catch { throw new Error('Bridge token file is unavailable on this extension host. Start the CLI bridge here or configure aiUsage.bridge.tokenFile.'); }
-  return { endpoint, token };
+  const connection = await bridgeServiceCall<{ endpoint: string; token: string }>('bridge.connection');
+  return { endpoint: new URL(connection.endpoint), token: connection.token };
 }
 
 async function bridgeRequest<T>(route: string, method: 'GET' | 'PUT', body?: unknown, cancellation?: vscode.CancellationToken): Promise<T> {
@@ -63,19 +61,7 @@ async function bridgeRequest<T>(route: string, method: 'GET' | 'PUT', body?: unk
 }
 
 export async function syncSessionSettings(): Promise<void> {
-  const config = vscode.workspace.getConfiguration('aiUsage.bridge');
-  const folders = vscode.workspace.workspaceFolders;
-  const workspaceDirectory = folders?.length === 1 ? folders[0].uri.fsPath : '';
-  const settings = Object.fromEntries(['codex', 'claude'].map(provider => [provider, {
-    persistSessions: config.get(`${provider}.persistSessions`, false),
-    openInCli: config.get(`${provider}.openInCli`, false),
-    openInExtension: config.get(`${provider}.openInExtension`, false),
-    subagentsEnabled: config.get(`${provider}.subagentsEnabled`, true),
-    requestTimeoutMinutes: config.get(`${provider}.requestTimeoutMinutes`, 60),
-    toolTimeoutMinutes: config.get(`${provider}.toolTimeoutMinutes`, 60),
-    sessionDirectory: config.get(`${provider}.sessionDirectory`, '') || workspaceDirectory
-  }]));
-  await bridgeRequest('/v1/session-settings', 'PUT', settings);
+  await bridgeServiceCall('bridge.sync');
 }
 
 function registerSessionSettings(context: vscode.ExtensionContext): void {

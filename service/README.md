@@ -1,7 +1,7 @@
 # AI Usage account service and `ai-usage` command
 
 Keeps the saved Claude Code and Codex logins as profiles, switches between them, sends keep-alives and rotates
-accounts on exhaustion, as a background service with the `ai-usage` command and an MCP server for AI agents. It
+accounts on exhaustion, collects live Claude/Codex/Copilot usage, and owns the Codex proxy and CLI bridge, as a background service with the `ai-usage` command and an MCP server for AI agents. It
 needs no VS Code; the [AI subscription management and usage](https://github.com/p0l0us/ai-usage-vscode-plugin)
 VS Code extension uses it too and talks to it the same way.
 
@@ -18,16 +18,22 @@ ai-usage service run            # or: run it in the foreground instead
 `ai-usage service install` copies the package to `~/.ai-usage/service`, registers it to start when you sign in (a
 systemd user unit on Linux, a launchd agent on macOS, a Run registry value on Windows) and puts the `ai-usage`
 launcher in `~/.ai-usage/bin`. The VS Code extension does the same with your permission; when you decline, it runs
-the service inside VS Code while a window is open instead, with the profiles saved in VS Code as before. The
-background service keeps its profiles in `~/.ai-usage/profiles.json`; the extension's Account service menu copies or
-moves profiles between the two in either direction. `AI_USAGE_HOME` moves the whole
-home elsewhere; `AI_USAGE_NODE` names the Node.js (20 or newer) to run the service with.
+the service inside VS Code while a window is open instead. Both modes keep profiles in
+`~/.ai-usage/profiles.json`; existing nonconflicting VS Code profiles migrate there on connection.
+`AI_USAGE_HOME` moves the service home. `AI_USAGE_NODE` names the runtime (Node.js 20+ for the service;
+22+ for the bundled CLI bridge).
+
+The service owns polling, credentials, rotation, native CLI settings, proxy startup and bridge startup. The editor
+supplies GitHub authentication and workspace context; the service makes Copilot requests. Without an editor,
+set `GH_TOKEN` or `GITHUB_TOKEN` in the service environment for Copilot.
 
 ## Commands
 
 ```
 ai-usage                          live view in a terminal; status elsewhere
 ai-usage status [--json]          active accounts, usage, service state
+ai-usage usage [claude|codex|copilot]  current native-login usage, including unsaved accounts
+ai-usage rotation-weights <service>   account scores and selection explanation
 ai-usage list [claude|codex]      saved profiles and their last readings
 ai-usage use <service> <profile>  activate a profile (name, number or id)
 ai-usage save <service> <name>    save the current CLI login as a profile (--project[=<dir>]: in a project's file)
@@ -43,10 +49,17 @@ ai-usage log [-n <lines>] [-f]
 ai-usage mcp                      MCP server for AI agents on stdin/stdout (experimental, off by default)
 ```
 
-`ai-usage --help` lists everything. Names of settings are `claude.<setting>` and `codex.<setting>`, for example
-`claude.autoRotate.strategy`, plus the global `privateProfiles.enabled`, `projectProfiles.enabled`,
-`projectProfiles.file`, `history.enabled`, `history.retentionDays`, `history.directory`, `mcp.enabled` and
-`mcp.switching`; `ai-usage config` prints them all with a line of explanation each.
+`ai-usage --help` lists everything. Every VS Code `aiUsage.*` setting is available through `ai-usage config`
+with that prefix removed, including sources, intervals, proxy and bridge configuration, native CLI settings,
+advanced rotation diagnostics and presentation preferences. Nullable native settings accept `null`; arrays accept
+JSON. VS Code applies its effective values on connection and pushes subsequent edits; CLI changes are reflected
+back to connected editors. Without VS Code, `config.json` and the CLI configure the service independently.
+
+For example: `ai-usage config codex.proxy.enabled true`,
+`ai-usage config codex.advanced.rotationDiagnostics true`, and `ai-usage rotation-weights codex`.
+Presentation preferences are stored for clients; connection preferences do not replace `ai-usage service start|stop`.
+The proxy uses one ownership lease per OS user, independent of configured port (default `43117`). A port conflict
+is reported rather than silently choosing another port.
 
 A project's profiles (its `.ai-usage.profiles.json`, or the file named by `projectProfiles.file`) are listed
 while a VS Code window has the folder open, or when `ai-usage` runs with `--project[=<dir>]` or from a directory

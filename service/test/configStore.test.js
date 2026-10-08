@@ -56,7 +56,7 @@ test('listConfig lists every applicable key with Claude first and Codex without 
   assert.ok(keys.includes('codex.autoRotate.resetAware'));
   assert.ok(keys.includes('codex.autoReset.enabled'));
   assert.ok(keys.includes('codex.autoRotate.fiveHourThresholdPercent'));
-  assert.equal(entries.length, SETTINGS.length + SETTINGS.filter((setting) => !setting.providers).length + GLOBAL_SETTINGS.length);
+  assert.equal(entries.length, ['claude', 'codex'].reduce((sum, provider) => sum + SETTINGS.filter(setting => !setting.providers || setting.providers.includes(provider)).length, 0) + GLOBAL_SETTINGS.length);
 });
 
 test('the file round-trips and a missing file yields the defaults', (t) => {
@@ -107,7 +107,7 @@ test('the mcp block is a global setting: off by default, switching on, listed af
   assert.throws(() => setConfigValue(config, 'claude.mcp.enabled', true), /Unknown setting/);
   assert.throws(() => setConfigValue(config, 'mcp.nothing', true), /mcp\.enabled, mcp\.switching/);
   const keys = listConfig(next).map((entry) => entry.key);
-  assert.deepEqual(keys.slice(-2), ['mcp.enabled', 'mcp.switching']);
+  assert.deepEqual(keys.filter(key => key.startsWith('mcp.')), ['mcp.enabled', 'mcp.switching']);
   assert.equal(listConfig(next).find((entry) => entry.key === 'mcp.enabled').value, true);
   assert.ok(GLOBAL_SETTINGS.filter((setting) => setting.key.startsWith('mcp.')).every((setting) => setting.type === 'boolean'));
 });
@@ -120,4 +120,15 @@ test('the history block is a global setting: on by default, a year of retention,
   assert.equal(next.history.directory, '~/ai-usage-history');
   assert.throws(() => setConfigValue(config, 'history.retentionDays', 0), /at least 1/);
   assert.deepEqual(listConfig(config).map((entry) => entry.key).filter((key) => key.startsWith('history.')), ['history.enabled', 'history.retentionDays', 'history.directory']);
+});
+
+test('every VS Code setting is also a validated standalone CLI setting, with identical defaults', () => {
+  const manifest = require('../../package.json'); const config = defaultConfig();
+  for (const block of manifest.contributes.configuration) for (const [key, schema] of Object.entries(block.properties)) {
+    const dotted = key.replace(/^aiUsage\./, '');
+    assert.deepEqual(getConfigValue(config, dotted), schema.default, key);
+    if (schema.default !== undefined) assert.deepEqual(getConfigValue(setConfigValue(config, dotted, schema.default), dotted), schema.default);
+  }
+  assert.equal(getConfigValue(setConfigValue(config, 'codexConfig.agents.maxDepth', 'null'), 'codexConfig.agents.maxDepth'), null);
+  assert.deepEqual(getConfigValue(setConfigValue(config, 'accounts', '[{"name":"test"}]'), 'accounts'), [{ name: 'test' }]);
 });

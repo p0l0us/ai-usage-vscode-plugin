@@ -136,6 +136,7 @@ export type ServiceEvent =
   | { event: 'accountProblem'; provider: AuthProvider; id: string; name: string; email?: string; reason: string; readable: string; revoked: boolean }
   | { event: 'noCandidate'; provider: AuthProvider; detail: string }
   | { event: 'notice'; level: 'info' | 'warning' | 'error'; message: string; provider?: AuthProvider }
+  | { event: 'usageChanged'; provider: ProviderId }
   | { event: 'stateChanged'; provider?: AuthProvider }
   | { event: 'configChanged'; config: ServiceConfig }
   /** A check requested with `token` waits for a running sweep of the service to finish. */

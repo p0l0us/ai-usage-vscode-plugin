@@ -1,12 +1,15 @@
+import { configFromSettings } from './configSync';
+import { readServiceUsage, rotationTooltipLines } from './usageClient';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { registerBridgeIntegration } from './bridgeIntegration';
+import { configureBridgeService, registerBridgeIntegration } from './bridgeIntegration';
 import { registerBridgeModels } from './bridgeModels';
 import {
+  RotationDiagnostics,
+  usageSettings,
   ActivationChange,
-  ApiCallBudget,
   AuthProvider,
   GitHubAccount,
   KeepAliveAllResult,
@@ -14,45 +17,22 @@ import {
   LiveResult,
   LiveUsage,
   ProviderId,
-  SerializedUsage,
   ServiceEvent,
-  SharedCache,
   activationMessage,
-  claudeConfigDir,
-  codexHomeDir,
   deserializeUsage,
-  fetchClaudeUsage,
-  fetchClaudeUsageCli,
-  fetchClaudeUsageFromAccountFile,
-  fetchCodexUsage,
-  fetchCodexUsageCli,
-  fetchCodexResetCreditsCli,
-  fetchCodexUsageFromSessionLog,
-  fetchCopilotUsage,
-  fetchLocalThenApi,
   formatResetIn,
   formatResetRemaining,
   formatEarnedResets,
-  newestValidUsage,
   needsSignIn,
   readableProblem,
-  refreshCodexNativeLogin,
-  serviceHome,
-  stateDir,
-  usageHasExpiredReset
 } from '../service/out';
 import { AccountsMenu } from './accountsMenu';
 import { signInWithTerminal } from './accountLogin';
-import { codexConfigPath } from './codexConfig';
-import { findStaleCodexProcesses } from './codexProcesses';
-import { CodexProxyRuntime } from './codexProxyRuntime';
-import { applyCodexSettingsToFile, readCodexSettingAssignments } from './codexSettings';
-import { applyClaudeSettingsToFile, readClaudeSettingAssignments } from './claudeSettings';
 import { registerMcpProvider } from './mcpProvider';
-import { MCP_SERVER_NAME, mcpCli, mcpLauncher, readMcpRegistration, registerMcpServer, unregisterMcpServer } from './mcpRegistration';
+import { MCP_SERVER_NAME, McpRegistration, RegistrationOutcome } from './mcpRegistration';
 import { ServiceManager } from './serviceManager';
 import { openAiUsageSettings } from './settingsLink';
-import { compactTokenCount, readCurrentSessionTokens, SessionTokenUsage } from './sessionTokens';
+import { compactTokenCount, SessionTokenUsage } from './sessionTokens';
 
 type BillingPeriod = 'daily' | 'weekly' | 'monthly';
 
@@ -113,12 +93,9 @@ type LiveProvider = {
   icon: string;
   settingKey: string;
   status: vscode.StatusBarItem;
-  /** `known` is the newest reading this window already has, so a source that falls back between a
-   *  local file and the service can tell whether anything newer is worth fetching. */
-  fetch: (known?: LiveUsage) => Promise<LiveResult>;
-  /** Distinguishes cache entries when the result depends on the workspace (Copilot org). */
-  cacheDiscriminator?: () => Promise<string | undefined>;
-  /** Name of the extension-managed authentication profile currently selected for this provider. */
+  diagnostics?: RotationDiagnostics;
+  readingIdentity?: string;
+  /** Name of the service-managed authentication profile currently selected for this provider. */
   activeProfileName?: () => string | undefined;
   /** The Accounts row of the menu: the active profile, or how many are saved when none is active. */
   accountsSummary?: () => string;
@@ -126,9 +103,7 @@ type LiveProvider = {
   accountNumber?: () => string | undefined;
   activeProfileId?: () => string | undefined;
   activeProfileUsage?: () => LiveUsage | undefined;
-  /** Shared call spacing for providers read through a rate-limited service endpoint, when the
-   *  currently selected source uses one (a local source needs no spacing). */
-  budget?: () => ApiCallBudget | undefined;
+
   last?: LiveResult;
   /** Most recent successful reading, kept so errors do not blank the item. */
   lastGood?: LiveUsage;
@@ -144,60 +119,7 @@ const SOURCE_LABELS: Record<SourceId, string> = {
   api: 'service API', cli: 'local CLI', sessionLog: 'local session log', accountFile: 'local account file',
   both: 'local file, service API when stale'
 };
-const DEFAULT_CHECK_MINUTES: Record<ProviderId, number> = { claude: 10, codex: 5, copilot: 5 };
-/** Floors for `checkIntervalMinutes`. Claude accepts a quarter minute: with `both` the local account file
- *  answers most checks, and every endpoint call is spaced by the shared budget regardless. */
-const MIN_CHECK_MINUTES: Record<ProviderId, number> = { claude: 0.25, codex: 1, copilot: 1 };
-/** Default and floor for `aiUsage.claude.accountFile.checkIntervalSeconds`; this source is a plain
- *  local file read, so it can be polled far more often than the rate-limited API. */
-const ACCOUNT_FILE_DEFAULT_SECONDS = 15;
-const ACCOUNT_FILE_MIN_SECONDS = 5;
-
-function settingsFor(provider: ProviderId) {
-  const config = vscode.workspace.getConfiguration();
-  const source = config.get<string>(`aiUsage.${provider}.source`, 'api') as SourceId;
-  const legacy = config.get<number>('aiUsage.refreshIntervalMinutes');
-  const check = config.get<number>(`aiUsage.${provider}.checkIntervalMinutes`);
-  /** How often the service endpoint may be called, and the spacing `both` gives its fallback. */
-  const apiCheckIntervalMs = Math.max(MIN_CHECK_MINUTES[provider], check ?? legacy ?? DEFAULT_CHECK_MINUTES[provider]) * 60_000;
-  if (provider === 'claude' && (source === 'accountFile' || source === 'both')) {
-    const seconds = config.get<number>('aiUsage.claude.accountFile.checkIntervalSeconds', ACCOUNT_FILE_DEFAULT_SECONDS);
-    return {
-      source,
-      apiCheckIntervalMs,
-      checkIntervalMs: Math.max(ACCOUNT_FILE_MIN_SECONDS, Number.isFinite(seconds) ? seconds : ACCOUNT_FILE_DEFAULT_SECONDS) * 1000
-    };
-  }
-  return {
-    source,
-    apiCheckIntervalMs,
-    /** How often the source is called and the result stored in the shared cache. */
-    checkIntervalMs: apiCheckIntervalMs
-  };
-}
-
-/**
- * Whether a source spends Anthropic's usage quota on every check. `cli` does: `/usage` costs no
- * model tokens, but Claude Code answers it by calling the same endpoint `api` calls, so it claims
- * the same slot. `accountFile` reads a file, and `both` claims a slot only when it falls back.
- */
-function claudeSpendsEndpointQuota(source: SourceId): boolean {
-  return source === 'api' || source === 'cli';
-}
-
-/** Command or path of the Claude CLI, shared by the `cli` source and account keep-alives. */
-function claudeCliPath(): string {
-  return vscode.workspace.getConfiguration().get<string>('aiUsage.claude.cliPath') || 'claude';
-}
-
-/**
- * Smallest gap between two calls to Anthropic's usage endpoint, counted across every window, every
- * saved account and manual refreshes (`aiUsage.claude.api.minIntervalSeconds`).
- */
-function claudeMinIntervalMs(): number {
-  const seconds = vscode.workspace.getConfiguration().get<number>('aiUsage.claude.api.minIntervalSeconds', 30);
-  return Math.min(600, Math.max(0, Number.isFinite(seconds) ? seconds : 30)) * 1000;
-}
+function settingsFor(provider: ProviderId) { return usageSettings(configFromSettings(), provider); }
 
 /** How often every window re-reads the shared cache and redraws (`aiUsage.updateIntervalMinutes`). */
 function updateIntervalMs(): number {
@@ -225,160 +147,32 @@ function log(message: string): void {
 }
 
 export function activate(context: vscode.ExtensionContext): void {
-  registerBridgeIntegration(context);
-  registerBridgeModels(context);
   output = vscode.window.createOutputChannel('AI Usage');
   context.subscriptions.push(output);
   // Saved profiles, keep-alives and rotation live in the account service, a background process this extension
   // installs and manages; see serviceManager.ts. The Accounts menus and the status bar are its clients.
   const services = new ServiceManager(context, log);
   context.subscriptions.push(services);
+  configureBridgeService(async () => { const client = await services.ensure(); if (!client) throw new Error('The AI Usage service is unavailable.'); return client; });
+  registerBridgeIntegration(context);
+  registerBridgeModels(context);
   // Offers the service's MCP server to the agents of this window while aiUsage.mcp.enabled is on (experimental).
   registerMcpProvider(context, services, log);
   const accountsMenu = new AccountsMenu(services, log);
-  // Routes the Codex extension's model calls through a local proxy that reads auth.json per request, so a profile
-  // switch reaches open Codex chats on their next turn (aiUsage.codex.proxy.enabled). Opt-in; see codexProxy.ts.
-  const codexProxy = new CodexProxyRuntime(context, log, codexHomeDir,
-    () => refreshCodexNativeLogin(vscode.workspace.getConfiguration().get<string>('aiUsage.codex.cliPath') || 'codex'),
-    String((context.extension.packageJSON as { version?: string }).version ?? '0'));
-  context.subscriptions.push(codexProxy);
-  void codexProxy.sync();
-  // Writes the aiUsage.codexConfig.* values that are set into Codex's config.toml; unset ones leave the file alone.
-  const syncCodexSettings = () => {
-    const file = codexConfigPath(codexHomeDir());
-    const configuration = vscode.workspace.getConfiguration();
-    const assignments = readCodexSettingAssignments((setting) => configuration.get(setting),
-      (setting, value) => log(`codex config: ignoring ${setting.setting} = ${JSON.stringify(value)}; expected an integer of at least ${setting.minimum}`));
-    try {
-      if (applyCodexSettingsToFile(file, assignments,
-        (assignment, error) => log(`codex config: could not set ${assignment.table}.${assignment.key}: ${error.message}`))) {
-        log(`codex config: updated ${file} (${assignments.map((a) => `${a.table}.${a.key} = ${a.value}`).join(', ')}); new Codex chats use it`);
-      }
-    } catch (error) {
-      log(`codex config: could not update ${file}: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  };
-  syncCodexSettings();
-  // Writes the aiUsage.claudeConfig.* values that are set into the env of Claude Code's user settings.json.
-  const syncClaudeSettings = () => {
-    const file = path.join(claudeConfigDir(), 'settings.json');
-    const configuration = vscode.workspace.getConfiguration();
-    const assignments = readClaudeSettingAssignments((setting) => configuration.get(setting),
-      (setting, value) => log(`claude config: ignoring ${setting.setting} = ${JSON.stringify(value)}; expected an integer from ${setting.minimum}${setting.maximum === undefined ? '' : ` to ${setting.maximum}`}`));
-    try {
-      if (applyClaudeSettingsToFile(file, assignments)) {
-        log(`claude config: updated ${file} (${assignments.map((a) => `env.${a.env} = ${a.value}`).join(', ')}); new Claude Code sessions use it`);
-      }
-    } catch (error) {
-      log(`claude config: could not update ${file}: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  };
-  syncClaudeSettings();
   const status = vscode.window.createStatusBarItem(STATUS_ALIGNMENT, STATUS_PRIORITY.manual);
   status.command = 'aiUsage.showDetails';
   status.name = 'AI Usage';
   context.subscriptions.push(status);
-  // The ledger lives in the service home, so the service's account probes and the status bar space their calls together.
-  const claudeBudget = new ApiCallBudget(
-    path.join(stateDir(serviceHome()), 'claude-api-budget.json'), claudeMinIntervalMs);
-  // Spacing for the service call the `both` source falls back to: the provider's own check interval,
-  // so the endpoint is called no more often than with the `api` source.
-  const claudeFallbackBudget = new ApiCallBudget(
-    path.join(context.globalStorageUri.fsPath, 'claude-fallback-budget.json'), () => settingsFor('claude').apiCheckIntervalMs);
-  const codexFallbackBudget = new ApiCallBudget(
-    path.join(context.globalStorageUri.fsPath, 'codex-fallback-budget.json'), () => settingsFor('codex').apiCheckIntervalMs);
-
-  const liveProviders: LiveProvider[] = [
-    {
-      id: 'claude',
-      // Built-in codicons for the vendor logos (VS Code 1.130+).
-      icon: 'claude',
-      settingKey: 'aiUsage.claude.enabled',
-      status: vscode.window.createStatusBarItem(STATUS_ALIGNMENT, STATUS_PRIORITY.claude),
-      fetch: (known) => {
-        const { source, apiCheckIntervalMs } = settingsFor('claude');
-        if (source === 'accountFile') {
-          return fetchClaudeUsageFromAccountFile();
-        }
-        if (source === 'cli') {
-          return fetchClaudeUsageCli(claudeCliPath());
-        }
-        if (source === 'both') {
-          return fetchLocalThenApi({
-            known, apiCheckIntervalMs, fallback: claudeFallbackBudget, budget: claudeBudget,
-            local: () => fetchClaudeUsageFromAccountFile(),
-            api: () => fetchClaudeUsage(undefined, claudeBudget)
-          });
-        }
-        return fetchClaudeUsage(undefined, claudeBudget);
-      },
-      // "api" and "cli" both reach the rate-limited endpoint on every check; "accountFile" is a
-      // local read with nothing to space out, and "both" claims its slot only when it falls back.
-      budget: () => (claudeSpendsEndpointQuota(settingsFor('claude').source) ? claudeBudget : undefined),
-      cacheDiscriminator: async () => cacheDiscriminator(services, 'claude'),
-      activeProfileName: () => activeProfileName(services, 'claude'),
-      accountsSummary: () => accountsSummary(services, 'claude'),
-      activeProfileId: () => services.views.claude?.activeProfileId,
-      activeProfileUsage: () => accountUsage(services, 'claude'),
-      accountNumber: () => accountNumberLabel(services, 'claude')
-    },
-    {
-      id: 'codex',
-      icon: 'openai',
-      settingKey: 'aiUsage.codex.enabled',
-      status: vscode.window.createStatusBarItem(STATUS_ALIGNMENT, STATUS_PRIORITY.codex),
-      fetch: async (known) => {
-        const { source, apiCheckIntervalMs } = settingsFor('codex');
-        if (source === 'cli') {
-          return fetchCodexUsageCli(vscode.workspace.getConfiguration().get<string>('aiUsage.codex.cliPath') || 'codex');
-        }
-        let result: LiveResult;
-        if (source === 'sessionLog') {
-          result = await fetchCodexUsageFromSessionLog();
-        } else if (source === 'both') {
-          result = await fetchLocalThenApi({
-            known, apiCheckIntervalMs, fallback: codexFallbackBudget,
-            local: () => fetchCodexUsageFromSessionLog(),
-            api: () => fetchCodexUsage()
-          });
-        } else {
-          result = await fetchCodexUsage();
-        }
-        if (result.kind === 'ok' && source !== 'sessionLog') {
-          const credits = await fetchCodexResetCreditsCli(vscode.workspace.getConfiguration().get<string>('aiUsage.codex.cliPath') || 'codex');
-          if (credits) { result.usage.resetCredits = credits; }
-        }
-        return result;
-      },
-      cacheDiscriminator: async () => cacheDiscriminator(services, 'codex'),
-      activeProfileName: () => activeProfileName(services, 'codex'),
-      accountsSummary: () => accountsSummary(services, 'codex'),
-      activeProfileId: () => services.views.codex?.activeProfileId,
-      activeProfileUsage: () => accountUsage(services, 'codex'),
-      accountNumber: () => accountNumberLabel(services, 'codex')
-    },
-    {
-      id: 'copilot',
-      icon: 'copilot',
-      settingKey: 'aiUsage.copilot.enabled',
-      status: vscode.window.createStatusBarItem(STATUS_ALIGNMENT, STATUS_PRIORITY.copilot),
-      fetch: async () =>
-        fetchCopilotUsage(getGitHubAccounts, {
-          workspaceOwners: await getWorkspaceOwners(),
-          preferredLogin: vscode.workspace.getConfiguration().get<string>('aiUsage.copilot.account') || undefined,
-          log
-        }),
-      cacheDiscriminator: async () => {
-        const owners = (await getWorkspaceOwners()).map((owner) => owner.toLowerCase()).sort();
-        const login = vscode.workspace.getConfiguration().get<string>('aiUsage.copilot.account') || '';
-        return `${login}|${owners.join(',')}`;
-      }
-    }
-  ];
-
-  const cache = new SharedCache(path.join(context.globalStorageUri.fsPath, 'usage-cache.json'));
+  const liveProviders: LiveProvider[] = (['claude', 'codex', 'copilot'] as const).map(id => ({
+    id, icon: id === 'claude' ? 'claude' : id === 'codex' ? 'openai' : 'copilot', settingKey: `aiUsage.${id}.enabled`,
+    status: vscode.window.createStatusBarItem(STATUS_ALIGNMENT, STATUS_PRIORITY[id]),
+    ...(id === 'copilot' ? {} : {
+      activeProfileName: () => activeProfileName(services, id), accountsSummary: () => accountsSummary(services, id),
+      activeProfileId: () => services.views[id]?.activeProfileId,
+      activeProfileUsage: () => accountUsage(services, id), accountNumber: () => accountNumberLabel(services, id)
+    })
+  }));
   const sessionTokens = new Map<'claude' | 'codex', SessionTokenUsage>();
-  log(`cache: ${path.join(context.globalStorageUri.fsPath, 'usage-cache.json')}`);
   for (const provider of liveProviders) {
     provider.status.command = clickCommand(provider);
     provider.status.name = `AI Usage: ${provider.id}`;
@@ -400,141 +194,36 @@ export function activate(context: vscode.ExtensionContext): void {
   };
 
 
-  /**
-   * Refreshes one provider. Order of preference: a fresh reading from the shared cache (another
-   * window fetched it), then the network unless the shared backoff or another window's in-flight
-   * fetch says to wait. Providers never wait on each other.
-   */
-  const refreshProvider = (provider: LiveProvider, force: boolean, afterRotation = false): Promise<void> => {
-    if (provider.inFlight) {
-      return provider.inFlight;
-    }
-    if (provider.id !== 'copilot' && services.views[provider.id]?.checkingActive && !afterRotation) {
-      return Promise.resolve();
-    }
-    let retryForNewProfile = false;
+  /** Clients request and display service readings. They never fall back to a vendor request on disconnect. */
+  const refreshProvider = (provider: LiveProvider, force: boolean, _afterRotation = false): Promise<void> => {
+    if (provider.inFlight) return provider.inFlight;
     provider.inFlight = (async () => {
       const config = vscode.workspace.getConfiguration();
       if (!config.get<boolean>(provider.settingKey, true)) {
-        provider.last = { kind: 'unavailable', provider: provider.id };
-        provider.status.hide();
-        await updateChipContext(provider, false);
-        return;
+        provider.status.hide(); await updateChipContext(provider, false); return;
       }
-
-      // Show the chat chip right away; until the first reading arrives a click says it is waiting.
-      await updateChipContext(provider, config.get<boolean>('aiUsage.chatChips.enabled', true));
-
-      // A switch made outside this window (the command line, another window, the vendor CLI) is followed by the
-      // service; its view is refreshed here so the reading is keyed by the profile that is active now.
-      if (provider.id !== 'copilot' && services.connected) {
-        await services.refreshViews(provider.id);
-      }
-      const profileId = provider.id === 'copilot' ? undefined : services.views[provider.id]?.activeProfileId;
-      if (provider.id !== 'copilot' && provider.readingProfileId !== profileId) {
-        provider.last = undefined;
-        provider.lastGood = undefined;
-        provider.readingProfileId = profileId;
-        renderLive(provider);
-      }
-      const { source, checkIntervalMs } = settingsFor(provider.id);
-      const budget = provider.budget?.();
-      // Each source has its own cache entry so switching sources never shows another source's reading.
-      const key = SharedCache.key(provider.id, [source, await provider.cacheDiscriminator?.()].filter(Boolean).join('|'));
-      const now = Date.now();
-      const entry = cache.read(key);
-      const cachedReading = deserializeUsage(entry);
-      const cached = cachedReading && !usageHasExpiredReset(cachedReading, now) ? cachedReading : undefined;
-      if (cached && (!provider.lastGood || cached.fetchedAt > provider.lastGood.fetchedAt)) {
-        provider.lastGood = cached;
-      }
-      const cachedAge = cached ? now - cached.fetchedAt.getTime() : Number.POSITIVE_INFINITY;
-      let result: LiveResult | undefined;
-
-      if (!force && cached && cachedAge < checkIntervalMs) {
-        result = { kind: 'ok', usage: cached };
-        if (provider.last?.kind !== 'ok' || provider.last.usage.fetchedAt.getTime() !== cached.fetchedAt.getTime()) {
-          log(`${provider.id}: using shared cache (${Math.round(cachedAge / 1000)}s old)`);
+      try {
+        const client = await services.ensure();
+        if (!client) throw new Error('The account service is unavailable; waiting to reconnect.');
+        if (provider.id === 'copilot') await client.usageContext({ accounts: await getGitHubAccounts(), workspaceOwners: await getWorkspaceOwners() });
+        const state = await readServiceUsage(client, provider.id, force, config.get<boolean>(`aiUsage.${provider.id}.advanced.rotationDiagnostics`, false));
+        if (provider.readingIdentity !== state.identity) { provider.last = undefined; provider.lastGood = undefined; }
+        provider.readingIdentity = state.identity;
+        provider.last = state.result;
+        provider.lastGood = state.lastGood;
+        if (provider.id !== 'copilot') {
+          await services.refreshViews(provider.id);
+          provider.readingProfileId = state.profileId;
+          provider.diagnostics = state.diagnostics;
         }
-      } else if (entry?.nextAllowedAt && entry.nextAllowedAt > now) {
-        const waitMinutes = Math.ceil((entry.nextAllowedAt - now) / 60_000);
-        result = {
-          kind: 'error',
-          provider: provider.id,
-          title: titleFor(provider),
-          message: `${entry.lastError ?? 'Earlier request failed'} — retrying in ${waitMinutes} min`,
-          transient: true
-        };
-      } else if (!cache.tryLock(key, now)) {
-        // Another window is fetching right now; its result will show up in the cache shortly.
-        log(`${provider.id}: another window is fetching, waiting for the shared cache`);
-        result = provider.last ?? (cached ? { kind: 'ok', usage: cached } : undefined);
-      } else if (budget && !budget.reserve(now)) {
-        // The service endpoint is called for every account and on every manual refresh; a reading
-        // that has to wait for its slot is shown from the cache instead of spending the quota.
-        cache.release(key);
-        const seconds = Math.ceil((budget.nextAllowedAt(now) - now) / 1000);
-        log(`${provider.id}: usage endpoint call skipped, next call allowed in ${seconds}s`);
-        result = provider.last ?? (cached ? { kind: 'ok', usage: cached } : undefined);
-      } else {
-        // Fetch in the background: keep whatever is currently shown (previous reading or nothing
-        // on first load) until the new result arrives.
-        try {
-          result = await provider.fetch(provider.lastGood);
-        } catch (error) {
-          result = { kind: 'error', provider: provider.id, title: titleFor(provider), message: String(error), transient: true };
-        }
-        if (result.kind === 'ok') {
-          cache.recordSuccess(key, result.usage);
-        } else if (result.kind === 'error' && result.transient && (source === 'accountFile' || source === 'both')) {
-          // A local file read has no rate limit to respect, so skip the network backoff (its 1-30 min
-          // floor) and keep to the source's own regular check interval. "both" is included because
-          // that backoff would also stall its free local read, and its fallback call is already
-          // spaced by the provider's check interval and the service's own budget.
-          cache.recordFailure(key, result.message);
-        } else if (result.kind === 'error' && result.transient) {
-          const until = cache.recordBackoff(key, result.message, result.retryAfterMs, Date.now());
-          log(`${provider.id}: backing off until ${new Date(until).toLocaleTimeString()}${result.retryAfterMs ? ' (Retry-After)' : ''}`);
-        } else if (result.kind === 'error') {
-          cache.recordFailure(key, result.message);
-        } else {
-          cache.release(key);
-        }
-        log(`${provider.id} [${SOURCE_LABELS[source] ?? source}]: ${summarizeResult(result)}`);
-      }
-
-      if (result) {
-        if (provider.id !== 'copilot' && services.views[provider.id]?.activeProfileId !== profileId) {
-          provider.last = undefined;
-          provider.lastGood = undefined;
-          provider.readingProfileId = undefined;
-          renderLive(provider);
-          retryForNewProfile = true;
-          return;
-        }
-        provider.last = result;
-        provider.readingProfileId = profileId;
-        if (result.kind === 'ok') {
-          provider.lastGood = result.usage;
-          // Codex session-log records carry no account of their own, so they are never attributed to
-          // the active profile — including as the local half of "both".
-          const logSourced = source === 'sessionLog' || (provider.id === 'codex' && source === 'both');
-          const client = services.connected;
-          if (client && profileId && provider.id !== 'copilot' && !logSourced && services.views[provider.id]?.activeProfileId === profileId) {
-            // The service checks that the profile still owns the native login before it keeps the reading.
-            client.observe(provider.id, profileId, serializeUsage(result.usage)).catch((error: unknown) => log(`${provider.id}: could not hand the reading to the service: ${String(error)}`));
-          } else if (client && logSourced && provider.id === 'codex') {
-            // Session logs name no account, but a limit they show still starts a sweep that reads the active account.
-            client.hintLimit(provider.id, serializeUsage(result.usage)).catch(() => undefined);
-          }
-        }
+        services.runtimeStatus = await client.call('runtime.status');
+      } catch (error) {
+        provider.last = { kind: 'error', provider: provider.id, title: PROVIDER_TITLES[provider.id],
+          message: error instanceof Error ? error.message : String(error), transient: true };
       }
       renderLive(provider);
       await updateChipContext(provider, config.get<boolean>('aiUsage.chatChips.enabled', true));
-    })().finally(() => {
-      provider.inFlight = undefined;
-      if (retryForNewProfile) { void refreshProvider(provider, false); }
-    });
+    })().finally(() => { provider.inFlight = undefined; });
     return provider.inFlight;
   };
 
@@ -568,14 +257,14 @@ export function activate(context: vscode.ExtensionContext): void {
       return;
     }
     // With the account proxy, chats follow the switch on their next turn; a restart would repair nothing.
-    if (codexProxy.active) {
+    if (services.runtimeStatus.codexProxyActive) {
       return;
     }
     const record = context.globalState.get<CodexSwitchRecord>(CODEX_SWITCH_KEY);
     if (!record || context.workspaceState.get<number>(CODEX_SWITCH_NOTIFIED_KEY) === record.switchedAt) {
       return;
     }
-    const stale = await findStaleCodexProcesses(record.switchedAt);
+    const stale = await services.require().call<Array<{ pid: number }>>('runtime.staleCodex', { switchedAt: record.switchedAt, parentPid: process.pid });
     if (!stale.length || context.workspaceState.get<number>(CODEX_SWITCH_NOTIFIED_KEY) === record.switchedAt) {
       return;
     }
@@ -651,9 +340,14 @@ export function activate(context: vscode.ExtensionContext): void {
   // What the service announces, whoever asked for it (this window, another one, or the ai-usage command).
   context.subscriptions.push(services.onEvent((event) => {
     switch (event.event) {
+      case 'usageChanged': {
+        const provider = liveProviders.find(p => p.id === event.provider);
+        if (provider) void refreshProvider(provider, false);
+        break;
+      }
       case 'activated': {
         const message = event.level === 'info'
-          ? activationMessage(event.provider, event.name, event.automatic, event.provider === 'codex' && codexProxy.active)
+          ? activationMessage(event.provider, event.name, event.automatic, event.provider === 'codex' && services.runtimeStatus.codexProxyActive)
           : event.message;
         if (event.level === 'error') { void vscode.window.showErrorMessage(`AI Usage: ${message}`); }
         else if (event.level === 'warning') { void vscode.window.showWarningMessage(`AI Usage: ${message}`); }
@@ -683,8 +377,6 @@ export function activate(context: vscode.ExtensionContext): void {
   const accountTimer = setInterval(() => {
     services.tick();
     void warnAboutStaleCodexProcesses();
-    // Retries a blocked port and takes the proxy over when the window that served it has closed.
-    void codexProxy.sync();
   }, 60_000);
   context.subscriptions.push({ dispose: () => clearInterval(accountTimer) });
   /**
@@ -694,21 +386,20 @@ export function activate(context: vscode.ExtensionContext): void {
    */
   const registerMcpWithCli = async (provider: AuthProvider): Promise<void> => {
     const title = provider === 'claude' ? 'Claude' : 'Codex';
-    const launcher = mcpLauncher(services.home);
+    const client = services.require();
+    const { launcher, cli, reason, registration: before } = await client.call<{ launcher: string; cli?: string; reason?: string; registration: McpRegistration }>('mcp.registration', { provider });
     if (!services.isInstalled() || !fs.existsSync(launcher)) {
       void vscode.window.showWarningMessage(`AI Usage: the account service is not installed, so there is no ai-usage command to register with the ${title} CLI. Install it from Account service… first.`);
       return;
     }
-    const { cli, reason } = mcpCli(provider, vscode.workspace.getConfiguration().get<string>(`aiUsage.${provider}.cliPath`));
     if (!cli) { void vscode.window.showErrorMessage(`AI Usage: ${reason}`); return; }
     const where = provider === 'claude' ? 'in its user scope, for every project' : 'in its config.toml';
-    const before = readMcpRegistration(provider, launcher);
     if (before.current) {
       const choice = await vscode.window.showInformationMessage(
         `AI Usage: the ${title} CLI already runs the “${MCP_SERVER_NAME}” MCP server from ${launcher} ${where}.`, 'Register again', 'Remove');
       if (!choice) { return; }
       if (choice === 'Remove') {
-        const removed = await unregisterMcpServer(provider, cli);
+        const removed = await client.call<{ ok: boolean; detail: string }>('mcp.unregister', { provider });
         log(`${provider}: ${path.basename(cli)} mcp remove ${MCP_SERVER_NAME}: ${removed.ok ? 'removed' : 'failed'}: ${removed.detail}`);
         if (removed.ok) { void vscode.window.showInformationMessage(`AI Usage: the “${MCP_SERVER_NAME}” MCP server was removed from the ${title} CLI.`); }
         else { void vscode.window.showErrorMessage(`AI Usage: could not remove the “${MCP_SERVER_NAME}” MCP server from the ${title} CLI: ${removed.detail}`); }
@@ -721,7 +412,7 @@ export function activate(context: vscode.ExtensionContext): void {
       if (choice !== 'Replace') { return; }
     }
     const result = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: `AI Usage: registering the MCP server with the ${title} CLI…` },
-      () => registerMcpServer(provider, cli, launcher));
+      () => client.call<RegistrationOutcome>('mcp.register', { provider }));
     log(`${provider}: registering the MCP server with ${cli}: ${result.ok ? 'registered' : 'failed'}: ${result.detail}`);
     if (!result.ok) {
       void vscode.window.showErrorMessage(`AI Usage: could not register the MCP server with the ${title} CLI: ${result.detail}`);
@@ -745,7 +436,7 @@ export function activate(context: vscode.ExtensionContext): void {
         items.push({ label: '$(plug) Enable the MCP server…', detail: 'Makes account tools available to agents in this VS Code window and allows CLI registration.', action: 'enable' });
       } else {
         for (const provider of ['claude', 'codex'] as const) {
-          const registration = readMcpRegistration(provider, mcpLauncher(services.home));
+          const { registration } = await client.call<{ registration: McpRegistration }>('mcp.registration', { provider });
           items.push({
             label: `$(plug) Register with ${provider === 'claude' ? 'Claude' : 'Codex'} CLI…`,
             description: registration.current ? 'Registered' : registration.registered ? 'Registered with another command' : 'Not registered',
@@ -791,7 +482,7 @@ export function activate(context: vscode.ExtensionContext): void {
       afterSaved: (provider) => afterProfileActivated(provider, { kind: 'saved', accountChanged: false }),
       back: async () => { await vscode.commands.executeCommand('aiUsage.showDetails'); },
       signIn: async (provider, profile) => { await signInAgain(provider, profile.id); },
-      mcpRegistration: (provider) => readMcpRegistration(provider, mcpLauncher(services.home)),
+      mcpRegistration: async (provider) => (await services.require().call<{ registration: McpRegistration }>('mcp.registration', { provider })).registration,
       registerMcp: registerMcpWithCli,
       sendKeepAlive: async (provider, profiles) => {
         const client = services.require();
@@ -971,11 +662,10 @@ export function activate(context: vscode.ExtensionContext): void {
     const config = vscode.workspace.getConfiguration();
     const enabled = config.get<boolean>('aiUsage.chatChips.enabled', true) &&
       config.get<boolean>('aiUsage.chatTokens.enabled', true);
-    const workspaces = (vscode.workspace.workspaceFolders ?? [])
-      .filter((folder) => folder.uri.scheme === 'file')
-      .map((folder) => folder.uri.fsPath);
     await Promise.all((['claude', 'codex'] as const).map(async (provider) => {
-      const usage = enabled ? readCurrentSessionTokens(provider, workspaces) : undefined;
+      const client = enabled ? await services.ensure() : undefined;
+      const raw = client ? await client.call<Omit<SessionTokenUsage, 'updatedAt'> & { updatedAt: string } | null>('usage.sessionTokens', { provider }).catch(() => null) : null;
+      const usage = raw ? { ...raw, updatedAt: new Date(raw.updatedAt) } : undefined;
       if (usage) {
         sessionTokens.set(provider, usage);
       } else {
@@ -1037,19 +727,8 @@ export function activate(context: vscode.ExtensionContext): void {
     if (event.affectsConfiguration('aiUsage.accounts')) {
       refreshManual();
     }
-    if (event.affectsConfiguration('aiUsage.codex.proxy')) {
-      void codexProxy.sync();
-    }
-    if (event.affectsConfiguration('aiUsage.codexConfig')) {
-      syncCodexSettings();
-    }
-    if (event.affectsConfiguration('aiUsage.claudeConfig')) {
-      syncClaudeSettings();
-    }
-    if (event.affectsConfiguration('aiUsage.claude') || event.affectsConfiguration('aiUsage.codex') || event.affectsConfiguration('aiUsage.mcp') ||
-      event.affectsConfiguration('aiUsage.history') || event.affectsConfiguration('aiUsage.privateProfiles') || event.affectsConfiguration('aiUsage.projectProfiles')) {
-      void services.pushSettings(event);
-    }
+
+    if (event.affectsConfiguration('aiUsage')) { void services.pushSettings(event); }
     if (event.affectsConfiguration('aiUsage.accountService')) {
       void services.ensure({ promptInstall: true });
     }
@@ -1171,9 +850,7 @@ async function showUsageHistory(services: ServiceManager): Promise<void> {
 }
 
 /** A reading as the service takes it: ISO dates, nothing else changed. */
-function serializeUsage(usage: LiveUsage): SerializedUsage {
-  return { ...usage, fetchedAt: usage.fetchedAt.toISOString(), windows: usage.windows.map((window) => ({ label: window.label, usedPercent: window.usedPercent, resetsAt: window.resetsAt?.toISOString() })) };
-}
+
 
 const AGENTS_WINDOW_WALKTHROUGH = 'aiUsage.agentsWindow';
 const AGENTS_WINDOW_SETTING = 'extensions.supportAgentsWindow';
@@ -1378,10 +1055,7 @@ function clickCommand(provider: LiveProvider): vscode.Command {
 }
 
 function visibleUsage(provider: LiveProvider): LiveUsage | undefined {
-  const sameAccount = !provider.activeProfileId || provider.readingProfileId === provider.activeProfileId();
-  const live = sameAccount ? provider.last?.kind === 'ok' ? provider.last.usage
-    : provider.last?.kind === 'error' ? provider.lastGood : undefined : undefined;
-  return newestValidUsage(live, provider.activeProfileUsage?.());
+  return provider.last?.kind === 'ok' ? provider.last.usage : provider.lastGood;
 }
 
 function renderLive(provider: LiveProvider): void {
@@ -1409,6 +1083,11 @@ function renderLive(provider: LiveProvider): void {
       item.command = needsAccess ? 'aiUsage.connectGitHub' : 'aiUsage.showDetails';
       item.backgroundColor = undefined;
       item.show();
+    } else if (provider.diagnostics) {
+      item.text = statusText(provider, '$(clock)', PROVIDER_TITLES[provider.id]);
+      const tooltip = new vscode.MarkdownString();
+      for (const line of rotationTooltipLines(provider.diagnostics)) { tooltip.appendText(line); tooltip.appendMarkdown('\n\n'); }
+      item.tooltip = tooltip; item.show();
     } else {
       item.hide();
     }
@@ -1417,7 +1096,7 @@ function renderLive(provider: LiveProvider): void {
 
   if (result?.kind === 'error' && !usage) {
     item.text = statusText(provider, '$(warning)', result.title);
-    item.tooltip = `${result.title}\n${result.message}`;
+    item.tooltip = `${result.title}\n${result.message}${provider.diagnostics ? '\n\n' + rotationTooltipLines(provider.diagnostics).join('\n') : ''}`;
     item.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
     item.show();
     return;
@@ -1432,7 +1111,7 @@ function renderLive(provider: LiveProvider): void {
   }
   item.text = statusText(provider, formatUsageLabel(usage, false, statusBarStyle().usage), usage.title);
   item.tooltip = buildTooltip(usage, result?.kind === 'error' ? result.message : undefined,
-    provider.activeProfileName?.(), provider.activeProfileUsage?.());
+    provider.activeProfileName?.(), provider.activeProfileUsage?.(), provider.diagnostics);
   item.color = Date.now() - usage.fetchedAt.getTime() >= STALE_AFTER_MS
     ? new vscode.ThemeColor('disabledForeground') : undefined;
 
@@ -1523,10 +1202,7 @@ function accountUsage(services: ServiceManager, provider: AuthProvider): LiveUsa
 }
 
 /** A non-secret cache suffix prevents usage from one account appearing after switching to another. */
-function cacheDiscriminator(services: ServiceManager, provider: AuthProvider): string | undefined {
-  const id = services.views[provider]?.activeProfileId;
-  return id ? `auth-profile:${id}` : undefined;
-}
+
 
 /** Status bar text: the figures behind whatever `aiUsage.statusBar.labels` puts in front of them, and the account number. */
 function statusText(provider: LiveProvider, body: string, title?: string): string {
@@ -1537,7 +1213,7 @@ function statusText(provider: LiveProvider, body: string, title?: string): strin
   return `${icon}${name}${account ? `${account} ` : ''}${body}`.trimEnd();
 }
 
-function buildTooltip(usage: LiveUsage, refreshError?: string, activeProfile?: string, profileUsage?: LiveUsage): vscode.MarkdownString {
+function buildTooltip(usage: LiveUsage, refreshError?: string, activeProfile?: string, profileUsage?: LiveUsage, diagnostics?: RotationDiagnostics): vscode.MarkdownString {
   const md = new vscode.MarkdownString(undefined, true);
   if (refreshError) {
     const minutes = Math.round((Date.now() - usage.fetchedAt.getTime()) / 60_000);
@@ -1571,6 +1247,12 @@ function buildTooltip(usage: LiveUsage, refreshError?: string, activeProfile?: s
   if (usage.provider === 'claude' || usage.provider === 'codex') {
     md.appendMarkdown('\n\n$(key) ');
     md.appendText(activeProfile ? `Authentication profile: ${activeProfile}` : 'Manage authentication profiles');
+  }
+  if (diagnostics) {
+    md.appendMarkdown('\n\n---\n\n**Rotation diagnostics**\n\n');
+    for (const line of rotationTooltipLines(diagnostics)) {
+      md.appendMarkdown('\n\n'); md.appendText(line);
+    }
   }
   return md;
 }
@@ -1665,8 +1347,7 @@ function providerItems(provider: LiveProvider): DetailItem[] {
   // click. Window names and exact reset times stay one hover away in the status bar tooltip.
   const now = new Date();
   const { source, checkIntervalMs } = settingsFor(provider.id);
-  const budget = provider.budget?.();
-  const throttledMs = budget ? budget.nextAllowedAt(now.getTime()) - now.getTime() : 0;
+  const throttledMs = 0;
   items.push({
     label: `${usageIcon(worstPercent(usage))} ${usage.windows.map((window) => `${window.label} ${usagePart(window, now)}`).join(' · ')}`,
     description: `Updated ${usage.fetchedAt.toLocaleTimeString()}`,
@@ -1785,12 +1466,7 @@ async function showDetailsPanel(providers: LiveProvider[], refreshAll: () => Pro
   picker.show();
 }
 
-function summarizeResult(result: LiveResult): string {
-  if (result.kind === 'ok') {
-    return `ok ${formatUsageLabel(result.usage)}`;
-  }
-  return result.kind === 'error' ? `error: ${result.message}` : `unavailable${result.reason ? `: ${result.reason}` : ''}`;
-}
+
 
 function hasUserConfiguredAccounts(): boolean {
   const info = vscode.workspace.getConfiguration().inspect<AccountUsage[]>('aiUsage.accounts');

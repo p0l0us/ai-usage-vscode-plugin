@@ -108,17 +108,22 @@ it once imported, and mind that a copied login is the same session on both compu
 
 ### The account service and the `ai-usage` command
 
-Account management runs in a small account service. Installed as a background service, it keeps its profiles in
-`~/.ai-usage`, and keep-alives and rotation keep going while VS Code is closed and a terminal can drive them;
-without it, the same service runs inside VS Code while a window is open, with the profiles saved in VS Code as
-before, and nothing runs in the background. Project profiles are listed either way, and **AI Usage: Account
-Service…** copies or moves profiles between VS Code and the service in both directions. On first use the extension
-asks once to install it (**Install**, **Not now** or **Don't ask again**, which keeps it inside VS Code;
-`aiUsage.accountService.background` is the switch): the service goes to `~/.ai-usage`, is registered to start when
-you sign in (a systemd user unit, a launchd agent or a Run registry value), and offers to move or copy the profiles
-saved in VS Code into it. Each extension update upgrades it. **AI Usage: Account Service…** shows its status and
-log and starts, stops, reinstalls or uninstalls it; the service needs Node.js 20 or newer, and uses VS Code's own
-runtime when no other is found.
+The account service owns usage collection, saved credentials, account rotation, earned resets, the Codex proxy
+and the CLI bridge. VS Code displays its readings and forwards settings and user actions. Installed in the
+background, the service keeps working when VS Code closes. Otherwise one editor window hosts the same service
+and other windows share it; both modes keep profiles in `~/.ai-usage/profiles.json`. Existing nonconflicting VS Code
+profiles are migrated there on connection.
+
+Every `aiUsage.*` setting is also available through `ai-usage config` without the prefix. Connecting VS Code applies
+its effective settings; CLI changes are reflected back to connected editors. Enable
+`aiUsage.claude.advanced.rotationDiagnostics` or `aiUsage.codex.advanced.rotationDiagnostics` to see every saved
+account's rotation score and the reason the active account is kept in its status tooltip.
+
+See [service ownership and deployment modes](docs/SERVICE_ARCHITECTURE.md),
+[configuration](docs/CONFIGURATION.md), and the [optional Docker deployment proposal](docs/DOCKER_PROPOSAL.md).
+**AI Usage: Account Service…** installs, upgrades, starts, stops or removes the background service. It requires
+Node.js 20 or newer; the bundled CLI bridge requires Node.js 22 or newer. VS Code's runtime can be used when
+available. `AI_USAGE_NODE` selects the runtime explicitly.
 
 The service comes with the `ai-usage` command, on the PATH of every VS Code terminal (add `~/.ai-usage/bin` to
 your own PATH for other terminals). `ai-usage` alone opens a live view of both services with keys to switch,

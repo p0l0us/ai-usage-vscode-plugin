@@ -340,6 +340,11 @@ export function installService(options: InstallOptions): InstallResult {
     if (fs.existsSync(file)) { fs.copyFileSync(file, path.join(dir, name)); }
   }
   for (const name of ['bin', 'out']) { copyDir(path.join(options.sourceDir, name), path.join(dir, name)); }
+  const bridgeSource = [path.join(options.sourceDir, 'bridge'), path.join(options.sourceDir, '..', 'bridge')].find(candidate => fs.existsSync(path.join(candidate, 'src', 'cli.mjs')));
+  if (bridgeSource) {
+    copyDir(path.join(bridgeSource, 'src'), path.join(dir, 'bridge', 'src'));
+    fs.copyFileSync(path.join(bridgeSource, 'package.json'), path.join(dir, 'bridge', 'package.json'));
+  }
   fs.writeFileSync(launchScript(options.home), launchScriptText());
   const current: CurrentInstall = { version, dir, node: { command: options.node.command, args: options.node.args, env: options.node.env }, installedAt: new Date().toISOString() };
   fs.writeFileSync(currentFile(options.home), `${JSON.stringify(current, null, 2)}\n`);

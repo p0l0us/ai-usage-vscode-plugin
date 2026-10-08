@@ -23,6 +23,7 @@ const original = Module._load;
 Module._load = function (id, ...args) { return id === 'vscode' ? vscode : original.call(this, id, ...args); };
 const integration = require('../out/bridgeIntegration');
 Module._load = original;
+require('./helpers/bridgeService').bridgeService(test, integration, settings, vscode);
 
 async function setup(t) {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'bridge-extension-test-'));

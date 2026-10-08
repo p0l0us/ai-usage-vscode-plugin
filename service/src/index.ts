@@ -19,3 +19,8 @@ export { RpcError } from './rpc';
 export { AccountService, TICK_MS } from './accountService';
 export { runDaemon, startServiceHost } from './daemon';
 export type { HostOptions, ServiceHost } from './daemon';
+
+export * from './usageMonitor';
+export * from './runtime';
+export * from './sessionTokens';
+export * from './rotationDiagnostics';

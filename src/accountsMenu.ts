@@ -42,7 +42,7 @@ export type MenuHooks = {
   /** Where the menu's Back item leads, the AI Usage menu of every service; no Back item without it. */
   back?: (provider: AuthProvider) => Promise<void>;
   /** What the provider's CLI has registered for the service's MCP server, shown beside the menu item. */
-  mcpRegistration?: (provider: AuthProvider) => McpRegistration | undefined;
+  mcpRegistration?: (provider: AuthProvider) => McpRegistration | undefined | Promise<McpRegistration | undefined>;
   /** Registers the service's MCP server with the provider's CLI; the item is offered only while `mcp.enabled` is on and this hook exists. */
   registerMcp?: (provider: AuthProvider) => Promise<void>;
 };
@@ -146,7 +146,7 @@ export class AccountsMenu {
       try { view = await this.view(client, provider); }
       catch (error) { void vscode.window.showErrorMessage(`AI Usage: could not read the ${TITLES[provider]} accounts: ${errorMessage(error)}`); return; }
       const config = this.services.config ?? await client.getConfig();
-      const mcp = config.mcp.enabled && hooks?.registerMcp ? { registration: hooks.mcpRegistration?.(provider) } : undefined;
+      const mcp = config.mcp.enabled && hooks?.registerMcp ? { registration: await hooks.mcpRegistration?.(provider) } : undefined;
       const item = await vscode.window.showQuickPick(this.items(view, config, Boolean(hooks?.back), mcp, hooks?.activeUsage), {
         title: `AI Usage · ${TITLES[provider]} accounts`,
         placeHolder: 'Choose a profile to activate, or manage saved profiles',

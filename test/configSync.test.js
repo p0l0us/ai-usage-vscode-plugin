@@ -25,8 +25,8 @@ test('setting names map to service keys only for known settings of the right ser
   assert.equal(configKeyOf('aiUsage.codex.autoRotate.strategy'), 'codex.autoRotate.strategy');
   assert.equal(configKeyOf('aiUsage.codex.autoRotate.resetAware'), 'codex.autoRotate.resetAware');
   assert.equal(configKeyOf('aiUsage.codex.autoReset.enabled'), 'codex.autoReset.enabled');
-  assert.equal(configKeyOf('aiUsage.claude.source'), undefined, 'the usage source is not a service setting');
-  assert.equal(configKeyOf('aiUsage.statusBar.enabled'), undefined);
+  assert.equal(configKeyOf('aiUsage.claude.source'), 'claude.source', 'the service owns usage sources');
+  assert.equal(configKeyOf('aiUsage.statusBar.enabled'), 'statusBar.enabled');
   assert.equal(configKeyOf('aiUsage.mcp.enabled'), 'mcp.enabled', 'the MCP switches are global service settings');
   assert.equal(configKeyOf('aiUsage.mcp.switching'), 'mcp.switching');
   assert.equal(configKeyOf('aiUsage.mcp.other'), undefined);

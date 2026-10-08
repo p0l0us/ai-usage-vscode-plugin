@@ -1,3 +1,5 @@
+import { AsyncLocalStorage } from 'async_hooks';
+import type { RotationDiagnostics } from './rotationDiagnostics';
 import * as fs from 'fs';
 import * as path from 'path';
 import { createHash, randomUUID } from 'crypto';
@@ -255,6 +257,7 @@ export class AccountAutomation {
   /** The account lock this process holds per service; every check made under it renews it. */
   private readonly locks = new Map<AuthProvider, AccountLock>();
   /** Per service whose lock `withAccountLock` holds: the checks queued under it, which run one at a time. */
+  private readonly lockScope = new AsyncLocalStorage<ReadonlySet<AuthProvider>>();
   private readonly queued = new Map<AuthProvider, Promise<unknown>>();
   /** Providers whose sweep was requested by hand, which runs even with rotation off and ignores the sweep spacing. */
   private readonly forced = new Set<AuthProvider>();
@@ -506,25 +509,21 @@ export class AccountAutomation {
    * not obtained.
    */
   async withAccountLock<T>(provider: AuthProvider, operation: () => Promise<T>, wait: LockWait = {}): Promise<T> {
-    const queue = this.queued.get(provider);
-    if (queue) {
-      const run = queue.then(operation, operation);
-      this.queued.set(provider, run.then(() => undefined, () => undefined));
-      return run;
-    }
-    const lock = await this.acquireLock(provider, wait);
-    this.locks.set(provider, lock);
-    this.queued.set(provider, Promise.resolve());
-    try {
-      return await operation();
-    } finally {
-      // Checks queued behind the sweep, such as a sign-in's re-read, finish under the lock too.
-      let tail: Promise<unknown> | undefined;
-      while (this.queued.get(provider) !== tail) { tail = this.queued.get(provider); await tail; }
-      this.queued.delete(provider);
-      this.locks.delete(provider);
-      lock.release();
-    }
+    // Nested checks in a manual sweep reuse its lock. Independent requests wait for the entire operation.
+    if (this.lockScope.getStore()?.has(provider)) return operation();
+    const previous = this.queued.get(provider);
+    const run = (async () => {
+      await previous?.catch(() => undefined);
+      if (this.disposed || wait.signal?.aborted) throw new Error('Cancelled.');
+      const lock = await this.acquireLock(provider, wait);
+      this.locks.set(provider, lock);
+      try {
+        return await this.lockScope.run(new Set([...(this.lockScope.getStore() ?? []), provider]), operation);
+      } finally { this.locks.delete(provider); lock.release(); }
+    })();
+    this.queued.set(provider, run);
+    try { return await run; }
+    finally { if (this.queued.get(provider) === run) this.queued.delete(provider); }
   }
 
   /** Takes the service's account lock, waiting as `wait` says while a sweep holds it. */
@@ -694,6 +693,52 @@ export class AccountAutomation {
         limitedUntil: usage ? limitedUntil(usage, now, settings) : undefined };
     }).sort((a, b) => strategy === 'sequential' ? a.index - b.index
       : group(a) - group(b) || (a.score ?? 0) - (b.score ?? 0) || a.index - b.index);
+  }
+
+  /** Uses the exact ranking and score functions used by rotation. Reading this never probes or rotates. */
+  diagnostics(provider: AuthProvider): RotationDiagnostics {
+    const settings = this.settings(provider);
+    const strategy = settings.strategy ?? 'sequential';
+    const active = this.profiles.activeProfileId(provider);
+    const now = this.now();
+    const usage = active ? this.usage(provider, active) : undefined;
+    const ranked = active ? this.ranked(provider, active, settings) : [];
+    const own = usage ? rotationScore(strategy, usage, now, settings) : undefined;
+    const exhausted = !!usage && atLimit(usage, settings);
+    const recovery = usage && (settings.resetAware || settings.autoReset)
+      ? (exhausted ? imminentRecovery(usage, now, settings) : imminentReset(usage, now, settings)) : undefined;
+    let reason: string;
+    if (!active) reason = 'No saved account is active.';
+    else if (!settings.autoRotate) reason = 'Automatic rotation is disabled; the selected account is kept.';
+    else if (this.heldFor(provider)) reason = this.heldFor(provider)!;
+    else if (!usage) reason = 'Waiting for a current usage reading of the active account.';
+    else if (recovery) reason = `Waiting for the active account’s reset at ${recovery.toISOString()}.`;
+    else if (!exhausted && (settings.trigger !== 'proactive' || strategy === 'sequential')) reason = 'The active account is below its rotation thresholds.';
+    else if (!exhausted && (this.stayed(provider, active!) ?? 0) < (settings.minStayMs ?? 30 * 60_000)) reason = 'The active account has not completed its minimum stay.';
+    else if (!exhausted && (own === undefined || !ranked.some(candidate => candidate.usable && candidate.score !== undefined &&
+      candidate.score + (strategy === 'sequential' ? 0 : SWITCH_MARGIN[strategy]) < own))) reason = 'No stored reading shows an account better by the required switching margin.';
+    else reason = 'A rotation check is due; the preferred candidate must pass a fresh usage and login check before switching.';
+    const sweep = this.read(provider, 'rotation-sweep');
+    if (settings.autoRotate && sweep.nextAllowedAt && sweep.nextAllowedAt > now) reason += ` Next check after ${new Date(sweep.nextAllowedAt).toISOString()}.`;
+    if (provider === 'codex' && settings.autoReset) reason += ` Earned resets available: ${usage?.resetCredits?.availableCount ?? 'unknown'}; redemption follows the reset and rotation policy.`;
+    const scoreMeaning = strategy === 'sequential' ? 'Saved-account order, starting after the active account; no numeric weight.'
+      : strategy === 'soonestReset' ? 'Lower is preferred: hours until the binding weekly reset, plus 10000 when spending too far ahead early in the week.'
+      : strategy === 'evenPace' ? 'Lower is preferred: the largest gap between used percentage and elapsed weekly percentage.'
+      : 'Lower is preferred: negative usable percentage per hour until reset, with a 1.1 multiplier when short-window allowance expires within an hour.';
+    return { strategy, trigger: settings.trigger ?? 'limit', activeId: active, evaluatedAt: new Date(now).toISOString(), reason, scoreMeaning,
+      candidates: this.profiles.profiles(provider).map(profile => {
+        const raw = deserializeUsage(this.read(provider, profile.id));
+        const candidate = ranked.find(entry => entry.id === profile.id);
+        const problem = this.checkProblem(provider, profile.id);
+        const reset = raw && settings.resetAware ? imminentReset(raw, now, settings) : undefined;
+        const stale = raw && usageHasExpiredReset(raw, now);
+        const detail = problem ? `Last check failed: ${explainAccountProblem(problem).label}.` : !raw ? 'No usage reading yet.'
+          : stale ? 'A quota reset has passed; fresh verification is required.' : reset && profile.id !== active ? 'Deferred: a quota reset is within five minutes.'
+          : atLimit(raw, settings) ? 'At a rotation threshold.' : 'Below thresholds; fresh verification is required before a switch.';
+        return { id: profile.id, name: profile.name, active: profile.id === active,
+          rank: candidate ? ranked.indexOf(candidate) + 1 : undefined,
+          score: raw ? rotationScore(strategy, raw, now, settings) : undefined, reason: detail, fetchedAt: raw?.fetchedAt.toISOString() };
+      }) };
   }
 
   /** One provider-authorized earned reset, with a stable key across crashes and lost responses. */

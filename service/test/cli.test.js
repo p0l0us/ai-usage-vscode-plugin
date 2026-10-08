@@ -67,6 +67,8 @@ test('the command line drives a running service: save, list, use, config, rotate
   process.env.CLAUDE_CONFIG_DIR = claudeHome;
   process.env.CODEX_HOME = codexHome;
   process.env.NO_COLOR = '1';
+  fs.mkdirSync(home, { recursive: true });
+  fs.writeFileSync(path.join(home, 'config.json'), JSON.stringify({ claude: { enabled: false }, codex: { enabled: false, autoReset: { enabled: false } }, copilot: { enabled: false }, bridge: { autoStart: false } }));
   const daemon = runDaemon({ home, version: 'cli-test' });
   t.after(async () => {
     // The daemon runs inside this process: ask it to stop over the socket rather than by pid.

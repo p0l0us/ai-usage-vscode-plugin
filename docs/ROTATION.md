@@ -88,11 +88,11 @@ Code set to Sonnet, an account at `7d Fable` 100% and `7d` 30% is a normal candi
 - A reading of the active account that reaches a threshold starts a sweep at once, without waiting for the
   one-minute scheduler. A reading at most 2 minutes old counts as the active account's current reading, so the
   rate-limited usage endpoint is not asked again.
-- Codex's status bar usually reads the session logs, which do not name an account, so their figures are never stored
+- The service's Codex live collector can read session logs, which do not name an account, so their figures are never stored
   as a profile's reading. When they show a threshold reached, the next sweep reads the active account itself instead
   of trusting its stored reading, which may be hours old.
-- Without such a reading, the one-minute scheduler looks at the stored reading of the active account. Keep-alives
-  (when enabled) keep those readings current.
+- The service refreshes the active login according to its source interval, even without VS Code. The one-minute
+  automation scheduler also considers stored account readings; enabled keep-alives update other saved accounts.
 - When the active account cannot be read (its checks are paused after a provider error), the sweep is retried as
   soon as that pause ends, not a full check interval later.
 
@@ -402,3 +402,16 @@ reports a count, including zero. When AI Usage has observed more than one credit
 availability period, it shows **x of y observed available**, such as **1 of 2 observed available** after spending
 one. `y` is an observed high-water mark, not a provider-reported total grant. An expiry countdown appears when
 Codex supplies a credit expiry. API-key-only accounts have no subscription reset credits.
+
+## Inspecting rotation scores
+
+Enable the advanced `aiUsage.claude.advanced.rotationDiagnostics` or
+`aiUsage.codex.advanced.rotationDiagnostics` setting to include every saved account in the status tooltip. It
+shows the active account, strategy score and candidate order, as well as missing/stale usage, errors and imminent
+reset exclusions. The explanation covers the threshold trigger, proactive margin, minimum stay and reset wait.
+`sequential` has an order rather than a numeric weight. The other strategies prefer lower scores, but eligibility
+and fresh verification still decide whether a switch can happen.
+
+The service returns the scores directly. With the service connection disabled, the same engine computes them in
+VS Code. `ai-usage rotation-weights claude` or `ai-usage rotation-weights codex` prints them without an editor.
+See [the score table](SERVICE_ARCHITECTURE.md#advanced-rotation-tooltip).

@@ -12,12 +12,12 @@ filtered to that service, including its config section:
 
 ## Sources
 
-Each service has a `source` setting that selects where its usage is read from:
+Each provider has a `source` setting that selects where the account service reads usage. The extension displays the returned readings and does not fetch usage itself while the service connection is enabled:
 
 | Setting | Options | Default | Notes |
 |---|---|---|---|
 | `aiUsage.claude.source` | `both`, `cli`, `api`, `accountFile` | `both` | `cli` runs Claude Code's own `/usage` (set `aiUsage.claude.cliPath` if it is not on PATH): no model is called and nothing is billed, but Claude Code reaches the usage endpoint to answer it, so it is spaced like `api`. `accountFile` reads the usage Claude Code itself cached in `~/.claude.json` — no network call, so it can be polled every few seconds (`aiUsage.claude.accountFile.checkIntervalSeconds`), but it is only as fresh as Claude Code's own last request, and Claude Code drops that cache on an account switch until something asks it for usage again. |
-| `aiUsage.codex.source` | `both`, `cli`, `api`, `sessionLog` | `both` | `cli` runs `codex app-server` (set `aiUsage.codex.cliPath` if it is not on PATH). The status bar reads earned-reset availability through app-server with `both`, `cli` or `api`. `sessionLog` makes no extra status-bar request, but is only as fresh as your last Codex turn; a separately running account service may still check a saved active profile when auto-reset is on. |
+| `aiUsage.codex.source` | `both`, `cli`, `api`, `sessionLog` | `both` | `cli` runs `codex app-server` (set `aiUsage.codex.cliPath` if it is not on PATH). The service reads earned-reset availability through app-server with `both`, `cli` or `api`. `sessionLog` makes no extra status-bar request, but is only as fresh as your last Codex turn; account automation may still check a saved active profile when auto-reset is on. |
 | `aiUsage.copilot.source` | `api` | `api` | The Copilot CLI has no headless usage command. |
 
 `both` combines the two: the local file is re-read on every check and used while its reading is no older than that
@@ -243,10 +243,7 @@ provider is selected (the AI Usage status bar keeps showing the usage), Codex's 
 `Rate limit: Unavailable` until the chat's first turn — it reads limits from a login the app-server no longer knows,
 and only learns them again from the rate-limit data the proxy passes back with each model response (verified with a
 proxied turn on 0.155.0) — chats opened before the proxy was enabled keep their previous path until you start a new
-chat, and failed Codex model requests are noted in the AI Usage log. One
-AI Usage window serves the port and the others share it; when the serving window closes, the provider entry is
-removed until another window takes the port over (within a minute), and turning the setting off restores
-`config.toml` to what it was. Only the managed block between two marker comments and the `model_provider` line are
+chat, and failed Codex model requests are noted in the AI Usage log. The account service serves the port. A background service keeps it running when editor windows close. A user-wide ownership lease prevents another instance from serving a second proxy, even on a different port. The port must be an integer from 1024 to 65535; conflicts are reported. Turning the setting off restores `config.toml` to what it was. Only the managed block between two marker comments and the `model_provider` line are
 touched. AI Usage's own usage checks pin `model_provider = "openai"` and are unaffected. The proxy answers only
 requests addressed to `127.0.0.1` that carry a token it writes into `config.toml`, so a web page on the same machine
 cannot use the login through it; anything that can read `auth.json` could use the login anyway. When the ChatGPT
@@ -348,15 +345,10 @@ Saved profiles, keep-alives and automatic rotation run in the account service, o
 `ai-usage` command controls as well. It runs either in the background, whether VS Code is open or not, or inside
 VS Code while a window is open.
 
-**Where the profiles are.** With the background service, its private profiles are in `~/.ai-usage/profiles.json`
-(mode 0600), usable without VS Code. Without it, the private profiles are the ones saved in VS Code (global state
-and SecretStorage), exactly as before the service existed. Project profiles (`.ai-usage.profiles.json` in an open
-folder) are listed in both cases. Nothing moves between the two on its own: **AI Usage: Account Service…** →
-**Transfer profiles from VS Code to the account service…** or **…from the account service to VS Code…** copies or
-moves the chosen profiles, logins included. Moving removes each profile from the source once the target holds it,
-so a login is refreshed in one place only; copying keeps both, and a login refreshed in one place can then stop
-working in the other. When the store in use has no profiles and the other one has some, AI Usage offers to move or
-copy them once per session, for example right after installing the background service.
+**Where the profiles are.** Both background and embedded service modes keep private profiles in
+`~/.ai-usage/profiles.json` (mode 0600). Project profiles remain in their project files. Existing nonconflicting
+profiles in VS Code storage are migrated on connection and removed from that storage after successful transfer;
+conflicts remain available for explicit resolution. The service owns subsequent credential updates.
 
 **Inside VS Code.** Until the background service is installed, or with `aiUsage.accountService.background` off,
 the extension runs the same service inside a VS Code window: the first window that finds no service answering
@@ -374,8 +366,7 @@ again, or run **AI Usage: Install Account Service**). The extension copies the s
 start at sign-in and starts it. It looks for Node.js 20 or newer on the PATH and in the usual install locations
 (`nvm`, `volta`, `/usr/local/bin`, …), and falls back to VS Code's own runtime (`ELECTRON_RUN_AS_NODE`) or, in a
 remote window, the VS Code server's. `AI_USAGE_NODE` names one explicitly. When the extension is updated and
-carries a newer service, the installed one is replaced and restarted without asking. Profiles saved in VS Code
-stay there until you transfer them (see above).
+carries a newer service, the installed one is replaced and restarted without asking. Existing nonconflicting profiles saved in VS Code migrate to service storage on connection (see above).
 
 **Autostart.** Linux: a systemd user unit `ai-usage.service` in `~/.config/systemd/user`, enabled, with
 `loginctl enable-linger` attempted so the service also runs while you are logged out (when that needs a password,
@@ -394,22 +385,25 @@ stop|restart|run` manages the service, `log` shows its log and `mcp` serves the
 profiles and, with `save` and `import`, keeps the new profile there. VS Code terminals see the command through
 the extension's terminal environment; elsewhere add `~/.ai-usage/bin` to your PATH.
 
-**Settings.** The service keeps its settings in `~/.ai-usage/config.json`; `ai-usage config` reads and writes
-them and the extension keeps them equal to `aiUsage.claude.*`, `aiUsage.codex.*`, the profile scope settings and
-`aiUsage.mcp.*`: the first connection seeds the service from the user settings, after that a change in Settings
-is pushed to the service and a change made with `ai-usage config` is written to the user settings. The usage
-sources of the status bar (`aiUsage.<service>.source`) stay with the extension.
+**Settings.** Every `aiUsage.*` setting is also a service/CLI setting with the prefix removed. The schema is
+generated from the same manifest, including usage sources and intervals, native CLI configuration, proxy and bridge
+settings, advanced diagnostics and UI preferences. The service persists them in `~/.ai-usage/config.json`.
+VS Code applies its effective settings on every connection and pushes later changes. CLI changes are announced to
+connected editors and reflected in their user settings. When editors disagree, the latest configuration write wins;
+reconnecting reapplies that editor's effective settings. Without VS Code, configure everything with `ai-usage config`.
+UI preferences are stored for clients; service connection preferences do not start or stop an OS process.
+See [service ownership](SERVICE_ARCHITECTURE.md) for the boundaries and deployment modes.
 
 **What is where.** Everything is under `~/.ai-usage` (`AI_USAGE_HOME` moves it): `profiles.json` (the private
 profiles with their logins, mode 0600), `config.json`, `state/` (per-account readings, sweep records, lock files
-and the Claude endpoint call ledger, shared with the extension's status bar reads), `service.log`, `service.sock`
+and the shared Claude endpoint call ledger), `service.log`, `service.sock`
 (a named pipe on Windows) and `service.token`, which clients present first. **AI Usage: Account Service…** shows
 the status, opens the log and starts, stops, restarts, reinstalls or uninstalls the service; uninstalling keeps the
 data files.
 
 | Setting | Default | Purpose |
 | --- | --- | --- |
-| `aiUsage.accountService.enabled` | `true` | Use the account service. Off: no Accounts menus, keep-alives or rotation in this window. |
+| `aiUsage.accountService.enabled` | `true` | Use the shared service connection. Off: the same engine runs inside the plugin with direct calls, including local score calculation. Does not uninstall or stop an existing background service. |
 | `aiUsage.accountService.background` | `true` | Offer to install the service as a background process. Off, or until it is installed: it runs inside VS Code while a window is open. Turning it off does not uninstall an installed service. |
 
 **Without VS Code.** The service is also the npm package `ai-usage-service` (Node.js 20 or newer, no
@@ -472,7 +466,7 @@ Use a model available to your subscription; an empty Codex model setting selects
 
 Every keep-alive asks exactly `what is date today`. Requests use a separate working directory and CLI home,
 with inherited authentication and provider routing overrides removed. Claude tools and custom hooks are disabled;
-Codex runs noninteractively with a read-only sandbox. A keep-alive has a 90-second timeout. The extension attempts
+Codex runs noninteractively with a read-only sandbox. A keep-alive has a 90-second timeout. The service attempts
 to collect usage even if the small model call fails. Claude uses the OAuth usage endpoint, and Codex uses
 `account/rateLimits/read` through its app-server with the same staged login. Codex API-key-only profiles do not
 expose subscription quota windows and cannot qualify as automatic rotation targets.
@@ -573,3 +567,12 @@ return to the original Copilot conversation and ask to resume the displayed agen
 Claude's native chat link opens the parent, not an independent child session.
 Bounded child result summaries are retained alongside saved session metadata in the private
 bridge records file. This does not add native IDE features that the bridge protocol does not expose.
+
+## Advanced rotation diagnostics
+
+`aiUsage.claude.advanced.rotationDiagnostics` and `aiUsage.codex.advanced.rotationDiagnostics` default to `false`.
+Enable either to show all saved account scores, candidate order, exclusions, reading timestamps and the reason the
+current account remains selected in its status bar tooltip. The service supplies these values when enabled; with
+the service connection disabled, the plugin uses the same shared engine to calculate them. Tooltip rendering
+never calls a provider. `ai-usage rotation-weights claude|codex` exposes the same information in the terminal.
+See the [score definitions and examples](SERVICE_ARCHITECTURE.md#advanced-rotation-tooltip) and [rotation policy](ROTATION.md).

@@ -1,3 +1,6 @@
+import { AccountService } from './accountService';
+import { UsageContext, UsageStateView } from './usageMonitor';
+import { ProviderId } from './live';
 import { EventEmitter } from 'events';
 import { RpcClient, RpcError } from './rpc';
 import { readServiceInfo, readToken, socketPath, processAlive } from './paths';
@@ -33,7 +36,7 @@ export type ClientOptions = {
  * and `close` once the connection is gone. Shared by the VS Code extension and the `ai-usage` command.
  */
 export class ServiceClient extends EventEmitter {
-  private constructor(private readonly rpc: RpcClient, readonly info: ServiceInfo) {
+  private constructor(private readonly rpc: Pick<RpcClient, 'isClosed' | 'close' | 'call'> & Pick<EventEmitter, 'on'>, readonly info: ServiceInfo) {
     super();
     rpc.on('event', (event: ServiceEvent) => this.emit('event', event));
     rpc.on('close', () => this.emit('close'));
@@ -55,6 +58,25 @@ export class ServiceClient extends EventEmitter {
     }
   }
 
+  /** The same service engine, called directly when the extension's service connection is disabled. */
+  static local(service: AccountService): ServiceClient {
+    const transport = new EventEmitter() as EventEmitter & { isClosed: boolean; close(): void; call(method: string, params?: unknown): Promise<unknown> };
+    transport.isClosed = false;
+    const relay = (event: ServiceEvent) => transport.emit('event', event);
+    service.events.on('event', relay);
+    transport.call = async (method, params) => {
+      if (transport.isClosed) throw new Error('The local engine is closed.');
+      const result = await service.handle(method, params, -1);
+      return result === undefined ? undefined : JSON.parse(JSON.stringify(result));
+    };
+    transport.close = () => { if (transport.isClosed) return; transport.isClosed = true; service.events.off('event', relay); service.dispose(); transport.emit('close'); };
+    const client = new ServiceClient(transport, service.info());
+    service.start();
+    return client;
+  }
+
+  liveUsage(provider: ProviderId, force = false): Promise<UsageStateView> { return this.call('usage.live', { provider, force }); }
+  usageContext(context: UsageContext): Promise<unknown> { return this.call('usage.context', context); }
   get connected(): boolean { return !this.rpc.isClosed; }
 
   close(): void { this.rpc.close(); }

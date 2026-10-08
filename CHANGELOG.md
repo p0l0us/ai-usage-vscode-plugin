@@ -1,6 +1,28 @@
 # Changelog
 
-## 1.0.6 (unreleased)
+## 1.0.7 (unreleased)
+
+- The service now owns live Claude/Codex/Copilot usage, source fallback, cache and backoff, native CLI settings,
+  credential updates, the Codex proxy and CLI bridge. The extension displays service values and forwards settings;
+  it does not fall back to provider reads after a service disconnect. Native logins work without saved profiles.
+- Every VS Code setting is available through `ai-usage config`, using a generated shared schema. Editor settings
+  apply on connection; CLI changes propagate back to connected editors. Standalone service configuration needs no VS Code.
+- Background, embedded and plugin-local modes reuse the same service engine. Embedded mode now uses service-owned
+  profile storage; nonconflicting legacy VS Code credentials migrate on connection.
+- Advanced Claude/Codex rotation diagnostics show every saved account's score, order, exclusions and current-account
+  explanation in the status tooltip. `ai-usage rotation-weights` exposes the same diagnostics; `ai-usage usage` reads
+  current native-login quota. All four rotation strategies reuse the existing scoring implementation.
+- Proxy ownership is independent of the selected port: a second service instance cannot open another proxy for the
+  same OS user on a different port. Linux/Windows ownership is released by the OS after a crash. Ports are validated
+  as integers; conflicts are reported, and only the owner changes native routing.
+- Native status reads and account checks share credential locks; independent manual operations serialize while
+  nested sweep checks reuse their parent lock. New tests cover polling, account/source changes, backoff, rotation,
+  both client modes, settings parity, credential migration and proxy lifetime across processes.
+- Documented service ownership and the optional Docker deployment proposal, including host mounts, transport,
+  authentication, singleton coordination and platform limitations.
+
+
+## 1.0.6 (2026-10-08)
 
 - Earned Codex rate-limit resets can now be redeemed automatically (on by default) for a limited saved account.
   The service checks Codex's available-credit count, natural reset times, other accounts and credit expiry before

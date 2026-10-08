@@ -229,6 +229,8 @@ test('end to end: an agent lists the saved profiles of a running service and swi
   const env = { CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR, CODEX_HOME: process.env.CODEX_HOME };
   process.env.CLAUDE_CONFIG_DIR = claudeHome;
   process.env.CODEX_HOME = codexHome;
+  fs.mkdirSync(home, { recursive: true });
+  fs.writeFileSync(path.join(home, 'config.json'), JSON.stringify({ claude: { enabled: false }, codex: { enabled: false, autoReset: { enabled: false } }, copilot: { enabled: false }, bridge: { autoStart: false } }));
   const daemon = runDaemon({ home, version: 'mcp-test' });
   t.after(async () => {
     try { const client = await ServiceClient.connect({ home, client: 'test' }); await client.shutdown(); client.close(); } catch { /* Already stopped. */ }

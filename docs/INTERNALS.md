@@ -2,6 +2,11 @@
 
 ## How live usage is read
 
+`service/src/usageMonitor.ts` owns these reads. It runs inside the background/embedded service when enabled, or
+inside the plugin through `ServiceClient.local` when the service connection is disabled. Both paths use the same
+engine. `src/usageClient.ts` only decodes the returned values and renders rotation diagnostics. See
+[SERVICE_ARCHITECTURE.md](SERVICE_ARCHITECTURE.md) for configuration precedence and deployment modes.
+
 - **Claude Code**: reads the OAuth token from `~/.claude/.credentials.json` (or `$CLAUDE_CONFIG_DIR`) and calls
   Anthropic's `/api/oauth/usage` endpoint, the same data shown by `/usage` inside Claude Code. The `accountFile`
   source instead reads `cachedUsageUtilization` from `~/.claude.json`, the reading Claude Code itself last fetched
@@ -20,18 +25,19 @@
   (`claude-fallback-budget.json`, `codex-fallback-budget.json`) and, for Claude, also pass the shared endpoint
   budget below, so the endpoint is never called more often than the `api` source would. While a CLI session is
   active, usage follows it within seconds and costs no calls at all; a reading is never replaced by an older one.
-- **Copilot**: uses VS Code's existing GitHub sign-in (silently, never prompting) and calls the Copilot user
-  endpoint that reports premium-request quota. Unlimited quotas are not shown.
+- **Copilot**: VS Code forwards its existing GitHub sign-in and workspace owners over authenticated IPC. The
+  service calls the Copilot quota endpoint. Tokens are held only for that connection; standalone service usage can
+  use GH_TOKEN/GITHUB_TOKEN from its process environment. Unlimited quotas are not shown.
 
 ## Multiple windows and rate limits
 
-All windows on a machine share one cache file in the extension's global storage (`usage-cache.json`). Each
-provider has its own entry. A window that finds a reading younger than the refresh interval uses it instead of
-calling the network, and a window that starts a fetch marks the entry so others wait for its result. On a 429 or
-5xx the `Retry-After` header is honoured when present, otherwise the wait doubles from 1 minute up to 30 minutes,
-and the next-allowed time is stored in the same entry so every window backs off together. Backoff is per provider:
-a Claude rate limit never delays Codex or Copilot. During a backoff the last good reading stays visible and is
-greyed out once it is older than 15 minutes.
+All clients read the service's `state/live-usage.json` cache through `usage.live`. A five-second service timer
+checks source deadlines; it does not make a provider call on every tick. Source, polling policy and an opaque
+native-credential fingerprint identify cache entries, including unsaved logins. In-flight requests are shared;
+results are discarded after an account or source change. Provider backoff and the Claude endpoint budget remain
+shared across clients. Native reads and saved-account checks hold the same per-provider account lock so they
+cannot concurrently refresh a login. Independent manual operations serialize; nested sweep checks reuse their
+parent lock through AsyncLocalStorage.
 
 Sources that read a local file (`accountFile`, and `both`) are exempt from that backoff: there is no rate limit to
 respect, and a shared backoff would also stall the free local read. They keep to their own check interval, and
@@ -63,17 +69,22 @@ a Unix socket or Windows named pipe (`rpc.ts`; a home whose path is too long for
 `XDG_RUNTIME_DIR` or the temp directory). Every client sends `hello` with the token from `service.token` first;
 requests are `{ id, method, params }`, answers `{ id, result | error }`, and subscribed clients receive
 `{ event, … }` messages: `activated`, `accountProblem`, `noCandidate`, `notice`, `stateChanged`,
-`configChanged` and `log`. `client.ts` is the typed client both `cli.ts` and the extension use; `protocol.ts`
+`usageChanged`, `configChanged` and `log`. `client.ts` is the typed client both `cli.ts` and the extension use; `protocol.ts`
 the wire types. The service ticks every minute: it follows a native login switched outside it, runs the
 automation, retries the Claude identity sync and reloads a hand-edited `config.json`.
 
-The extension's `src/serviceManager.ts` installs, upgrades (when the bundled version is newer), starts and
-connects, and turns events into notifications and status bar updates; `src/accountsMenu.ts` is the Accounts
-menu UI over the client; `src/legacyProfiles.ts` moves the profiles of earlier versions out of `globalState`
-and `SecretStorage` once; `src/configSync.ts` mirrors `config.json` and `aiUsage.<provider>.*`. The status bar
-hands every reading of the active account to the service (`usage.observe`), which keeps it only while the
-profile still owns the native login. The Claude endpoint call ledger lives in the service home, so the status
-bar's calls and the service's probes are spaced together.
+The extension's `src/serviceManager.ts` installs, upgrades, starts and connects, and turns service events into UI
+updates. `src/accountsMenu.ts` forwards account actions. Both service deployment modes use profiles.json; legacy
+VS Code credentials migrate on connection when there is no conflict. `src/configSync.ts` applies effective editor
+settings on every connection and pushes later edits; service config events update the editor. Every manifest key
+is represented in the generated `service/src/settingsCatalog.ts`, including nullable native settings and UI options.
+The CLI and service validate them through the same config module.
+
+`usage.live` returns active native-login readings, `usage.sessionTokens` reads session counts using the requesting
+client's folders, and `rotation.diagnostics` returns the exact scoring implementation's weights and explanation.
+Clients cannot inject authoritative readings through the old `usage.observe`/`usage.hintLimit` methods. Profile
+probes and the internal collector update automation directly. `usageChanged` prompts clients to request the new
+state. Copilot contexts remain in memory per connected client and are forgotten on disconnect.
 
 Project profiles live in the profile file of a project folder (`projectProfiles.file`, the format of a profile
 export). Each client declares its folders in its `hello` and with `session.folders` (the extension sends its local
@@ -162,7 +173,7 @@ entirely while it is off. Duplicate profiles of one login are detected by the st
 independently reuses a rotated refresh token and the provider revokes the login, so saving or importing a credential
 whose email is already saved asks for confirmation.
 
-`src/codexProxy.ts`, `src/codexConfig.ts` and `src/codexProxyRuntime.ts` implement the opt-in Codex account proxy
+`service/src/codexProxy.ts`, `service/src/codexConfig.ts` and `service/src/codexProxyRuntime.ts` implement the opt-in Codex account proxy
 (`aiUsage.codex.proxy.*`). Codex loads `config.toml` on every `thread/start`, and a custom `model_providers.<id>`
 entry may carry any `base_url`, `requires_openai_auth = false` and static `http_headers`; the Codex extension's
 webview sends `modelProvider: null` unless the Copilot language-model proxy is in use, so the file's
@@ -181,12 +192,13 @@ plain HTTP to custom providers, so upgrades are refused; the HTTP form of `/back
 the custom-provider request (verified live: 429 with rate-limit headers on an exhausted workspace). An upstream 401 for
 a ChatGPT login runs `refreshCodexNativeLogin` (`getAuthStatus { refreshToken: true }` on a fresh app-server, so
 Codex rotates the refresh token itself) once, shared by concurrent requests, then retries with the token now in the
-file. `codexProxyRuntime.ts` binds the configured port on activation, on `aiUsage.codex.proxy` changes and on the
-one-minute tick: the first window serves and writes the block; a window that gets `EADDRINUSE` probes the health
-endpoint and stays passive when the listener is ours (or reports the port as taken, once); the owner removes the block
-on disable, on a port change and in `dispose()`; the bearer token is kept in SecretStorage
-(`aiUsage.codexProxy.secret.v1`) and read back from the file so a new owner keeps the token running chats already
-send. Every AI Usage `codex app-server` probe passes `-c model_provider="openai"`, because a server on the proxy
+file. `codexProxyRuntime.ts` binds the configured port on service startup and configuration changes. A user-wide
+lease in `proxyLease.ts` is independent of the port and service home: Linux uses an abstract Unix socket, Windows a
+named pipe, and other platforms an exclusive PID lock. Only the owner rewrites/removes the native configuration.
+A matching health endpoint identifies a shared proxy; an unrelated listener is an error. Port changes close the
+old listener and preserve the bearer token in the service's mode-0600 token file. The background proxy survives
+editor shutdown. `runtime.ts` also writes native CLI settings and owns the bridge process; the standalone service
+package bundles the same bridge sources as the extension build. Every AI Usage `codex app-server` probe passes `-c model_provider="openai"`, because a server on the proxy
 provider reports no login and no rate limits. `AuthProfileManager.codexChatsFollowSwitch` and the stale-process
 warning consult the runtime so the switch message and the restart offer match the mode.
 
@@ -194,7 +206,7 @@ warning consult the runtime so the switch message and the restart offer match th
 
 `service/src/usageHistory.ts` appends one JSON object per line to `usage-history/history-YYYY-MM.jsonl` under the
 service home (or `history.directory`), with mode `0600`, and prunes month files older than the retention once a day.
-`AccountAutomation` records readings from the status bar (`usage.observe`) and from every account check, a check
+`AccountAutomation` records readings from the service live collector (historical source label `status`) and from every account check, a check
 that starts or stops failing, and in `rotate` the candidates with their outcomes, the switch, the sweeps that spent
 calls without switching, the exhausted stretch and its recovery; `AccountService` records switches by hand
 (`profiles.activate`) and switches followed from outside the service (`followNative`). `index.json` in the same

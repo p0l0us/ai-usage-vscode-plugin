@@ -49,6 +49,8 @@ test('a daemon serves the typed client, reports itself, and stops on request', a
   process.env.CODEX_HOME = path.join(home, 'codex');
   t.after(() => { for (const [key, value] of Object.entries(env)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } });
   await assert.rejects(ServiceClient.connect({ home, client: 'test' }), (error) => error instanceof ServiceUnavailableError && error.reason === 'not-installed');
+  fs.mkdirSync(home, { recursive: true });
+  fs.writeFileSync(path.join(home, 'config.json'), JSON.stringify({ claude: { enabled: false }, codex: { enabled: false, autoReset: { enabled: false } }, copilot: { enabled: false }, bridge: { autoStart: false } }));
   const daemon = runDaemon({ home, version: '9.9.9' });
   const client = await connectService({ home, client: 'test', subscribe: 'all', start: () => undefined, waitMs: 5_000 });
   assert.equal(client.info.version, '9.9.9');
