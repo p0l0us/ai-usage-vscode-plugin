@@ -72,8 +72,11 @@ export class BridgeRuntime {
     if (this.disposed) throw new Error('Bridge runtime is closed.');
     const tokenFile = config.tokenFile || path.join(os.homedir(), '.cli-byok-bridge', 'token');
     await this.waitForPreviousOwner(tokenFile + '.owner.json');
-    let health: { owner?: { id?: string; pid?: number; bridgePid?: number } } | undefined;
+    let health: { capabilities?: string[]; owner?: { id?: string; pid?: number; bridgePid?: number } } | undefined;
     try { health = await this.request('/health') as typeof health; } catch { /* Start only after the endpoint is unavailable. */ }
+    if (health && (!Array.isArray(health.capabilities) || !['workspace_context', 'image_input'].every(capability => health.capabilities!.includes(capability)))) {
+      throw new Error('The running CLI bridge is outdated and cannot accept workspace context or images. Stop it and restart the AI Usage service.');
+    }
     if ((health && this.child && !health.owner) || (health?.owner && (!this.child || health.owner.id !== this.ownerId || health.owner.bridgePid !== this.child.pid))) {
       throw new Error('The CLI bridge is owned by another managed engine; refusing to attach.');
     }
@@ -96,8 +99,11 @@ export class BridgeRuntime {
       for (let i = 0; i < 30 && !this.disposed; i++) {
         if (spawnError) throw spawnError;
         try {
-          const status = await this.request('/health') as { owner?: { id?: string; bridgePid?: number } };
-          if (status.owner?.id !== this.ownerId || status.owner.bridgePid !== child.pid) throw new Error('Bridge startup ownership did not match the managed child.');
+          const status = await this.request('/health') as { capabilities?: string[]; owner?: { id?: string; bridgePid?: number } };
+          if (status.owner?.id !== this.ownerId || status.owner.bridgePid !== child.pid ||
+            !Array.isArray(status.capabilities) || !['workspace_context', 'image_input'].every(capability => status.capabilities!.includes(capability))) {
+            throw new Error('Bridge startup ownership or capabilities did not match the managed child.');
+          }
           ready = true; break;
         } catch { await new Promise(resolve => setTimeout(resolve, 100)); }
       }

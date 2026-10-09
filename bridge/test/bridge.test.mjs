@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { setTimeout as delay } from 'node:timers/promises';
 import http from 'node:http';
+import { createHmac } from 'node:crypto';
 import { BridgeEngine } from '../src/engine.mjs';
 import { EventQueue, BridgeError } from '../src/common.mjs';
 import { createBridgeServer } from '../src/server.mjs';
@@ -94,6 +95,20 @@ test('authentication, origin and host checks protect loopback endpoint', async t
   });
   assert.equal(badHostStatus, 403);
   assert.equal((await fetch(url + '/v1/models', { headers: { authorization: `Bearer ${token}` } })).status, 200);
+});
+
+test('health advertises image and workspace support, and signed image requests reach the adapter', async t => {
+  const { url, post, adapter } = await setup(t);
+  const health = await (await fetch(url + '/health', { headers: { authorization: `Bearer ${token}` } })).json();
+  assert.deepEqual(health.capabilities, ['workspace_context', 'image_input']);
+  const directories = { codex: '/workspace' };
+  const expiresAt = Date.now() + 60_000;
+  const signature = createHmac('sha256', token).update(JSON.stringify({ directories, expiresAt })).digest('hex');
+  const response = await post({ model: 'codex/test', messages: [{ role: 'user', content: [imagePart()] }],
+    bridge_workspace_context: { directories, expiresAt, signature } });
+  assert.equal(response.status, 200);
+  assert.deepEqual(adapter.started[0].request.workspaceDirectories, directories);
+  assert.deepEqual(adapter.started[0].request.messages[0].content, [imagePart(redImage, 'auto')]);
 });
 
 test('changed history cannot hijack a pending continuation', async t => {

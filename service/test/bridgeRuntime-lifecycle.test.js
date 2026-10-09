@@ -43,7 +43,7 @@ test('bridge restart waits for previous child close before health probing or att
       probes.push(children.map(child => child.closed));
       if (!children.length || children.at(-1).closed) throw new Error('offline');
     }
-    return route === '/health' ? { owner: { id: runtime.ownerId, bridgePid: children.at(-1).pid } } : {};
+    return route === '/health' ? { capabilities: ['workspace_context', 'image_input'], owner: { id: runtime.ownerId, bridgePid: children.at(-1).pid } } : {};
   };
   await Promise.all([runtime.ensure(), runtime.ensure()]);
   assert.equal(children.length, 1, 'concurrent startup is coalesced');
@@ -60,7 +60,7 @@ test('bridge restart waits for previous child close before health probing or att
 test('disposal while a restart awaits old child prevents replacement spawn', async t => {
   children.length = 0;
   const { runtime, config } = fixture(t);
-  runtime.request = async route => { if (!children.length) throw new Error('offline'); return route === '/health' ? { owner: { id: runtime.ownerId, bridgePid: children.at(-1).pid } } : {}; };
+  runtime.request = async route => { if (!children.length) throw new Error('offline'); return route === '/health' ? { capabilities: ['workspace_context', 'image_input'], owner: { id: runtime.ownerId, bridgePid: children.at(-1).pid } } : {}; };
   await runtime.ensure();
   config.bridge.claude.executable = 'replacement';
   const restarting = runtime.ensure();
@@ -85,6 +85,17 @@ test('service policy synchronization does not write a clients folder to global s
 test('bridge requests reject absolute foreign routes before sending a token', async t => {
   const { runtime } = fixture(t);
   await assert.rejects(runtime.request('http://example.com/health'), /local endpoint/);
+});
+
+test('an older unmanaged bridge cannot silently accept requests requiring workspace context and images', async t => {
+  children.length = 0;
+  const { runtime } = fixture(t);
+  runtime.request = async route => {
+    assert.equal(route, '/health');
+    return { status: 'ok', active_sessions: 0 };
+  };
+  await assert.rejects(runtime.ensure({ folders: ['/workspace'] }), /outdated.*workspace context or images/);
+  assert.equal(children.length, 0, 'do not attach to or replace an unknown process');
 });
 
 

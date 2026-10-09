@@ -70,7 +70,7 @@ export function createBridgeServer(engine, { token, maxBodyBytes, owner, log = (
         else throw new BridgeError('Unknown endpoint.', 404, 'not_found');
         return;
       }
-      if (request.method === 'GET' && request.url === '/health') { json(response, 200, { status: 'ok', active_sessions: engine.sessions.size, ...(owner ? { owner } : {}) }); return; }
+      if (request.method === 'GET' && request.url === '/health') { json(response, 200, { status: 'ok', active_sessions: engine.sessions.size, capabilities: ['workspace_context', 'image_input'], ...(owner ? { owner } : {}) }); return; }
       if (request.method === 'GET' && url.pathname === '/v1/models') { json(response, 200, { object: 'list', data: await engine.models(url.searchParams.get('backend') || undefined) }); return; }
       const fork = /^\/v1\/sessions\/([a-f0-9-]{36})\/fork$/.exec(url.pathname);
       if (request.method !== 'POST' || request.url !== '/v1/chat/completions' && !fork) throw new BridgeError('Unknown endpoint.', 404, 'not_found');
