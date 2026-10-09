@@ -109,6 +109,61 @@ test('an open account picker updates from service events and retains the focused
   assert.equal(listeners.size, 0, 'closing the picker releases its subscription');
 });
 
+test('Codex menu labels show reset counts for every account, including zero, expired quotas, stale and unknown reports', async () => {
+  const now = Date.now();
+  const usage = (count, age = 0, expiredQuota = false) => ({ provider: 'codex', title: 'Codex', fetchedAt: new Date(now - age).toISOString(),
+    windows: [{ label: '5h', usedPercent: 90, resetsAt: new Date(now + (expiredQuota ? -1000 : 3_600_000)).toISOString() }],
+    ...(count === undefined ? {} : { resetCredits: { availableCount: count } }) });
+  const views = { codex: { provider: 'codex', title: 'Codex', profiles: [
+    profile({ active: true, usage: usage(2) }),
+    profile({ id: 'b', name: 'Login expired', loginProblem: 'Login token expired', usage: usage(1) }),
+    profile({ id: 'c', name: 'Quota reset', limit: { readOnly: true, dimmed: false }, usage: usage(3, 0, true) }),
+    profile({ id: 'd', name: 'Old reading', usage: usage(4, 16 * 60_000) }),
+    profile({ id: 'e', name: 'Missing report', usage: usage(undefined) })
+  ], activeProfileId: 'a', nativeUnsaved: false, checkingActive: false, keepAlive: false, autoRotate: false, strategySummary: '', scopes } };
+  const f = fixture(views);
+  quickPickResponses.push(items => {
+    const rows = items.filter(item => item.profile);
+    assert.deepEqual(rows.map(item => item.label), [
+      '$(check) Work · 0 resets', 'Login expired · 1 reset', '$(circle-slash) Quota reset · 3 resets',
+      '$(key) Old reading · 4 resets (stale)', '$(key) Missing report · resets unknown'
+    ]);
+    assert.match(rows[0].detail, /Earned resets: 0 available/);
+    assert.match(rows[2].detail, /Usage reset; waiting for a new reading · Earned resets: 3 available/);
+    assert.match(rows[3].detail, /Earned resets: availability stale \(last reported 4 available\)/);
+    assert.match(rows[4].detail, /Earned resets: unknown/);
+    return undefined;
+  });
+  // Toolbar visibility only controls the toolbar; menu counts remain available.
+  f.services.config.codex.statusBar.earnedResets = false;
+  await f.menu.show('codex', { activeUsage: (provider, id) => {
+    assert.equal(provider, 'codex'); assert.equal(id, 'a');
+    return { ...usage(0), fetchedAt: new Date(now), windows: [] };
+  } });
+  assert.deepEqual(f.calls, [], 'opening the menu never probes or redeems credits');
+});
+
+test('an open Codex picker updates the reset count from service events', async () => {
+  const usage = count => ({ provider: 'codex', title: 'Codex', fetchedAt: new Date().toISOString(),
+    windows: [{ label: '5h', usedPercent: 95 }], resetCredits: { availableCount: count } });
+  const view = { provider: 'codex', title: 'Codex', profiles: [profile({ active: true, usage: usage(3) })],
+    activeProfileId: 'a', nativeUnsaved: false, checkingActive: false, keepAlive: false, autoRotate: false, strategySummary: '', scopes };
+  const f = fixture({ codex: view });
+  const listeners = new Set();
+  f.services.onStateChanged = listener => { listeners.add(listener); return { dispose: () => listeners.delete(listener) }; };
+  quickPickResponses.push((items, options, picker) => {
+    assert.match(items[0].label, /3 resets$/);
+    picker.activeItems = [items[0]];
+    f.services.views.codex = { ...view, profiles: [profile({ active: true, usage: usage(2) })] };
+    for (const listener of listeners) listener('codex');
+    assert.match(picker.items[0].label, /2 resets$/);
+    assert.equal(picker.activeItems[0].profile.id, 'a');
+    return undefined;
+  });
+  await f.menu.show('codex');
+  assert.equal(listeners.size, 0);
+});
+
 test('usage displays round percentages while stored and live readings retain their precision', () => {
   const now = new Date();
   const saved = profile({ usage: { provider: 'claude', title: 'Claude', fetchedAt: now.toISOString(), windows: [

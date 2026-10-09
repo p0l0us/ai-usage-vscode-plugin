@@ -4,7 +4,7 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import {
   AuthProvider, ImportPlanView, LiveUsage, ProfileView, ProviderView, ServiceClient, ServiceConfig, deserializeUsage,
-  explainAccountProblem, formatEarnedResets, formatResetRemaining, nativeCredentialPath, newestValidUsage, parseCredentialJson, strategySummary
+  explainAccountProblem, formatEarnedResets, formatResetRemaining, nativeCredentialPath, newestValidUsage, parseCredentialJson, projectResetCredits, strategySummary
 } from '../service/out';
 import { MCP_SERVER_NAME, McpRegistration } from './mcpRegistration';
 import { pickWithBack } from './quickPick';
@@ -88,27 +88,32 @@ export async function pickScope(view: ProviderView): Promise<{ folder?: string }
 }
 
 /** "5h: 41% (2h) · 7d: 7% (5d) · Checked 12:30 · $(warning) Insufficient credits", as the list shows under a profile. */
-export function usageDetail(profile: ProfileView, displayedUsage?: LiveUsage): string | undefined {
+export function usageDetail(profile: ProfileView, displayedUsage?: LiveUsage, provider?: AuthProvider): string | undefined {
   const parts: string[] = [];
+  const now = new Date();
   const stored = profile.usage ? deserializeUsage({ usage: profile.usage }) : undefined;
   const usage = newestValidUsage(stored, displayedUsage);
   if (stored && !usage) { parts.push('Usage reset; waiting for a new reading'); }
   if (usage) {
-    const now = new Date();
     parts.push(usage.windows.map((window) => {
       const reset = formatResetRemaining(window.resetsAt, now);
       return `${window.label}: ${formatUsagePercent(window.usedPercent)}${reset ? ` (${reset})` : ''}`;
     }).join(' · '));
-    if (usage.provider === 'codex') {
-      const credits = usage.resetCredits ?? stored?.resetCredits;
-      const line = formatEarnedResets(credits, stored?.resetCredits?.totalCount);
-      if (line) {
-        const expiry = credits?.earliestExpiresAt ? formatResetRemaining(new Date(credits.earliestExpiresAt * 1000), now) : '';
-        parts.push(`Earned resets: ${line}${expiry ? ` (next expires in ${expiry})` : ''}`);
-      }
-    }
-    parts.push(`Checked ${usage.fetchedAt.toLocaleString()}`);
   }
+  if ((provider ?? displayedUsage?.provider ?? stored?.provider) === 'codex') {
+    // Credit freshness is independent of quota resets; use the same projection as the toolbar.
+    const credits = projectResetCredits(displayedUsage, now.getTime(), profile.usage);
+    if (credits.state === 'known') {
+      const line = formatEarnedResets(credits);
+      const expiry = credits.earliestExpiresAt ? formatResetRemaining(new Date(credits.earliestExpiresAt * 1000), now) : '';
+      parts.push(`Earned resets: ${line}${expiry ? ` (next expires in ${expiry})` : ''}`);
+    } else if (credits.state === 'stale') {
+      parts.push(`Earned resets: availability stale (last reported ${credits.lastReportedAvailableCount} available)`);
+    } else if (stored || displayedUsage) {
+      parts.push('Earned resets: unknown');
+    }
+  }
+  if (usage) { parts.push(`Checked ${usage.fetchedAt.toLocaleString()}`); }
   // Known errors read as a few words ("Insufficient credits"); the vendor's own text stays in the log.
   const problems = new Set<string>();
   for (const problem of profile.problems) {
@@ -253,17 +258,23 @@ export class AccountsMenu {
   private items(view: ProviderView, config: ServiceConfig, withBack = false, mcp?: { registration?: McpRegistration }, activeUsage?: MenuHooks['activeUsage']): ProfileItem[] {
     const provider = view.provider;
     const items: ProfileItem[] = view.profiles.map((profile) => {
+      const displayedUsage = profile.active ? activeUsage?.(provider, profile.id) : undefined;
+      const credits = provider === 'codex' ? projectResetCredits(displayedUsage, Date.now(), profile.usage) : undefined;
+      const resets = credits?.state === 'known' ? plural(credits.availableCount, 'reset')
+        : credits?.state === 'stale' ? `${plural(credits.lastReportedAvailableCount, 'reset')} (stale)`
+        : credits ? 'resets unknown' : undefined;
       // An exhausted account cannot be activated anyway, so its login trouble waits until the window resets.
       const loginProblem = profile.limit.readOnly ? undefined : profile.loginProblem;
       const icon = profile.active ? 'check' : 'key';
+      const label = profile.limit.readOnly ? `$(circle-slash) ${profile.name}` : profile.limit.dimmed || loginProblem ? profile.name : `$(${icon}) ${profile.name}`;
       return {
-        label: profile.limit.readOnly ? `$(circle-slash) ${profile.name}` : profile.limit.dimmed || loginProblem ? profile.name : `$(${icon}) ${profile.name}`,
+        label: `${label}${resets ? ` · ${resets}` : ''}`,
         iconPath: loginProblem ? new vscode.ThemeIcon('warning', new vscode.ThemeColor('editorWarning.foreground'))
           : profile.limit.dimmed ? new vscode.ThemeIcon(icon, new vscode.ThemeColor('disabledForeground')) : undefined,
         description: [profileDescription(profile, view.profiles),
           profile.limit.readOnly ? 'At its usage limit' : profile.limit.dimmed ? 'Fable limit reached' : undefined,
           loginProblem ? 'Login problem' : undefined].filter(Boolean).join(' · ') || undefined,
-        detail: usageDetail(profile, profile.active ? activeUsage?.(provider, profile.id) : undefined) ?? (profile.checkedAt
+        detail: usageDetail(profile, displayedUsage, provider) ?? (profile.checkedAt
           ? `Last checked ${new Date(profile.checkedAt).toLocaleString()} · waiting for the service to refresh usage after reset`
           : `Saved ${new Date(profile.updatedAt).toLocaleString()} · Usage not checked yet`),
         profile,
