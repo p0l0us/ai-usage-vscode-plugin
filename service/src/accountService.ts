@@ -1,6 +1,8 @@
+import { randomUUID, createHash } from 'crypto';
+import { projectQuota, projectResetCredits, StatusFilter, StatusRead, StatusSnapshot, StatusProvider, StatusNative, StatusCursor } from './statusProjection';
 import { mcpCli, mcpCommand, readMcpRegistration, registerMcpServer, unregisterMcpServer } from './mcpRegistration';
 import { findStaleCodexProcesses } from './codexProcesses';
-import { UsageMonitor, UsageContext, UsageStateView, nativeUsageIdentity, serializeUsageState } from './usageMonitor';
+import { UsageMonitor, UsageContext, UsageStateView, usageSettings, nativeUsageIdentity, serializeUsageState } from './usageMonitor';
 import { ServiceRuntime } from './runtime';
 import { readCurrentSessionTokens } from './sessionTokens';
 import { EventEmitter } from 'events';
@@ -91,7 +93,7 @@ export type WorkspaceContext = {
 };
 
 /** Methods that change nothing the owner keeps, so they may be answered without checking the lease. */
-const READ_ONLY_METHODS = new Set(['reset.confirmations', 'service.info', 'snapshot', 'profiles.list', 'config.get', 'config.read', 'rotation.diagnostics', 'history.info',
+const READ_ONLY_METHODS = new Set(['status.snapshot', 'reset.confirmations', 'service.info', 'snapshot', 'profiles.list', 'config.get', 'config.read', 'rotation.diagnostics', 'history.info',
   'history.summary', 'history.export', 'profiles.export', 'profiles.planImport', 'runtime.status', 'mcp.registration', 'runtime.staleCodex',
   'usage.sessionTokens', 'automation.cancel']);
 
@@ -125,6 +127,14 @@ export class AccountService {
   readonly usageMonitor: UsageMonitor;
   readonly runtime: ServiceRuntime;
   private usageTimer?: NodeJS.Timeout;
+  private readonly statusEpoch = randomUUID();
+  private statusRevision = 0;
+  private statusDigest?: string;
+  private statusTimer?: NodeJS.Timeout;
+  private statusLifecycle: import('./protocol').LifecycleState = 'starting';
+  private readonly retainedStatus = new Map<string, UsageStateView>();
+  private readonly retainedCopilotAccount = new Map<string, string>();
+  private readonly retainedAttribution = new Map<string, boolean>();
   private readonly usageContexts = new Map<number, UsageContext>();
   readonly automation: AccountAutomation;
   /** Readings, switches and rotation sweeps, appended to month files for later analysis (`history.*`). */
@@ -252,7 +262,9 @@ export class AccountService {
   }
 
   async liveUsage(provider: ProviderId, force = false, clientId?: number): Promise<UsageStateView> {
-    let context = this.usageContexts.get(clientId ?? -1);
+    const statusContext = this.usageContexts.get(clientId ?? -1);
+    const statusCopilotAccount = this.config.copilot.account;
+    let context = statusContext;
     if (provider === 'copilot' && !context) {
       const token = process.env.GH_TOKEN || process.env.GITHUB_TOKEN;
       context = { accounts: token ? [{ login: this.config.copilot.account || 'GitHub', token }] : [] };
@@ -260,14 +272,113 @@ export class AccountService {
     if (provider !== 'copilot') await this.followNative(provider);
     const active = provider === 'copilot' ? undefined : this.store.activeProfileId(provider);
     const state = await this.usageMonitor.read(provider, force, context);
-    if (provider !== 'copilot' && active && active === this.store.activeProfileId(provider) && await this.store.matchesNative(provider, active)) {
-      const usage = newestValidUsage(state.lastGood, this.automation.usage(provider, active), this.now());
+    const rawReading = state.result.kind === 'ok' ? state.result.usage : state.lastGood;
+    let accountAttributed = provider !== 'codex' || !(rawReading?.source === 'sessionLog' || ['both', 'sessionLog'].includes(this.config.codex.source) ||
+      (this.config.codex.source === 'auto' && !rawReading?.source));
+    const nativeMatches = provider !== 'copilot' && !!active && active === this.store.activeProfileId(provider) && await this.store.matchesNative(provider, active);
+    if (nativeMatches) {
+      const ownUsage = this.automation.usage(provider, active);
+      const usage = newestValidUsage(state.lastGood, ownUsage, this.now());
+      if (usage && usage === ownUsage) accountAttributed = true;
       if (usage) { state.lastGood = usage; if (state.result.kind === 'ok') state.result = { kind: 'ok', usage }; }
     }
     if (provider !== 'copilot' && active !== this.store.activeProfileId(provider)) {
-      return serializeUsageState({ identity: (this.options.usageIdentity ?? nativeUsageIdentity)(provider), result: { kind: 'unavailable', provider, reason: 'The active account changed; waiting for its reading.' } });
+      return this.retainStatus(provider, serializeUsageState({ identity: (this.options.usageIdentity ?? nativeUsageIdentity)(provider), result: { kind: 'unavailable', provider, reason: 'The active account changed; waiting for its reading.' } }), clientId);
     }
-    return { ...serializeUsageState(state), profileId: active };
+    return this.retainStatus(provider, { ...serializeUsageState(state), profileId: nativeMatches ? active : undefined }, clientId, statusContext, statusCopilotAccount, accountAttributed);
+  }
+
+  private statusKey(provider: ProviderId, clientId?: number): string {
+    return provider === 'copilot' && clientId !== undefined && this.usageContexts.has(clientId) ? `${provider}:${clientId}` : provider;
+  }
+
+  private retainStatus(provider: ProviderId, state: UsageStateView, clientId?: number, context?: UsageContext, account?: string, attributed = false): UsageStateView {
+    if (!this.disposed && (provider !== 'copilot' || (this.usageContexts.get(clientId ?? -1) === context && this.config.copilot.account === account))) {
+      const key = this.statusKey(provider, clientId);
+      this.retainedStatus.set(key, state);
+      this.retainedAttribution.set(key, attributed);
+      if (provider === 'copilot') this.retainedCopilotAccount.set(key, this.config.copilot.account);
+      this.refreshStatus();
+    }
+    return state;
+  }
+
+  /** Cached facts only: no following/activating native accounts, locks or provider collection. */
+  private buildStatus(now: number, clientId?: number, filter: StatusFilter = {}): Omit<StatusSnapshot, 'cursor'> {
+    const providers: StatusProvider[] = [];
+    for (const provider of filter.providers ?? ['claude', 'codex', 'copilot'] as const) {
+      const interval = usageSettings(this.config, provider).apiCheckIntervalMs;
+      const profiles = provider === 'copilot' ? [] : this.store.profiles(provider);
+      const selected = provider === 'copilot' ? undefined : this.store.activeProfileId(provider);
+      const key = this.statusKey(provider, clientId);
+      const retained = this.retainedStatus.get(key);
+      const identity = provider === 'copilot' ? retained?.identity : (this.options.usageIdentity ?? nativeUsageIdentity)(provider);
+      const identityMatches = !!retained && retained.identity === identity &&
+        (provider !== 'copilot' || this.retainedCopilotAccount.get(key) === this.config.copilot.account);
+      const saved = provider !== 'copilot' && identityMatches && retained.profileId === selected && !this.store.nativeIsUnsaved(provider) &&
+        !!selected && profiles.some(profile => profile.id === selected);
+      const filtered = !!filter.accountIds && (!saved || !filter.accountIds.includes(selected!));
+      const raw = identityMatches && !filtered ? retained.result.kind === 'ok' ? retained.result.usage : retained.lastGood : undefined;
+      const accountAttributed = identityMatches && this.retainedAttribution.get(key) === true;
+      const accounts = profiles.filter(profile => !filter.accountIds || filter.accountIds.includes(profile.id)).map(profile => {
+        const reading = this.automation.accountState(provider as AuthProvider, profile.id).usage as SerializedUsage | undefined;
+        // Cache hits after saving the native login still belong to that positively matched account.
+        const matchedNative = saved && profile.id === selected && accountAttributed ? raw : undefined;
+        const quotaReading = !reading || (matchedNative && Date.parse(matchedNative.fetchedAt) > Date.parse(reading.fetchedAt)) ? matchedNative : reading;
+        return { id: profile.id, name: profile.name, selected: profile.id === selected, quota: projectQuota(quotaReading, now, interval),
+          ...(provider === 'codex' ? { resetCredits: projectResetCredits(reading, now, matchedNative) } : {}) };
+      });
+      const native: StatusNative = { kind: filtered || !identityMatches ? identity === 'unsigned' ? 'none' : 'unknown'
+        : provider === 'copilot' ? 'unsaved' : saved ? 'saved' : this.store.nativeIsUnsaved(provider) ? 'unsaved' : identity === 'unsigned' ? 'none' : 'unknown',
+        ...(saved && !filtered ? { profileId: selected } : {}), quota: projectQuota(raw, now, interval, accountAttributed),
+        ...(provider === 'codex' ? { resetCredits: projectResetCredits(raw, now) } : {}) };
+      providers.push({ provider, savedAccountCount: profiles.length, accounts, native });
+    }
+    return { capturedAt: new Date(now).toISOString(), configRevision: this.configAuthority.revision, lifecycle: this.statusLifecycle, providers };
+  }
+
+  private refreshStatus(now = this.now()): StatusCursor {
+    const contexts = [...this.usageContexts.keys()].sort((a, b) => a - b);
+    const snapshots = [this.buildStatus(now), ...contexts.map(id => this.buildStatus(now, id))];
+    const digest = createHash('sha256').update(JSON.stringify(snapshots.map(({ capturedAt: _time, ...snapshot }) => snapshot))).digest('hex');
+    if (digest !== this.statusDigest) {
+      this.statusDigest = digest;
+      this.statusRevision++;
+      this.events.emit('event', { event: 'statusChanged', cursor: { epoch: this.statusEpoch, revision: this.statusRevision } });
+    }
+    if (this.statusTimer) clearTimeout(this.statusTimer);
+    this.statusTimer = undefined;
+    if (!this.disposed) {
+      const deadlines = snapshots.flatMap(snapshot => snapshot.providers.flatMap(provider => [...provider.accounts, provider.native].flatMap(row =>
+        [row.quota.validUntil, row.resetCredits?.state !== 'unknown' ? row.resetCredits?.validUntil : undefined]
+          .filter((value): value is string => !!value).map(Date.parse)))).filter(time => Number.isFinite(time) && time > now);
+      if (deadlines.length) {
+        this.statusTimer = setTimeout(() => this.refreshStatus(), Math.min(2_147_483_647, Math.max(1, Math.min(...deadlines) - now)));
+        this.statusTimer.unref?.();
+      }
+    }
+    return { epoch: this.statusEpoch, revision: this.statusRevision };
+  }
+
+  statusSnapshot(filter: StatusFilter = {}, clientId?: number): StatusRead {
+    const now = this.now();
+    const cursor = this.refreshStatus(now);
+    if (filter.since?.epoch === cursor.epoch && filter.since.revision === cursor.revision) return { status: 'unchanged', cursor };
+    return { status: 'snapshot', snapshot: { ...this.buildStatus(now, clientId, filter), cursor }, resync: !!filter.since && filter.since.epoch !== cursor.epoch };
+  }
+
+  private statusFilter(params: Record<string, unknown>): StatusFilter {
+    const providers = params.providers;
+    const accountIds = params.accountIds;
+    const since = params.since;
+    if (providers !== undefined && (!Array.isArray(providers) || providers.length > 3 || providers.some(value => !['claude', 'codex', 'copilot'].includes(String(value)))))
+      throw new RpcError('Select up to three status providers.', 'invalid_params');
+    if (accountIds !== undefined && (!Array.isArray(accountIds) || accountIds.length > 40 || accountIds.some(value => typeof value !== 'string' || !value.length || value.length > 128)))
+      throw new RpcError('Select up to forty account ids.', 'invalid_params');
+    if (since !== undefined && (typeof since !== 'object' || since === null || typeof (since as StatusCursor).epoch !== 'string' || (since as StatusCursor).epoch.length > 128 ||
+      !Number.isSafeInteger((since as StatusCursor).revision) || (since as StatusCursor).revision < 0)) throw new RpcError('Invalid status cursor.', 'invalid_params');
+    return { ...(providers === undefined ? {} : { providers: [...new Set(providers as ProviderId[])] }),
+      ...(accountIds === undefined ? {} : { accountIds: [...new Set(accountIds as string[])] }), ...(since === undefined ? {} : { since: since as StatusCursor }) };
   }
 
   // --- usage history -----------------------------------------------------------------------------------------
@@ -350,6 +461,8 @@ export class AccountService {
     // Background work writes credentials, native settings and state: only the owner of the home may run it.
     if (!this.options.ownership) { throw new Error('The account service engine needs the ownership of its home to start; start it through startServiceHost.'); }
     this.options.ownership.assertHeld();
+    this.statusLifecycle = 'running';
+    this.refreshStatus();
     this.history.prune();
     this.timer = setInterval(() => void this.tick().catch(() => undefined), TICK_MS);
     this.timer.unref?.();
@@ -368,6 +481,10 @@ export class AccountService {
   dispose(): Promise<void> {
     if (this.disposing) { return this.disposing; }
     this.disposed = true;
+    this.statusLifecycle = 'stopping';
+    if (this.statusTimer) clearTimeout(this.statusTimer);
+    this.statusTimer = undefined;
+    this.refreshStatus();
     if (this.timer) { clearInterval(this.timer); this.timer = undefined; }
     this.automation.dispose();
     this.usageMonitor.dispose();
@@ -377,6 +494,11 @@ export class AccountService {
     const attempt = (async () => {
       await this.drain(this.options.drainTimeoutMs ?? 30_000);
       await this.runtime.dispose();
+      this.statusLifecycle = 'stopped';
+      this.retainedStatus.clear();
+      this.retainedCopilotAccount.clear();
+      this.retainedAttribution.clear();
+      this.refreshStatus();
     })();
     this.disposing = attempt;
     attempt.catch(() => { if (this.disposing === attempt) { this.disposing = undefined; } });
@@ -425,6 +547,7 @@ export class AccountService {
 
   emit(event: ServiceEvent): void {
     this.events.emit('event', event);
+    if (['usageChanged', 'stateChanged', 'configChanged'].includes(event.event) && this.store && this.automation) this.refreshStatus();
     if (event.event === 'stateChanged') {
       for (const provider of event.provider ? [event.provider] : PROVIDERS) this.events.emit('event', { event: 'usageChanged', provider });
     }
@@ -441,6 +564,10 @@ export class AccountService {
   forgetFolders(clientId: number): void {
     this.automation.forgetResetClient(clientId);
     this.usageContexts.delete(clientId);
+    this.retainedStatus.delete(`copilot:${clientId}`);
+    this.retainedCopilotAccount.delete(`copilot:${clientId}`);
+    this.retainedAttribution.delete(`copilot:${clientId}`);
+    this.refreshStatus();
     this.sessionDirectories.delete(clientId);
     if (this.foldersByClient.delete(clientId)) { this.applyFolders(); }
   }
@@ -458,7 +585,13 @@ export class AccountService {
   /** `workspace.context`: replaces the parts given; the rest of the connection's context stays. */
   private setWorkspaceContext(clientId: number, params: Record<string, unknown>): WorkspaceContext {
     if (Array.isArray(params.folders)) { this.declareFolders(clientId, params.folders.filter((folder): folder is string => typeof folder === 'string').slice(0, 100)); }
-    if (params.github !== undefined) { this.usageContexts.set(clientId, githubContext(objectParams(params.github))); }
+    if (params.github !== undefined) {
+      this.usageContexts.set(clientId, githubContext(objectParams(params.github)));
+      this.retainedStatus.delete(`copilot:${clientId}`);
+      this.retainedCopilotAccount.delete(`copilot:${clientId}`);
+      this.retainedAttribution.delete(`copilot:${clientId}`);
+      this.refreshStatus();
+    }
     if (params.sessionDirectory !== undefined) {
       const raw = objectParams(params.sessionDirectory);
       const directories: Partial<Record<AuthProvider, string>> = {};
@@ -808,6 +941,7 @@ export class AccountService {
   private async dispatch(method: string, params: Record<string, unknown>, clientId: number | undefined, request: RequestContext | undefined): Promise<unknown> {
     const paused = <T>(operation: () => Promise<T>) => this.automation.withPaused(operation);
     switch (method) {
+      case 'status.snapshot': return this.statusSnapshot(this.statusFilter(params), clientId);
       case 'reset.confirmations': return this.automation.resetConfirmations();
       case 'reset.claim': {
         if (clientId === undefined) throw new RpcError('Confirmation needs a connected client.', 'invalid_params');
@@ -842,6 +976,10 @@ export class AccountService {
       case 'usage.context': {
         if (clientId === undefined) throw new Error('Usage context needs a connected client.');
         this.usageContexts.set(clientId, githubContext(params));
+        this.retainedStatus.delete(`copilot:${clientId}`);
+        this.retainedCopilotAccount.delete(`copilot:${clientId}`);
+        this.retainedAttribution.delete(`copilot:${clientId}`);
+        this.refreshStatus();
         return { ok: true };
       }
       case 'usage.live': {

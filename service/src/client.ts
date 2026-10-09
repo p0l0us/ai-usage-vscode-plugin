@@ -1,3 +1,4 @@
+import type { StatusFilter, StatusRead } from './statusProjection';
 import { UsageContext, UsageStateView } from './usageMonitor';
 import { ProviderId } from './live';
 import { EventEmitter } from 'events';
@@ -75,6 +76,8 @@ export class ServiceClient extends EventEmitter {
   resetConfirmations(): Promise<ResetConfirmation[]> { return this.call('reset.confirmations'); }
   claimReset(id: string): Promise<ResetConfirmation | null> { return this.call('reset.claim', { id }); }
   resolveReset(id: string, approve: boolean, options?: RequestOptions): Promise<ResetResolution> { return this.call('reset.resolve', { id, approve }, options); }
+
+  statusSnapshot(filter?: StatusFilter, options?: RequestOptions): Promise<StatusRead> { return this.call('status.snapshot', filter, options); }
 
   serviceInfo(): Promise<ServiceInfo> { return this.call('service.info'); }
   snapshot(): Promise<Snapshot> { return this.call('snapshot'); }

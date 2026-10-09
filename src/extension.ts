@@ -8,6 +8,8 @@ import { configureBridgeService, registerBridgeIntegration } from './bridgeInteg
 import { registerBridgeModels } from './bridgeModels';
 import {
   RotationDiagnostics,
+  configKeys,
+  projectResetCredits,
   usageSettings,
   ActivationChange,
   AuthProvider,
@@ -33,7 +35,8 @@ import { MCP_SERVER_NAME, McpCommand, McpRegistration, RegistrationOutcome } fro
 import { ServiceManager } from './serviceManager';
 import { openAiUsageSettings } from './settingsLink';
 import { compactTokenCount, SessionTokenUsage } from './sessionTokens';
-import { formatUsagePercent } from './usageFormatting';
+import { formatUsagePercent, formatEarnedResetCount } from './usageFormatting';
+import { CODEX_EARNED_RESETS_SETTING, codexUsageSettingsChanged } from './statusBarSettings';
 
 type BillingPeriod = 'daily' | 'weekly' | 'monthly';
 
@@ -752,7 +755,7 @@ export function activate(context: vscode.ExtensionContext): void {
     }
     if (
       event.affectsConfiguration('aiUsage.claude') ||
-      event.affectsConfiguration('aiUsage.codex') ||
+      (event.affectsConfiguration('aiUsage.codex') && codexUsageSettingsChanged(key => event.affectsConfiguration(key), configKeys())) ||
       event.affectsConfiguration('aiUsage.copilot') ||
       event.affectsConfiguration('aiUsage.chatChips')
     ) {
@@ -1127,9 +1130,13 @@ function renderLive(provider: LiveProvider): void {
     item.show();
     return;
   }
-  item.text = statusText(provider, formatUsageLabel(usage, false, statusBarStyle().usage), usage.title);
+  const credits = provider.id === 'codex' ? projectResetCredits(usage) : undefined;
+  const resetCount = formatEarnedResetCount(credits?.state === 'known' ? credits.availableCount : undefined,
+    provider.id === 'codex' && vscode.workspace.getConfiguration().get<boolean>(CODEX_EARNED_RESETS_SETTING, true));
+  const usageLabel = formatUsageLabel(usage, false, statusBarStyle().usage);
+  item.text = statusText(provider, `${usageLabel}${resetCount ? ` ${resetCount}` : ''}`, usage.title);
   item.tooltip = buildTooltip(usage, result?.kind === 'error' ? result.message : undefined,
-    provider.activeProfileName?.(), provider.activeProfileUsage?.(), provider.diagnostics);
+    provider.activeProfileName?.(), provider.diagnostics);
   item.color = Date.now() - usage.fetchedAt.getTime() >= STALE_AFTER_MS
     ? new vscode.ThemeColor('disabledForeground') : undefined;
 
@@ -1231,7 +1238,7 @@ function statusText(provider: LiveProvider, body: string, title?: string): strin
   return `${icon}${name}${account ? `${account} ` : ''}${body}`.trimEnd();
 }
 
-function buildTooltip(usage: LiveUsage, refreshError?: string, activeProfile?: string, profileUsage?: LiveUsage, diagnostics?: RotationDiagnostics): vscode.MarkdownString {
+function buildTooltip(usage: LiveUsage, refreshError?: string, activeProfile?: string, diagnostics?: RotationDiagnostics): vscode.MarkdownString {
   const md = new vscode.MarkdownString(undefined, true);
   if (refreshError) {
     const minutes = Math.round((Date.now() - usage.fetchedAt.getTime()) / 60_000);
@@ -1247,12 +1254,15 @@ function buildTooltip(usage: LiveUsage, refreshError?: string, activeProfile?: s
     md.appendMarkdown(`- **${windowName(window.label)}**: ${formatUsagePercent(window.usedPercent)} used${reset ? ` · ${reset}${at}` : ''}\n`);
   }
   if (usage.provider === 'codex') {
-    const observed = profileUsage?.resetCredits?.totalCount;
-    const credits = usage.resetCredits ?? (profileUsage && Date.now() - profileUsage.fetchedAt.getTime() < 15 * 60_000 ? profileUsage.resetCredits : undefined);
-    const line = formatEarnedResets(credits, observed);
-    if (line) {
-      const expiry = credits?.earliestExpiresAt ? ` · next credit expires ${new Date(credits.earliestExpiresAt * 1000).toLocaleString()}` : '';
+    const credits = projectResetCredits(usage);
+    if (credits.state === 'known') {
+      const line = formatEarnedResets(credits);
+      const expiry = credits.earliestExpiresAt ? ` · next credit expires ${new Date(credits.earliestExpiresAt * 1000).toLocaleString()}` : '';
       md.appendMarkdown(`\n- **Earned resets:** ${line}${expiry}\n`);
+    } else if (credits.state === 'stale') {
+      md.appendMarkdown(`\n- **Earned resets:** Availability stale · last reported ${credits.lastReportedAvailableCount}; current availability unknown.\n`);
+    } else {
+      md.appendMarkdown('\n- **Earned resets:** Availability unknown · not reported in the current account reading.\n');
     }
   }
   if (usage.details?.length) {

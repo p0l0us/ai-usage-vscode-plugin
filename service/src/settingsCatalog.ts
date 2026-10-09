@@ -290,6 +290,12 @@ export const SETTINGS_CATALOG = [
     "description": "**Show the Codex account number in the status bar.** Puts the active saved profile's position in the Accounts list between the icon and the figures, e.g. `#2 17% (3h)`. Shown only when at least two Codex profiles are saved and the active login is one of them."
   },
   {
+    "key": "codex.statusBar.earnedResets",
+    "type": "boolean",
+    "default": true,
+    "description": "**Show available earned Codex resets in the status bar.** Displays the current account's cached reset count beside its usage. Unknown or stale availability is not shown as zero. This display does not check or redeem resets."
+  },
+  {
     "key": "codex.source",
     "type": "enum",
     "values": [

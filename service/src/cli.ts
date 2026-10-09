@@ -542,7 +542,7 @@ export async function main(argv: string[], io?: CliOutput): Promise<number> {
       }
       case 'mcp': {
         // Stdout carries the protocol; whatever else there is to say goes to stderr.
-        const connect = () => ServiceClient.connect({ home, client: 'mcp', version: serviceVersion(), subscribe: [] });
+        const connect = () => ServiceClient.connect({ home, client: 'mcp', version: serviceVersion(), subscribe: ['statusChanged', 'configChanged'] });
         try {
           const probe = await connect();
           if (!probe.connected || !(await probe.getConfig()).mcp.enabled) {

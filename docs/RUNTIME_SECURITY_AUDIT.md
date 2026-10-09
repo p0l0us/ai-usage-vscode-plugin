@@ -121,3 +121,9 @@ Accepted the bounded MCP selector/provider and registration-message delta by sou
 | --- | --- |
 | `service/src/mcpRegistration.ts` | `25682de12ae802baaf3b28310343a2907aec2bbdde6d33c13d73819973df61e4` |
 | `src/mcpProvider.ts` | `c9213fb7546a73a3f1e392866c77346eee4f8cd6cdcbc6d8cc5cf4dfbf8360c6` |
+
+## Cached status subscriptions and reset toolbar — 2026-10-09
+
+The independent continuation review accepted the shared cached status projection, MCP resource subscriptions and bounded wait tool, and the default-on Codex reset-count toolbar setting. Five Medium findings were corrected: missing general-quota availability, Copilot context invalidation, full-request wait deadlines, response draining on normal input EOF, and immediate subscription revocation when MCP is disabled. The final isolated affected-scope gate compiled service/editor and passed **72/72 tests**, including actual CLI notifications in background and embedded modes, with no extra provider calls from subscriptions.
+
+The root coordinator recorded this closeout from the reviewer's final successful gate message after the reviewer hit its workspace credit limit while completing report bookkeeping. Historical audit fingerprints above belong to their stated earlier snapshots; the latest status-scope fingerprints and exact seven-file gate are in `ai/tasks/runtime-unification/tmp/W22-report.md`. No second full-repository test run is claimed. Native Windows/macOS and interactive editor/third-party host wake-up remain untested; notifications do not promise a new model turn.

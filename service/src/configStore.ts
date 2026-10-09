@@ -370,7 +370,7 @@ export type SettingScope = 'engine' | 'presentation' | 'local' | 'workspace';
 const LOCAL_KEYS = new Set(['accountService.enabled', 'accountService.background']);
 const WORKSPACE_KEYS = new Set(['bridge.codex.sessionDirectory', 'bridge.claude.sessionDirectory']);
 const PRESENTATION_KEYS = new Set(['chatTokens.enabled', 'updateIntervalMinutes', 'refreshIntervalMinutes', 'accounts',
-  'claude.statusBar.accountNumber', 'codex.statusBar.accountNumber', 'codex.switchRestartHint',
+  'claude.statusBar.accountNumber', 'codex.statusBar.accountNumber', 'codex.statusBar.earnedResets', 'codex.switchRestartHint',
   'claude.advanced.rotationDiagnostics', 'codex.advanced.rotationDiagnostics']);
 
 export function settingScope(dotted: string): SettingScope {

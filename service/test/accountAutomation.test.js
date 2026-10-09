@@ -1065,3 +1065,73 @@ test('a cancelled queued approval cannot authorize the independent sweep that ho
   await assert.rejects(approval, /Cancelled/); await sweep; await manualWaiter;
   assert.equal(f.resets.length, 0);
 });
+
+
+const modelFallbackScreenshot = {
+  a: [['5h', 0, 3], ['7d', 65, 120], ['7d Fable', 100, 120]],
+  b: [['5h', 0, 3], ['7d', 85, 120], ['7d Fable', 100, 120]],
+  c: [['5h', 0, 3], ['7d', 100, 120], ['7d Fable', 100, 120]],
+  d: [['5h', 100, 3], ['7d', 80, 120], ['7d Fable', 62, 120]],
+  e: [['5h', 100, 3], ['7d', 70, 120], ['7d Fable', 79, 120]]
+};
+function modelFallbackFixture(t, options = {}) {
+  const f = fixture(t, { ids: ['a', 'b', 'c', 'd', 'e'], values: modelFallbackScreenshot,
+    settings: { claude: { countsWindow: modelWindowFilter('auto', 'fable'), strategy: options.strategy || 'sequential' } }, ...options });
+  f.active.claude = options.active || 'c';
+  f.observeAll('claude'); f.settings.claude.autoRotate = true;
+  return f;
+}
+
+for (const strategy of ['sequential', 'soonestReset', 'evenPace', 'leastWaste']) {
+  test(`Claude model-quota fallback selects a general-eligible screenshot account (${strategy})`, async t => {
+    const f = modelFallbackFixture(t, { strategy }); await f.service.tick();
+    assert.ok(['a', 'b'].includes(f.active.claude));
+    assert.equal(f.switches.length, 1);
+    assert.equal(f.service.usage('claude', f.active.claude).windows.find(window => window.label === '7d Fable').usedPercent, 100);
+    assert.deepEqual(f.service.limitState('claude', f.active.claude), { readOnly: false, dimmed: true });
+    assert.ok(f.messages.some(message => message.includes('general quota fallback; model limit remains')));
+  });
+}
+
+test('Claude prefers later full model headroom over an earlier model-exhausted fallback', async t => {
+  const f = modelFallbackFixture(t, { values: { ...modelFallbackScreenshot, b: [['5h', 0, 3], ['7d', 85, 120], ['7d Fable', 30, 120]] } });
+  await f.service.tick(); assert.deepEqual(f.switches, [['claude', 'b', true]]);
+});
+
+test('Claude keeps an active general-eligible model-limited account when no model-capable alternative exists', async t => {
+  const f = modelFallbackFixture(t, { active: 'a' }); await f.service.tick();
+  assert.deepEqual(f.switches, []); assert.equal(f.active.claude, 'a');
+  assert.deepEqual(f.service.limitState('claude', 'a'), { readOnly: false, dimmed: true });
+});
+
+test('Claude fallback keeps configured general thresholds and never accepts unknown general quota', async t => {
+  const f = modelFallbackFixture(t, { values: { ...modelFallbackScreenshot, a: [['7d Fable', 100, 120]], b: [['5h', 0, 3], ['7d', 85, 120], ['7d Fable', 100, 120]] } });
+  f.settings.claude.weeklyThresholdPercent = 80;
+  await f.service.tick(); assert.deepEqual(f.switches, []);
+});
+
+test('Claude fallback verifies quota again after keep-alive and rejects a now-general-exhausted candidate', async t => {
+  const f = modelFallbackFixture(t, { values: { ...modelFallbackScreenshot, b: modelFallbackScreenshot.c },
+    beforeProbe: async (provider, credential, keepAlive) => {
+      if (provider === 'claude' && credential.id === 'a' && keepAlive) f.values.a = modelFallbackScreenshot.d;
+    } });
+  await f.service.tick(); assert.deepEqual(f.switches, []);
+});
+
+test('Claude fallback retains failed-login checks and never changes the configured keep-alive model', async t => {
+  const f = modelFallbackFixture(t, { keepAliveErrors: { a: 'invalid credentials', b: 'invalid credentials' } });
+  const model = f.settings.claude.model;
+  await f.service.tick(); assert.deepEqual(f.switches, []); assert.equal(f.settings.claude.model, model);
+});
+
+for (const mode of ['never', 'auto', 'always']) {
+  test(`Claude counted-model preference remains compatible with modelLimits ${mode}`, async t => {
+    const f = modelFallbackFixture(t); f.settings.claude.countsWindow = modelWindowFilter(mode, mode === 'auto' ? 'opus' : 'fable');
+    await f.service.tick(); assert.ok(['a', 'b'].includes(f.active.claude));
+  });
+}
+
+test('Codex model-window eligibility remains strict; Claude fallback does not apply to other providers', async t => {
+  const f = fixture(t, { ids: ['a', 'b'], values: { a: modelFallbackScreenshot.c, b: modelFallbackScreenshot.a }, settings: { codex: { autoRotate: true } } });
+  f.observeAll('codex'); await f.service.tick(); assert.deepEqual(f.switches, []);
+});

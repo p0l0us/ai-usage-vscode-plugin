@@ -1015,7 +1015,12 @@ export class AccountAutomation {
     if (canRedeem && (!settings.autoRotate || creditUrgent)) {
       return this.redeemReset(active, settings, current, creditUrgent ? 'credit expiring' : 'rotation disabled');
     }
-    const requiredWindows = counted(current, settings).map((window) => window.label);
+    // Model quota is a preference when every account is model-limited, while general quota
+    // remains a hard gate. Explicitly ignored model windows keep their existing behavior.
+    const generalSettings: AutomationSettings = { ...settings, countsWindow: label => windowKind(label) !== 'modelWeekly' };
+    const allowModelFallback = provider === 'claude' && exhausted &&
+      counted(current, settings).some(window => windowKind(window.label) === 'modelWeekly');
+    const selectionPasses = allowModelFallback ? [settings, generalSettings] : [settings];
     const skipped: string[] = [];
     const limited: string[] = [];
     let deferredUntil: Date | undefined;
@@ -1031,96 +1036,106 @@ export class AccountAutomation {
       this.history?.record({ type: 'sweep', provider, active: this.account(provider, active), outcome,
         usage: usageSnapshot(current), settings: snapshot, candidates: evaluated, calls });
     };
-    for (const [index, candidate] of ranked.entries()) {
-      const entry = evaluated[index];
-      if (this.disposed || this.paused || this.holds.has(provider) || !this.rotationAllowed(provider)) { return 'the sweep was interrupted'; }
-      // Never switch to an account whose last check failed, and spend nothing on it: its next successful keep-alive,
-      // periodic or by hand, makes it a candidate again.
-      const problem = this.checkProblem(provider, candidate.id);
-      if (problem) {
-        const label = explainAccountProblem(problem).label;
-        entry.outcome = 'problem';
-        entry.detail = label;
-        skipped.push(`"${candidate.name}" (${label})`);
-        this.log(`${provider}: not rotating to "${candidate.name}": its last check failed (${label})`);
-        continue;
+    for (const [passIndex, selectionSettings] of selectionPasses.entries()) {
+      const modelFallback = passIndex > 0;
+      if (modelFallback && eligibleAccount(current, this.now(), generalSettings)) {
+        this.log(`${provider}: no model-capable account is available; keeping the active account with general quota headroom (model limit remains)`);
+        return 'no model-capable account is available; the active account still has general quota headroom';
       }
-      const cachedUsage = deserializeUsage(this.read(provider, candidate.id));
-      const nearReset = settings.resetAware && !forced && cachedUsage ? imminentReset(cachedUsage, this.now(), settings) : undefined;
-      if (nearReset) {
-        entry.outcome = 'resetSoon';
-        entry.detail = `usage resets in ${formatResetRemaining(nearReset, new Date(this.now()))}`;
-        if (!deferredUntil || nearReset < deferredUntil) { deferredUntil = nearReset; }
-        continue;
+      const candidates = modelFallback ? this.ranked(provider, active, selectionSettings) : ranked;
+      const requiredWindows = counted(current, selectionSettings).map(window => window.label);
+      for (const candidate of candidates) {
+        const entry = evaluated.find(entry => entry.account.id === candidate.id)!;
+        if (this.disposed || this.paused || this.holds.has(provider) || !this.rotationAllowed(provider)) { return 'the sweep was interrupted'; }
+        // Never switch to an account whose last check failed, and spend nothing on it: its next successful keep-alive,
+        // periodic or by hand, makes it a candidate again.
+        const problem = this.checkProblem(provider, candidate.id);
+        if (problem) {
+          const label = explainAccountProblem(problem).label;
+          entry.outcome = 'problem';
+          entry.detail = label;
+          skipped.push(`"${candidate.name}" (${label})`);
+          this.log(`${provider}: not rotating to "${candidate.name}": its last check failed (${label})`);
+          continue;
+        }
+        const cachedUsage = deserializeUsage(this.read(provider, candidate.id));
+        const nearReset = settings.resetAware && !forced && cachedUsage ? imminentReset(cachedUsage, this.now(), settings) : undefined;
+        if (nearReset) {
+          entry.outcome = 'resetSoon';
+          entry.detail = `usage resets in ${formatResetRemaining(nearReset, new Date(this.now()))}`;
+          if (!deferredUntil || nearReset < deferredUntil) { deferredUntil = nearReset; }
+          continue;
+        }
+        // Usage in a window only rises until its reset, so an account whose stored reading is still at a threshold with
+        // the reset ahead cannot qualify yet, whatever a new reading would say; it costs nothing until that reset.
+        if (own === undefined && candidate.limitedUntil) {
+          entry.outcome = 'limited';
+          limited.push(`"${candidate.name}" (resets in ${formatResetRemaining(candidate.limitedUntil, new Date(this.now()))})`);
+          continue;
+        }
+        if (own !== undefined && !(candidate.usable && candidate.score !== undefined && candidate.score + margin < own)) {
+          entry.outcome = 'notBetter';
+          continue;
+        }
+        calls++;
+        const checked = await this.checkAccount(provider, candidate.id, settings, false, { source: 'rotation' });
+        const candidateUsage = checked.usage;
+        if (candidateUsage) { entry.usage = usageSnapshot(candidateUsage); }
+        if (!candidateUsage || !eligibleAccount(candidateUsage, this.now(), selectionSettings) ||
+          !requiredWindows.every((label) => candidateUsage.windows.some((window) => window.label === label))) {
+          entry.outcome = 'ineligible';
+          if (!candidateUsage) { entry.detail = checked.usageError ?? 'usage unavailable'; }
+          continue;
+        }
+        const freshReset = settings.resetAware && !forced ? imminentReset(candidateUsage, this.now(), settings) : undefined;
+        if (freshReset) {
+          entry.outcome = 'resetSoon';
+          entry.detail = `usage resets in ${formatResetRemaining(freshReset, new Date(this.now()))}`;
+          if (!deferredUntil || freshReset < deferredUntil) { deferredUntil = freshReset; }
+          continue;
+        }
+        const score = rotationScore(strategy, candidateUsage, this.now(), selectionSettings);
+        if (score !== undefined) { entry.freshScore = score; }
+        if (own !== undefined && !(score !== undefined && score + margin < own)) {
+          entry.outcome = 'notBetter';
+          continue;
+        }
+        if (this.disposed || this.paused || this.holds.has(provider) || !this.rotationAllowed(provider)) { return 'the sweep was interrupted'; }
+        // A usage reading does not prove that the login still works; a real model call does. Never switch to a
+        // broken login: report it and try the next account. The call counts as the account's periodic keep-alive.
+        this.write(provider, candidate.id, { ...this.read(provider, candidate.id), lastKeepAliveAt: this.now() });
+        calls++;
+        const verified = await this.checkAccount(provider, candidate.id, settings, true, { ignoreBackoff: true, verifying: true, source: 'rotation' });
+        if (verified.keepAliveError || !verified.usage || !eligibleAccount(verified.usage, this.now(), selectionSettings) ||
+          !requiredWindows.every(label => verified.usage!.windows.some(window => window.label === label))) {
+          entry.outcome = 'keepAliveFailed';
+          entry.detail = verified.keepAliveError ?? verified.usageError ?? 'usage unavailable';
+          this.log(`${provider}: not rotating to "${candidate.name}": ${entry.detail}`);
+          continue;
+        }
+        const verifiedReset = settings.resetAware && !forced ? imminentReset(verified.usage, this.now(), settings) : undefined;
+        if (verifiedReset) {
+          entry.outcome = 'resetSoon';
+          entry.detail = `usage resets in ${formatResetRemaining(verifiedReset, new Date(this.now()))}`;
+          if (!deferredUntil || verifiedReset < deferredUntil) { deferredUntil = verifiedReset; }
+          continue;
+        }
+        if (this.profiles.activeProfileId(provider) !== active || !await this.profiles.matchesNative(provider, active)) { return 'the active login changed during the sweep'; }
+        if (await this.profiles.activateProfile(provider, candidate.id, true)) {
+          entry.outcome = 'chosen';
+          entry.usage = usageSnapshot(verified.usage);
+          const stayedMs = this.stayed(provider, active);
+          this.write(provider, 'rotation-stay', { activeId: candidate.id, checkedAt: this.now() });
+          this.clearExhausted(provider, candidate.id, 'switch');
+          this.log(`${provider}: automatically rotated to "${candidate.name}" (${strategy}, ${modelFallback ? 'general quota fallback; model limit remains' : exhausted ? 'active account at its limit' : 'better account available'})`);
+          this.history?.record({ type: 'switch', provider, from: this.account(provider, active), to: this.account(provider, candidate.id),
+            reason: exhausted ? 'limit' : 'proactive', automatic: true, ...(stayedMs !== undefined ? { stayedMs } : {}),
+            fromUsage: usageSnapshot(current), toUsage: usageSnapshot(verified.usage), settings: snapshot, candidates: evaluated, calls });
+          await this.afterActivate(provider, { kind: 'activated', accountChanged: true });
+          return undefined;
+        }
+        return `"${candidate.name}" could not be activated`; // At most one switch per sweep, including when every account is exhausted.
       }
-      // Usage in a window only rises until its reset, so an account whose stored reading is still at a threshold with
-      // the reset ahead cannot qualify yet, whatever a new reading would say; it costs nothing until that reset.
-      if (own === undefined && candidate.limitedUntil) {
-        entry.outcome = 'limited';
-        limited.push(`"${candidate.name}" (resets in ${formatResetRemaining(candidate.limitedUntil, new Date(this.now()))})`);
-        continue;
-      }
-      if (own !== undefined && !(candidate.usable && candidate.score !== undefined && candidate.score + margin < own)) {
-        entry.outcome = 'notBetter';
-        continue;
-      }
-      calls++;
-      const checked = await this.checkAccount(provider, candidate.id, settings, false, { source: 'rotation' });
-      const candidateUsage = checked.usage;
-      if (candidateUsage) { entry.usage = usageSnapshot(candidateUsage); }
-      if (!candidateUsage || !eligibleAccount(candidateUsage, this.now(), settings) ||
-        !requiredWindows.every((label) => candidateUsage.windows.some((window) => window.label === label))) {
-        entry.outcome = 'ineligible';
-        if (!candidateUsage) { entry.detail = checked.usageError ?? 'usage unavailable'; }
-        continue;
-      }
-      const freshReset = settings.resetAware && !forced ? imminentReset(candidateUsage, this.now(), settings) : undefined;
-      if (freshReset) {
-        entry.outcome = 'resetSoon';
-        entry.detail = `usage resets in ${formatResetRemaining(freshReset, new Date(this.now()))}`;
-        if (!deferredUntil || freshReset < deferredUntil) { deferredUntil = freshReset; }
-        continue;
-      }
-      const score = rotationScore(strategy, candidateUsage, this.now(), settings);
-      if (score !== undefined) { entry.freshScore = score; }
-      if (own !== undefined && !(score !== undefined && score + margin < own)) {
-        entry.outcome = 'notBetter';
-        continue;
-      }
-      if (this.disposed || this.paused || this.holds.has(provider) || !this.rotationAllowed(provider)) { return 'the sweep was interrupted'; }
-      // A usage reading does not prove that the login still works; a real model call does. Never switch to a
-      // broken login: report it and try the next account. The call counts as the account's periodic keep-alive.
-      this.write(provider, candidate.id, { ...this.read(provider, candidate.id), lastKeepAliveAt: this.now() });
-      calls++;
-      const verified = await this.checkAccount(provider, candidate.id, settings, true, { ignoreBackoff: true, verifying: true, source: 'rotation' });
-      if (verified.keepAliveError || !verified.usage || !eligibleAccount(verified.usage, this.now(), settings)) {
-        entry.outcome = 'keepAliveFailed';
-        entry.detail = verified.keepAliveError ?? verified.usageError ?? 'usage unavailable';
-        this.log(`${provider}: not rotating to "${candidate.name}": ${entry.detail}`);
-        continue;
-      }
-      const verifiedReset = settings.resetAware && !forced ? imminentReset(verified.usage, this.now(), settings) : undefined;
-      if (verifiedReset) {
-        entry.outcome = 'resetSoon';
-        entry.detail = `usage resets in ${formatResetRemaining(verifiedReset, new Date(this.now()))}`;
-        if (!deferredUntil || verifiedReset < deferredUntil) { deferredUntil = verifiedReset; }
-        continue;
-      }
-      if (this.profiles.activeProfileId(provider) !== active || !await this.profiles.matchesNative(provider, active)) { return 'the active login changed during the sweep'; }
-      if (await this.profiles.activateProfile(provider, candidate.id, true)) {
-        entry.outcome = 'chosen';
-        entry.usage = usageSnapshot(verified.usage);
-        const stayedMs = this.stayed(provider, active);
-        this.write(provider, 'rotation-stay', { activeId: candidate.id, checkedAt: this.now() });
-        this.clearExhausted(provider, candidate.id, 'switch');
-        this.log(`${provider}: automatically rotated to "${candidate.name}" (${strategy}, ${exhausted ? 'active account at its limit' : 'better account available'})`);
-        this.history?.record({ type: 'switch', provider, from: this.account(provider, active), to: this.account(provider, candidate.id),
-          reason: exhausted ? 'limit' : 'proactive', automatic: true, ...(stayedMs !== undefined ? { stayedMs } : {}),
-          fromUsage: usageSnapshot(current), toUsage: usageSnapshot(verified.usage), settings: snapshot, candidates: evaluated, calls });
-        await this.afterActivate(provider, { kind: 'activated', accountChanged: true });
-        return undefined;
-      }
-      return `"${candidate.name}" could not be activated`; // At most one switch per sweep, including when every account is exhausted.
     }
     if (deferredUntil) {
       this.write(provider, rotationId, { checkedAt: sweepStart, nextAllowedAt: deferredUntil.getTime() + 1000 });

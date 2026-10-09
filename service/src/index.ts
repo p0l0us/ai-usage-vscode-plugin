@@ -24,3 +24,5 @@ export * from './usageMonitor';
 export * from './runtime';
 export * from './sessionTokens';
 export * from './rotationDiagnostics';
+
+export * from './statusProjection';

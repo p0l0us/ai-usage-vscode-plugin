@@ -297,3 +297,20 @@ test('Back at the end of an Accounts menu opens the previous menu over it, then 
   assert.equal(openWhileGoingBack, true, 'the Accounts menu is still open while the previous menu opens');
   assert.equal(menus[0].disposed, true);
 });
+
+
+test('manual selection permits a Fable-exhausted general-capable account and shows its actual limitation', async () => {
+  const limited = profile({ id: 'fallback', name: 'Claude 1', limit: { readOnly: false, dimmed: true }, usage: {
+    provider: 'claude', title: 'Claude', fetchedAt: new Date().toISOString(),
+    windows: [{ label: '5h', usedPercent: 0 }, { label: '7d', usedPercent: 65 }, { label: '7d Fable', usedPercent: 100 }]
+  } });
+  const f = fixture({ claude: { provider: 'claude', title: 'Claude', profiles: [limited], scopes } });
+  quickPickResponses.push(items => {
+    const item = items.find(item => item.profile?.id === 'fallback');
+    assert.equal(item.readOnly, false); assert.match(item.description, /Fable limit reached/);
+    assert.match(item.detail, /7d Fable: 100%/); return item;
+  });
+  await f.menu.show('claude');
+  assert.deepEqual(f.calls, [['activate', 'claude', 'fallback']]);
+  assert.deepEqual(warningMessages, []);
+});

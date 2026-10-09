@@ -1,14 +1,15 @@
+import type { StatusFilter, StatusRead, StatusCursor } from './statusProjection';
 import type { AuthProvider } from './authFiles';
 import type { ActivationVerification } from './profileStore';
 import type { ServiceConfig } from './configStore';
 import type { ExportedProfile, ImportKind } from './profileTransfer';
 import type { KeepAliveNowResult } from './accountAutomation';
-import type { ProviderId } from './live';
+import type { ProviderId, LiveUsage } from './live';
 import type { UsageContext, UsageStateView } from './usageMonitor';
 
 /** The wire contract is independent of the package version. Additive v1 changes accept older clients. */
 export const SERVICE_PROTOCOL_VERSION = 1;
-export const SERVICE_CAPABILITIES = ['engine', 'config-revision', 'request-cancellation', 'usage-live', 'session-context', 'lifecycle', 'reset-confirmation'] as const;
+export const SERVICE_CAPABILITIES = ['engine', 'config-revision', 'request-cancellation', 'usage-live', 'session-context', 'lifecycle', 'reset-confirmation', 'status-snapshot'] as const;
 export type ServiceCapability = typeof SERVICE_CAPABILITIES[number];
 export type ConfigState = { revision: number; config: ServiceConfig; revisions?: Record<string, number>; scopes?: Record<string, 'engine' | 'presentation' | 'local' | 'workspace'>; changed?: string[] };
 export type ConfigPatch = { values: Record<string, unknown>; baseRevision: number };
@@ -20,6 +21,7 @@ export type ServiceCommands = {
   'reset.confirmations': { params: undefined; result: ResetConfirmation[] };
   'reset.claim': { params: { id: string }; result: ResetConfirmation | null };
   'reset.resolve': { params: { id: string; approve: boolean }; result: ResetResolution };
+  'status.snapshot': { params: StatusFilter | undefined; result: StatusRead };
   'service.info': { params: undefined; result: ServiceInfo };
   snapshot: { params: undefined; result: Snapshot };
   'config.get': { params: undefined; result: ServiceConfig };
@@ -41,7 +43,7 @@ export type ServiceCommands = {
  */
 
 export type SerializedWindow = { label: string; usedPercent: number; resetsAt?: string };
-export type SerializedUsage = { provider: ProviderId; title: string; plan?: string; subtitle?: string; windows: SerializedWindow[];
+export type SerializedUsage = { source?: LiveUsage['source']; provider: ProviderId; title: string; plan?: string; subtitle?: string; windows: SerializedWindow[];
   resetCredits?: { availableCount: number; earliestExpiresAt?: number; totalCount?: number }; details?: string[]; fetchedAt: string };
 
 export type AccountProblemView = {
@@ -172,6 +174,7 @@ export type ResetConfirmation = { id: string; accountId: string; accountName: st
 export type ResetResolution = { status: 'cancelled' | 'stale' | 'completed'; reason?: string };
 
 export type ServiceEvent =
+  | { event: 'statusChanged'; cursor: StatusCursor }
   | { event: 'resetConfirmation'; decision: ResetConfirmation }
   | { event: 'activated'; provider: AuthProvider; id: string; name: string; email?: string; automatic: boolean; accountChanged: boolean; level: 'info' | 'warning' | 'error'; message: string }
   | { event: 'accountProblem'; provider: AuthProvider; id: string; name: string; email?: string; reason: string; readable: string; revoked: boolean }

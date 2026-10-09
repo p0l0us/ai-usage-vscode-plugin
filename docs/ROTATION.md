@@ -49,9 +49,16 @@ The thresholds are used in two ways:
 
 - **When to rotate.** The active account is *at its limit* as soon as any counted window's usage is **at or above**
   its threshold (`usage ≥ threshold`).
-- **Where to rotate to.** An account can only be switched to while **every** counted window is **below** its
-  threshold. This applies to every strategy and to both triggers. An account at exactly the threshold is not a
-  candidate, so it is never switched to only to be rotated away again.
+- **Where to rotate to.** General `5h` and all-models `7d` windows must remain **below** their thresholds.
+  Claude first considers accounts below every counted window, including model-scoped windows such as `7d Fable`.
+  If none qualifies, it can select an account with general quota remaining even when Fable is exhausted.
+  This applies to every strategy. If the active account already has general quota remaining, it stays selected
+  until a model-capable alternative appears, avoiding switches between equally model-limited accounts.
+
+Model fallback does not change the selected model or restore its quota: `7d Fable: 100%` remains visible, and
+manual selection remains available for that dimmed account. General exhaustion still blocks selection in the
+Accounts menu. `autoRotate.modelLimits` continues to decide which model windows trigger rotation and receive
+preference; `never`, or `auto` with a different configured model, keeps ignoring those windows.
 
 **Example: when and where.**
 
@@ -104,7 +111,8 @@ every threshold, nothing is switched (with the `proactive` trigger, the sweep go
 
 Candidates are visited in the order the strategy ranks them, and the first one that passes is switched to. At most
 one switch is made per sweep. Before switching, each candidate in turn is read again (it must still be below every
-threshold and report every counted window the active account reports) and is sent a keep-alive, because a usage
+applicable candidate threshold and report the required windows of the active account; a Claude model fallback
+uses the general windows) and is sent a keep-alive, because a usage
 reading alone does not prove that the login works. A candidate that fails either check is skipped, and a broken
 login is reported.
 
@@ -373,6 +381,27 @@ settings work together with **every** Codex strategy and both triggers:
 4. A manual **Rotate now** ignores the five-minute timing guard and does not redeem a credit. Turn off
    `autoReset.enabled` to keep earned credits for manual use in Codex. Turn off `autoRotate.resetAware` to switch
    without the five-minute guard; automatic redemption still waits for an imminent natural recovery.
+
+### Earned reset decisions
+
+The automatic policy uses a current, account-attributed reading. Ordinary
+rotation thresholds can trigger a switch before 100%, but earned credits are considered only once **every**
+limiting window is fully exhausted and the reported credit count covers the number of limiting windows.
+
+An **urgent** credit expires within 30 minutes, before the active account's natural recovery and before the
+preferred candidate's next reported reset. Unknown candidate readings prevent this expiry-first shortcut.
+An imminent natural recovery still takes priority over spending a credit.
+
+`aiUsage.codex.autoReset.confirmationRequired` defaults to **false**. When enabled, approval is single-use and
+expires after five minutes; cancellation, a disconnected approving editor or changed facts prevent spending.
+No approving editor means no redemption. A lost provider response retains the same retry key so retrying does
+not request a second independent spend. The provider decides which quota changes; one successful redemption
+does not imply every exhausted window recovered.
+
+Disabling automatic **rotation** does not disable automatic **resets**. An MCP agent taking over account selection
+must ask the user to disable competing rotation; if the agent also needs to preserve all earned credits, ask the
+user to disable `aiUsage.codex.autoReset.enabled` separately. Status subscriptions and toolbar reads never redeem
+credits. See [agent-controlled selection](MCP.md) and [confirmation settings](CONFIGURATION.md#earned-reset-confirmation).
 
 | Strategy | When a reset is farther than five minutes away | In the last five minutes |
 | --- | --- | --- |

@@ -1,6 +1,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { formatUsagePercent } = require('../out/usageFormatting');
+const { formatUsagePercent, formatEarnedResetCount } = require('../out/usageFormatting');
+const { projectResetCredits } = require('../service/out');
 
 test('usage percentages display whole numbers, including floating-point quota artifacts', () => {
   for (const [percent, expected] of [
@@ -13,4 +14,32 @@ test('usage percentages display whole numbers, including floating-point quota ar
   ]) {
     assert.equal(formatUsagePercent(percent), expected);
   }
+});
+
+test('earned reset toolbar counts default on, preserve known zero and omit unknown or disabled availability', () => {
+  assert.equal(formatEarnedResetCount(2), '$(refresh) 2');
+  assert.equal(formatEarnedResetCount(0), '$(refresh) 0');
+  assert.equal(formatEarnedResetCount(undefined), '');
+  assert.equal(formatEarnedResetCount(2, false), '');
+});
+
+test('the toolbar displays only availability known by the shared active-account credit projection', () => {
+  const now = Date.parse('2026-10-10T12:00:00Z');
+  const display = (primary, fallback) => {
+    const credits = projectResetCredits(primary, now, fallback);
+    return formatEarnedResetCount(credits.state === 'known' ? credits.availableCount : undefined);
+  };
+  const current = { fetchedAt: new Date(now), resetCredits: { availableCount: 2 } };
+  const before = structuredClone(current);
+  assert.equal(display(current), '$(refresh) 2');
+  assert.equal(display({ ...current, windows: [{ label: '5h', usedPercent: 100,
+    resetsAt: new Date(now - 1000) }] }), '$(refresh) 2', 'quota expiry does not expire still-fresh earned credits');
+  assert.equal(display({ fetchedAt: new Date(now), resetCredits: { availableCount: 0 } }), '$(refresh) 0');
+  assert.equal(display({ fetchedAt: new Date(now) }), '');
+  assert.equal(display({ fetchedAt: new Date(now - 16 * 60_000), resetCredits: { availableCount: 2 } }), '');
+  assert.equal(display({ fetchedAt: new Date(now), resetCredits: { availableCount: 2, earliestExpiresAt: now / 1000 - 1 } }), '');
+  assert.equal(display({ fetchedAt: new Date(now - 10_000) }, current), '$(refresh) 2');
+  assert.equal(display({ fetchedAt: new Date(now), resetCredits: { availableCount: 0 } },
+    { fetchedAt: new Date(now - 10_000), resetCredits: { availableCount: 8 } }), '$(refresh) 0');
+  assert.deepEqual(current, before);
 });

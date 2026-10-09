@@ -1,7 +1,11 @@
 # Changelog
 
-## 1.0.11 (unreleased)
+## 1.0.12 (unreleased)
 
+- MCP now supports cached status resources, usage-change subscriptions and a cancellable wait tool, including per-account usage and Codex earned-reset counts with explicit freshness. Status observation does not trigger provider calls.
+- MCP agent guidance exposes live rotation settings, permits occasional account switches and asks agents to obtain user approval to disable competing automatic rotation before sustained agent-controlled selection.
+- Claude rotation prefers accounts with model-specific quota, then allows accounts with general quota when no model-capable account qualifies. General limits still block exhausted accounts, and the current usable account is retained to avoid pointless switching.
+- Codex's status bar shows the current account's available earned resets by default. Turn off `aiUsage.codex.statusBar.earnedResets` to hide the count; changing this local display setting does not check or redeem resets.
 - Claude and Codex now default to `auto` sources: fresh cache, local usage file, direct API, then CLI, stopping at
   the first usable reading. New configurations check every 30 minutes; existing modes and intervals remain unchanged.
 - Optional `codex.autoReset.confirmationRequired` requires one connected editor to approve an earned reset before

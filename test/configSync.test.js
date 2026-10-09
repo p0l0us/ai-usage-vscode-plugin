@@ -120,7 +120,7 @@ test('invalid legacy settings are ignored without breaking config reads or chang
 test('presentation, deployment and workspace values stay editor-local on seed, hydration and user change', async () => {
   settings.clear(); updates.length = 0;
   for (const [key, value] of Object.entries({
-    'statusBar.enabled': false, 'accountService.enabled': false,
+    'statusBar.enabled': false, 'accountService.enabled': false, 'codex.statusBar.earnedResets': false,
     'codex.advanced.rotationDiagnostics': true, 'bridge.codex.sessionDirectory': '/editor/project',
     'codex.source': 'cli'
   })) settings.set(`aiUsage.${key}`, value);
@@ -130,6 +130,7 @@ test('presentation, deployment and workspace values stay editor-local on seed, h
   await sync.pull(config);
   assert.deepEqual(updates, [['aiUsage.codex.source', 'auto']]);
   assert.equal(settings.get('aiUsage.statusBar.enabled'), false);
+  assert.equal(settings.get('aiUsage.codex.statusBar.earnedResets'), false);
   assert.equal(settings.get('aiUsage.codex.advanced.rotationDiagnostics'), true);
   assert.equal(settings.get('aiUsage.bridge.codex.sessionDirectory'), '/editor/project');
   assert.deepEqual(sync.changedKeys({ affectsConfiguration: () => true }, config), {});

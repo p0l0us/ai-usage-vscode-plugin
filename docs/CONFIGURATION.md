@@ -100,6 +100,10 @@ for details.
 ## Other settings
 
 - `aiUsage.statusBar.enabled` (default on): show the usage items in the status bar at all.
+- `aiUsage.codex.statusBar.earnedResets` (default on): append a refresh icon and the current Codex account's
+  available earned-reset count. A known zero shows `0`; unknown or stale availability has no count and is explained
+  in the tooltip. The count uses cached service readings, never a sum across saved accounts. This setting stays
+  local to the editor; changing it rerenders the cached display without checking usage or redeeming a reset.
 - `aiUsage.statusBar.labels`: what precedes the figures in a status bar item: `none` (figures only), `nameOnly`,
   `iconOnly` (default) or `iconAndName`.
 - `aiUsage.statusBar.usage`: `rich` (default) shows every window, `17% (3h) 25% (3d)`; the value in parentheses
