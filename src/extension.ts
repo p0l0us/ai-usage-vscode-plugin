@@ -480,7 +480,7 @@ export function activate(context: vscode.ExtensionContext): void {
         await liveProviders.find((candidate) => candidate.id === provider)?.inFlight;
       },
       afterSaved: (provider) => afterProfileActivated(provider, { kind: 'saved', accountChanged: false }),
-      back: async () => { await vscode.commands.executeCommand('aiUsage.showDetails'); },
+      back: async (provider) => { log(`${provider}: Accounts menu → Back to the AI Usage menu`); reopenDetails(); },
       signIn: async (provider, profile) => { await signInAgain(provider, profile.id); },
       mcpRegistration: async (provider) => (await services.require().call<{ registration: McpRegistration }>('mcp.registration', { provider })).registration,
       registerMcp: registerMcpWithCli,
@@ -1369,6 +1369,14 @@ function providerItems(provider: LiveProvider): DetailItem[] {
  * Details panel. With `focus` set (a chat chip was clicked) only that provider is shown, with
  * an action to expand to all providers; without it every provider is listed.
  */
+/**
+ * Opens the AI Usage menu once the menu that asked for it has finished closing. Opened from inside that menu's own
+ * accept handling, VS Code can close the new menu together with the old one, so Back looked like it did nothing.
+ */
+export function reopenDetails(): void {
+  setTimeout(() => { void vscode.commands.executeCommand('aiUsage.showDetails'); }, 0);
+}
+
 async function showDetailsPanel(providers: LiveProvider[], refreshAll: () => Promise<void>,
   refreshOne: (provider: LiveProvider) => Promise<void>, focus?: ProviderId, serviceSummary?: () => string): Promise<void> {
   let focused: LiveProvider | undefined = providers.find((provider) => provider.id === focus);

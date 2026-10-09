@@ -1,7 +1,9 @@
 # Changelog
 
-## 1.0.8 (unreleased)
+## 1.0.9 (unreleased)
 
+- **Back** in a Claude or Codex Accounts menu returns to the AI Usage menu again; it reopens only after the Accounts
+  menu has closed, so VS Code no longer closes the new menu with the old one.
 - The settings sync to the service no longer fails on connect with "refreshIntervalMinutes must be at least 1": a
   setting without a default that nobody set is not sent, so the service gets the rest of the settings again.
 - An account whose last reading is older than its usage reset says when it was last checked instead of "Usage not

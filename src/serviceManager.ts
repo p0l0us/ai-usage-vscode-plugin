@@ -463,7 +463,10 @@ export class ServiceManager implements vscode.Disposable {
     const picked = await vscode.window.showQuickPick(items, { title: 'AI Usage · Account service', matchOnDetail: true });
     if (!picked?.action) { return; }
     switch (picked.action) {
-      case 'back': await (back ? back.run() : vscode.commands.executeCommand('aiUsage.showDetails')); break;
+      case 'back':
+        this.log(`service: Account service menu → Back to ${back?.description ?? 'the AI Usage menu'}`);
+        if (back) { await back.run(); } else { setTimeout(() => { void vscode.commands.executeCommand('aiUsage.showDetails'); }, 0); }
+        break;
       case 'install': await this.install(); break;
       case 'toService': await this.transfer('vscode', 'service'); break;
       case 'toVscode': await this.transfer('service', 'vscode'); break;

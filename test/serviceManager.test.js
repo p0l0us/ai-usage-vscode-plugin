@@ -148,6 +148,8 @@ test('the Account service menu ends with Back, to the AI Usage menu or to the me
     return items.at(-1);
   });
   await manager.showMenu();
+  assert.deepEqual(executed, [], 'the AI Usage menu opens only after this one has closed');
+  await new Promise((resolve) => setTimeout(resolve, 10));
   assert.deepEqual(executed, [['aiUsage.showDetails']]);
 
   let returned = false;

@@ -255,3 +255,18 @@ test('where to keep a profile is asked only when both kinds are possible, and na
   quickPickResponses.push(undefined);
   assert.equal(await pickScope(view({ folders: ['/work/app'] })), undefined);
 });
+
+test('Back at the end of an Accounts menu runs the back hook and closes the menu', async () => {
+  const views = { codex: { provider: 'codex', title: 'Codex', profiles: [profile({ active: true })],
+    activeProfileId: 'a', activeNumber: 1, nativeUnsaved: false, checkingActive: false, keepAlive: false, autoRotate: false, strategySummary: '', scopes } };
+  const f = fixture(views);
+  let backTo;
+  quickPickResponses.push((items) => {
+    const back = items.at(-1);
+    assert.equal(back.label, '$(arrow-left) Back');
+    return back;
+  });
+  quickPickResponses.push(() => { throw new Error('the Accounts menu was shown again instead of going back'); });
+  await f.menu.show('codex', { back: async (provider) => { backTo = provider; }, sendKeepAlive: async () => undefined, signIn: async () => undefined });
+  assert.equal(backTo, 'codex');
+});
