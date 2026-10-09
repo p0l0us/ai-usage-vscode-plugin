@@ -7,6 +7,7 @@ import {
   stopService, uninstallService
 } from '../service/out';
 import { ConfigSync, readSettings } from './configSync';
+import { pickWithBack } from './quickPick';
 import { ProfileStoreKind, STORE_TITLES, clientAccess, directAccess, transferProfiles, vscodeProfileCount } from './vscodeProfiles';
 
 /**
@@ -460,13 +461,12 @@ export class ServiceManager implements vscode.Disposable {
     items.push({ label: '$(gear) Settings', description: `${ENABLED_SETTING}, ${BACKGROUND_SETTING}`, action: 'settings' });
     items.push({ label: '', kind: vscode.QuickPickItemKind.Separator });
     items.push({ label: '$(arrow-left) Back', description: back?.description ?? 'AI Usage menu of all services', action: 'back' });
-    const picked = await vscode.window.showQuickPick(items, { title: 'AI Usage · Account service', matchOnDetail: true });
-    if (!picked?.action) { return; }
+    const picked = await pickWithBack(items, { title: 'AI Usage · Account service', matchOnDetail: true }, (item) => item.action === 'back', async () => {
+      this.log(`service: Account service menu → Back to ${back?.description ?? 'the AI Usage menu'}`);
+      await (back ? back.run() : vscode.commands.executeCommand('aiUsage.showDetails'));
+    });
+    if (!picked?.action || picked.action === 'back') { return; }
     switch (picked.action) {
-      case 'back':
-        this.log(`service: Account service menu → Back to ${back?.description ?? 'the AI Usage menu'}`);
-        if (back) { await back.run(); } else { setTimeout(() => { void vscode.commands.executeCommand('aiUsage.showDetails'); }, 0); }
-        break;
       case 'install': await this.install(); break;
       case 'toService': await this.transfer('vscode', 'service'); break;
       case 'toVscode': await this.transfer('service', 'vscode'); break;

@@ -10,6 +10,8 @@ const settings = new Map();
 const informationMessages = [];
 const quickPickResponses = [];
 const executed = [];
+const menus = [];
+const { quickPickFactory } = require('./helpers/quickPick');
 const load = Module._load;
 Module._load = function(id, ...args) {
   if (id === 'vscode') return {
@@ -23,7 +25,8 @@ Module._load = function(id, ...args) {
       showInformationMessage: async (message) => { informationMessages.push(message); return undefined; },
       showWarningMessage: async () => undefined,
       showErrorMessage: async () => undefined,
-      showQuickPick: async (items) => { const response = quickPickResponses.shift(); return typeof response === 'function' ? response(items) : response; }
+      showQuickPick: async (items) => { const response = quickPickResponses.shift(); return typeof response === 'function' ? response(items) : response; },
+      createQuickPick: quickPickFactory(quickPickResponses, menus)
     },
     commands: { executeCommand: async (...args) => { executed.push(args); } },
     workspace: {
@@ -142,23 +145,24 @@ test('the Account service menu ends with Back, to the AI Usage menu or to the me
     fs.rmSync(root, { recursive: true, force: true });
   });
   executed.length = 0;
+  menus.length = 0;
   quickPickResponses.push((items) => {
     assert.equal(items.at(-1).label, '$(arrow-left) Back');
     assert.equal(items.at(-1).description, 'AI Usage menu of all services');
     return items.at(-1);
   });
   await manager.showMenu();
-  assert.deepEqual(executed, [], 'the AI Usage menu opens only after this one has closed');
-  await new Promise((resolve) => setTimeout(resolve, 10));
   assert.deepEqual(executed, [['aiUsage.showDetails']]);
+  assert.equal(menus[0].hidden, false, 'the AI Usage menu replaces this one instead of opening after it closed');
+  assert.equal(menus[0].disposed, true);
 
-  let returned = false;
+  let returnedWhileOpen;
   quickPickResponses.push((items) => {
     assert.equal(items.at(-1).description, 'Codex accounts');
     return items.at(-1);
   });
-  await manager.showMenu({ description: 'Codex accounts', run: async () => { returned = true; } });
-  assert.equal(returned, true);
+  await manager.showMenu({ description: 'Codex accounts', run: async () => { returnedWhileOpen = !menus[1].hidden && !menus[1].disposed; } });
+  assert.equal(returnedWhileOpen, true);
 });
 
 test('VS Code settings override persisted service values on connection, then CLI edits propagate back', async t => {

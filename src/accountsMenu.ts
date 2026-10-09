@@ -7,6 +7,7 @@ import {
   explainAccountProblem, formatEarnedResets, formatResetRemaining, nativeCredentialPath, newestValidUsage, parseCredentialJson, strategySummary
 } from '../service/out';
 import { MCP_SERVER_NAME, McpRegistration } from './mcpRegistration';
+import { pickWithBack } from './quickPick';
 import { ServiceManager } from './serviceManager';
 import { openAiUsageSettings } from './settingsLink';
 
@@ -147,13 +148,13 @@ export class AccountsMenu {
       catch (error) { void vscode.window.showErrorMessage(`AI Usage: could not read the ${TITLES[provider]} accounts: ${errorMessage(error)}`); return; }
       const config = this.services.config ?? await client.getConfig();
       const mcp = config.mcp.enabled && hooks?.registerMcp ? { registration: await hooks.mcpRegistration?.(provider) } : undefined;
-      const item = await vscode.window.showQuickPick(this.items(view, config, Boolean(hooks?.back), mcp, hooks?.activeUsage), {
+      const item = await pickWithBack(this.items(view, config, Boolean(hooks?.back), mcp, hooks?.activeUsage), {
         title: `AI Usage · ${TITLES[provider]} accounts`,
         placeHolder: 'Choose a profile to activate, or manage saved profiles',
         matchOnDescription: true,
         matchOnDetail: true
-      });
-      if (!item) { return; }
+      }, (candidate) => candidate.action === 'back', async () => hooks?.back?.(provider));
+      if (!item || item.action === 'back') { return; }
       try {
         if (item.profile) {
           if (item.readOnly) {
@@ -175,7 +176,6 @@ export class AccountsMenu {
           return;
         }
         switch (item.action) {
-          case 'back': await hooks?.back?.(provider); return;
           case 'keepAliveNow': {
             const profiles = await this.pickKeepAliveTargets(view);
             if (profiles.length) { await hooks?.sendKeepAlive(provider, profiles); }
@@ -214,15 +214,14 @@ export class AccountsMenu {
       items.push({ label: '', kind: vscode.QuickPickItemKind.Separator });
       items.push({ label: '$(arrow-left) Back', description: 'AI Usage menu of all services', action: 'back' });
     }
-    const picked = await vscode.window.showQuickPick(items, { title: `AI Usage · ${TITLES[provider]} accounts`, matchOnDetail: true });
+    const picked = await pickWithBack(items, { title: `AI Usage · ${TITLES[provider]} accounts`, matchOnDetail: true },
+      (item) => item.action === 'back', async () => hooks?.back?.(provider));
     if (picked?.action === 'install') {
       if (!this.services.isInstalled()) { await this.services.install(); }
       else if (!await this.services.ensure()) { await this.services.showMenu({ description: `${TITLES[provider]} accounts`, run: () => this.show(provider, hooks) }); return; }
       if (this.services.connected) { await this.show(provider, hooks); }
     } else if (picked?.action === 'service') {
       await this.services.showMenu({ description: `${TITLES[provider]} accounts`, run: () => this.show(provider, hooks) });
-    } else if (picked?.action === 'back') {
-      await hooks?.back?.(provider);
     }
   }
 

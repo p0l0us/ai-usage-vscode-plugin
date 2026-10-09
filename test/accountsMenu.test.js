@@ -7,6 +7,8 @@ const errorMessages = [];
 const warningResponses = [];
 const inputBoxResponses = [];
 const quickPickResponses = [];
+const menus = [];
+const { quickPickFactory } = require('./helpers/quickPick');
 const load = Module._load;
 Module._load = function(id, ...args) {
   if (id === 'vscode') return {
@@ -22,7 +24,8 @@ Module._load = function(id, ...args) {
       showWarningMessage(message) { warningMessages.push(message); return warningResponses.shift(); },
       showErrorMessage(message) { errorMessages.push(message); },
       showInputBox: async () => inputBoxResponses.shift(),
-      showQuickPick(items, options) { const response = quickPickResponses.shift(); return typeof response === 'function' ? response(items, options) : response; }
+      showQuickPick(items, options) { const response = quickPickResponses.shift(); return typeof response === 'function' ? response(items, options) : response; },
+      createQuickPick: quickPickFactory(quickPickResponses, menus)
     },
     commands: { executeCommand: async () => undefined },
     workspace: { fs: {}, getConfiguration: () => ({ get: (key, fallback) => fallback, update: async () => undefined }) }
@@ -256,17 +259,23 @@ test('where to keep a profile is asked only when both kinds are possible, and na
   assert.equal(await pickScope(view({ folders: ['/work/app'] })), undefined);
 });
 
-test('Back at the end of an Accounts menu runs the back hook and closes the menu', async () => {
+test('Back at the end of an Accounts menu opens the previous menu over it, then closes it', async () => {
   const views = { codex: { provider: 'codex', title: 'Codex', profiles: [profile({ active: true })],
     activeProfileId: 'a', activeNumber: 1, nativeUnsaved: false, checkingActive: false, keepAlive: false, autoRotate: false, strategySummary: '', scopes } };
   const f = fixture(views);
+  menus.length = 0;
   let backTo;
+  let openWhileGoingBack;
   quickPickResponses.push((items) => {
     const back = items.at(-1);
     assert.equal(back.label, '$(arrow-left) Back');
     return back;
   });
   quickPickResponses.push(() => { throw new Error('the Accounts menu was shown again instead of going back'); });
-  await f.menu.show('codex', { back: async (provider) => { backTo = provider; }, sendKeepAlive: async () => undefined, signIn: async () => undefined });
+  await f.menu.show('codex', { back: async (provider) => { backTo = provider; openWhileGoingBack = !menus[0].hidden && !menus[0].disposed; },
+    sendKeepAlive: async () => undefined, signIn: async () => undefined });
   assert.equal(backTo, 'codex');
+  // A menu that closed first would hand focus back to the chat or editor, and that focus closes the next menu.
+  assert.equal(openWhileGoingBack, true, 'the Accounts menu is still open while the previous menu opens');
+  assert.equal(menus[0].disposed, true);
 });
