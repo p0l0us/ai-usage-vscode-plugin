@@ -10,7 +10,7 @@ import { MCP_SERVER_NAME, McpRegistration } from './mcpRegistration';
 import { pickWithBack } from './quickPick';
 import { ServiceManager } from './serviceManager';
 import { openAiUsageSettings } from './settingsLink';
-import { formatEarnedResetCount, formatUsagePercent } from './usageFormatting';
+import { formatEarnedResetSummary, formatUsagePercent } from './usageFormatting';
 
 /**
  * The Accounts menus of both services, as before, but every action goes to the account service. The service
@@ -103,12 +103,8 @@ export function usageDetail(profile: ProfileView, displayedUsage?: LiveUsage, pr
   if ((provider ?? displayedUsage?.provider ?? stored?.provider) === 'codex') {
     // Credit freshness is independent of quota resets; use the same projection as the toolbar.
     const credits = projectResetCredits(displayedUsage, now.getTime(), profile.usage);
-    if (credits.state === 'known') {
-      parts.push(formatEarnedResetCount(credits.availableCount));
-    } else if (credits.state === 'stale') {
-      parts.push(`${formatEarnedResetCount(credits.lastReportedAvailableCount)} (stale)`);
-    } else if (stored || displayedUsage) {
-      parts.push('$(refresh) ?');
+    if (credits.state !== 'unknown' || stored || displayedUsage) {
+      parts.push(formatEarnedResetSummary(credits, now));
     }
   }
   if (usage) { parts.push(`Checked ${usage.fetchedAt.toLocaleString()}`); }

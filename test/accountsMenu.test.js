@@ -93,7 +93,7 @@ test('the usage detail line shows every window, the check time and known problem
   const codex = profile({ usage: { provider: 'codex', title: 'Codex', fetchedAt: new Date(now).toISOString(),
     windows: [{ label: '7d', usedPercent: 80, resetsAt: new Date(now + 24 * 3_600_000).toISOString() }],
     resetCredits: { availableCount: 1, totalCount: 2, earliestExpiresAt: Math.floor((now + 2 * 3_600_000) / 1000) } } });
-  assert.match(usageDetail(codex), /7d: 80% \(1d\) · \$\(refresh\) 1 · Checked /);
+  assert.match(usageDetail(codex), /7d: 80% \(1d\) · \$\(refresh\) 1\/2 \(2h\) · Checked /);
 });
 
 test('an open account picker updates from service events and retains the focused account', async () => {
@@ -122,7 +122,7 @@ test('Codex menu shows reset counts once after usage, including zero, expired qu
   const now = Date.now();
   const usage = (count, age = 0, expiredQuota = false) => ({ provider: 'codex', title: 'Codex', fetchedAt: new Date(now - age).toISOString(),
     windows: [{ label: '5h', usedPercent: 90, resetsAt: new Date(now + (expiredQuota ? -1000 : 3_600_000)).toISOString() }],
-    ...(count === undefined ? {} : { resetCredits: { availableCount: count } }) });
+    ...(count === undefined ? {} : { resetCredits: { availableCount: count, totalCount: 4, earliestExpiresAt: Math.floor((now + 10 * 86_400_000) / 1000) } }) });
   const views = { codex: { provider: 'codex', title: 'Codex', profiles: [
     profile({ active: true, usage: usage(2) }),
     profile({ id: 'b', name: 'Login expired', loginProblem: 'Login token expired', usage: usage(1) }),
@@ -141,11 +141,11 @@ test('Codex menu shows reset counts once after usage, including zero, expired qu
       assert.equal((row.detail.match(/\$\(refresh\)/g) ?? []).length, 1);
       assert.doesNotMatch(row.detail, /Earned resets:/);
     }
-    assert.match(rows[0].detail, /\$\(refresh\) 0 · Checked/);
-    assert.match(rows[1].detail, /5h: 90% \(1h\) · \$\(refresh\) 1 · Checked/);
-    assert.match(rows[2].detail, /Usage reset; waiting for a new reading · \$\(refresh\) 3/);
-    assert.match(rows[3].detail, /5h: 90% \(1h\) · \$\(refresh\) 4 \(stale\) · Checked/);
-    assert.match(rows[4].detail, /5h: 90% \(1h\) · \$\(refresh\) \? · Checked/);
+    assert.match(rows[0].detail, /\$\(refresh\) 0\/4 \(10d\) · Checked/);
+    assert.match(rows[1].detail, /5h: 90% \(1h\) · \$\(refresh\) 1\/4 \(10d\) · Checked/);
+    assert.match(rows[2].detail, /Usage reset; waiting for a new reading · \$\(refresh\) 3\/4 \(10d\)/);
+    assert.match(rows[3].detail, /5h: 90% \(1h\) · \$\(refresh\) 4\/4 \(10d\) \(stale\) · Checked/);
+    assert.match(rows[4].detail, /5h: 90% \(1h\) · \$\(refresh\) \?\/\? · Checked/);
     return undefined;
   });
   // Toolbar visibility only controls the toolbar; menu counts remain available.
@@ -157,9 +157,10 @@ test('Codex menu shows reset counts once after usage, including zero, expired qu
   assert.deepEqual(f.calls, [], 'opening the menu never probes or redeems credits');
 });
 
-test('an open Codex picker updates the reset count from service events', async () => {
+test('an open Codex picker updates the reset balance and expiry from service events', async () => {
+  const now = Date.now();
   const usage = count => ({ provider: 'codex', title: 'Codex', fetchedAt: new Date().toISOString(),
-    windows: [{ label: '5h', usedPercent: 95 }], resetCredits: { availableCount: count } });
+    windows: [{ label: '5h', usedPercent: 95 }], resetCredits: { availableCount: count, totalCount: 3, earliestExpiresAt: Math.floor((now + (count === 3 ? 12 : 10) * 86_400_000) / 1000) } });
   const view = { provider: 'codex', title: 'Codex', profiles: [profile({ active: true, usage: usage(3) })],
     activeProfileId: 'a', nativeUnsaved: false, checkingActive: false, keepAlive: false, autoRotate: false, strategySummary: '', scopes };
   const f = fixture({ codex: view });
@@ -167,12 +168,12 @@ test('an open Codex picker updates the reset count from service events', async (
   f.services.onStateChanged = listener => { listeners.add(listener); return { dispose: () => listeners.delete(listener) }; };
   quickPickResponses.push((items, options, picker) => {
     assert.doesNotMatch(items[0].label, /\$\(refresh\)/);
-    assert.match(items[0].detail, /5h: 95% · \$\(refresh\) 3 · Checked/);
+    assert.match(items[0].detail, /5h: 95% · \$\(refresh\) 3\/3 \(12d\) · Checked/);
     picker.activeItems = [items[0]];
     f.services.views.codex = { ...view, profiles: [profile({ active: true, usage: usage(2) })] };
     for (const listener of listeners) listener('codex');
     assert.doesNotMatch(picker.items[0].label, /\$\(refresh\)/);
-    assert.match(picker.items[0].detail, /5h: 95% · \$\(refresh\) 2 · Checked/);
+    assert.match(picker.items[0].detail, /5h: 95% · \$\(refresh\) 2\/3 \(10d\) · Checked/);
     assert.equal(picker.activeItems[0].profile.id, 'a');
     return undefined;
   });
