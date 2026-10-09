@@ -411,7 +411,7 @@ export async function main(argv: string[], io?: CliOutput): Promise<number> {
           const view = await client.list(service);
           const target = view.profiles.find((candidate) => matches(candidate, rest.slice(1).join(' ')));
           if (!target) { throw new UsageError(`No ${TITLES[service]} profile matches "${rest.slice(1).join(' ')}".`); }
-          const prepared = await client.prepareSignIn(service);
+          const prepared = await client.prepareSignIn(service, target.id);
           out(`Signing in for ${TITLES[service]} profile “${target.name}”${target.email ? ` (${target.email})` : ''} with a separate home; the active login is untouched until the profile is active.\n`);
           // Ctrl-C reaches the vendor CLI as well; surviving it here lets the cancel below lift the service's hold.
           const ignoreInterrupt = () => undefined;

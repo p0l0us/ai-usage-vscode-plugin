@@ -1,6 +1,8 @@
 # Changelog
 
-## 1.0.13 (unreleased)
+## 1.0.14 (unreleased)
+
+- Each saved Claude and Codex account now uses a persistent numbered CLI home with its own login and settings. Homes survive service restarts and profile reordering; CLI token refreshes are synchronized before checks and activation.
 
 - The service refreshes saved-account usage at startup and periodically, even with keep-alive and rotation off. Checks publish updates to open account pickers, and reloaded windows reuse service readings.
 - Manual service stops are respected by editor reconnects and CLI reads until an explicit Start or Restart.

@@ -486,7 +486,7 @@ in between two accounts. Once the wait runs out, the notification says that the 
 | `autoRotate.strategy` | `leastWaste` | `leastWaste` | How the next account is chosen: `soonestReset`, `evenPace`, `leastWaste` or `sequential`. |
 | `autoRotate.trigger` | `proactive` | `proactive` | `limit` switches only at a threshold; `proactive` also switches to a clearly better account (except with `sequential`). |
 | `autoRotate.minStayMinutes` | `15` | `15` | With `proactive`, how long a newly active account is kept before another proactive switch. |
-| `keepAlive.home` | `~/.claude-tmp` | `~/.codex-tmp` | Dedicated CLI home; must be separate from the native home. |
+| `keepAlive.home` | `~/.claude-profile-{number}` | `~/.codex-profile-{number}` | Persistent account home template; must be separate from the native home. |
 | `keepAlive.model` | `haiku` | `gpt-5.6-luna` | Select a subscription model for the small request. |
 | `cliPath` | `claude` | `codex` | CLI command or executable path. |
 
@@ -497,13 +497,29 @@ Every keep-alive asks exactly `what is date today`. Requests use a separate work
 with inherited authentication and provider routing overrides removed. Claude tools and custom hooks are disabled;
 Codex runs noninteractively with a read-only sandbox. A keep-alive has a 90-second timeout. The service attempts
 to collect usage even if the small model call fails. Claude uses the OAuth usage endpoint, and Codex uses
-`account/rateLimits/read` through its app-server with the same staged login. Codex API-key-only profiles do not
+`account/rateLimits/read` through its app-server with the same account login. Codex API-key-only profiles do not
 expose subscription quota windows and cannot qualify as automatic rotation targets.
 
-The configurable home is dedicated to this feature. Relative paths resolve from the OS user home, and `~/` is
-expanded. Credentials are staged using an atomic write with mode 0600 on POSIX and removed after the check.
-The CLI may retain its own diagnostic/configuration files there. Refreshed credentials are saved back only if the
-saved profile has not changed in the meantime; an unchanged active native login receives refreshed tokens too.
+Each saved account owns a persistent home, such as `~/.claude-profile-1` or `~/.codex-profile-1`, with its
+login and CLI settings. The service records ownership by profile UUID; reordering or renaming profiles does
+not move their homes, and deleting a profile leaves its home intact and its number reserved. You can use
+different account homes in parallel by setting `CLAUDE_CONFIG_DIR` or `CODEX_HOME` when starting a CLI.
+The profile number in the menu may differ from the permanent home number after reordering.
+
+Relative paths resolve from the OS user home, and `~/` is expanded. `{number}` in `keepAlive.home` is the
+permanent home number. A custom path without the placeholder gets `-profile-N` appended. The old shared
+defaults `~/.claude-tmp` and `~/.codex-tmp` automatically use the new numbered defaults; native logins remain
+available. Credentials use atomic mode-0600 writes on POSIX and remain after checks, resets and cancellation.
+A new home seeds `settings.json` or `config.toml` from the native CLI settings, excluding the managed Codex
+account proxy and inherited Claude API credentials/routing. Subsequent account-specific file edits remain.
+Codex account homes force file-based login storage so a shared keyring cannot select another account.
+Configured managed CLI settings still apply; Claude keep-alives load user settings with tools and hooks disabled,
+and the service's keep-alive model flag selects the model for its small call.
+
+CLI-refreshed logins are synchronized with the saved profile before checks and activation. An unchanged active
+native login receives those refreshed tokens too. Conflicting changes in both the store and account home require
+a fresh sign-in rather than overwriting either login. Sign-in uses a separate `login/` folder under the target
+account home, keeping its existing login until the replacement is accepted.
 
 Per-account readings and attempt timestamps persist in the service's `state` directory without credentials.
 The service's one-minute scheduler checks due accounts whether VS Code is open or not; after the service was

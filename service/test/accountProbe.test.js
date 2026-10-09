@@ -191,7 +191,7 @@ test('Codex keep-alive and app-server use the same isolated account and retain b
   assert.equal(fs.existsSync(path.join(home, 'auth.json')), false);
 });
 
-test('earned Codex reset uses the staged login, a caller-supplied idempotency key, and rereads limits',
+test('earned Codex reset uses the persistent login, a caller-supplied idempotency key, and rereads limits',
   { skip: process.platform === 'win32' }, async t => {
   const root = temporary(t), home = path.join(root, 'codex-tmp');
   const cliPath = fakeCli(root, `
@@ -214,12 +214,12 @@ test('earned Codex reset uses the staged login, a caller-supplied idempotency ke
     });
   `);
   const result = await resetCodexAccount({ tokens: { access_token: 'test-token', account_id: 'account-b' } },
-    { home, cliPath, model: '' }, 'fixed-uuid', new AbortController().signal);
+    { home, cliPath, model: '', persistent: true }, 'fixed-uuid', new AbortController().signal);
   assert.equal(result.outcome, 'reset');
   assert.equal(result.result.kind, 'ok');
   assert.deepEqual(result.result.usage.resetCredits, { availableCount: 1 });
   assert.equal(fs.readFileSync(path.join(home, 'redeemed-key'), 'utf8'), 'fixed-uuid');
-  assert.equal(fs.existsSync(path.join(home, 'auth.json')), false);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(home, 'auth.json'))).tokens.account_id, 'account-b');
 });
 
 test('cancelled keep-alive stops its child and removes staged credentials',
@@ -234,6 +234,58 @@ test('cancelled keep-alive stops its child and removes staged credentials',
   const result = await pending;
   assert.equal(result.result.kind, 'unavailable');
   assert.equal(fs.existsSync(path.join(home, '.credentials.json')), false);
+});
+
+test('persistent account homes run in parallel, retain refreshed auth and load their own settings',
+  { skip: process.platform === 'win32' }, async t => {
+  const root = temporary(t);
+  const cliPath = fakeCli(root, `
+    const fs = require('fs'), path = require('path');
+    const home = process.env.CLAUDE_CONFIG_DIR;
+    const settings = JSON.parse(fs.readFileSync(path.join(home, 'settings.json')));
+    const file = path.join(home, '.credentials.json');
+    const auth = JSON.parse(fs.readFileSync(file));
+    if (auth.claudeAiOauth.accessToken !== settings.account) process.exit(2);
+    const args = process.argv.slice(2);
+    if (args[args.indexOf('--setting-sources') + 1] !== 'user') process.exit(3);
+    setTimeout(() => {
+      auth.claudeAiOauth.accessToken += '-refreshed';
+      fs.writeFileSync(file, JSON.stringify(auth));
+    }, 80);
+  `);
+  const originalFetch = global.fetch;
+  t.after(() => { global.fetch = originalFetch; });
+  global.fetch = async (_url, options) => {
+    const token = options.headers.Authorization;
+    assert.ok(['Bearer a-refreshed', 'Bearer b-refreshed'].includes(token));
+    return new Response(JSON.stringify({ five_hour: { utilization: token.includes('a-') ? 11 : 22 } }), { status: 200 });
+  };
+  const homes = ['a', 'b'].map((token, i) => {
+    const home = path.join(root, `.claude-profile-${i + 1}`);
+    fs.mkdirSync(home);
+    fs.writeFileSync(path.join(home, 'settings.json'), JSON.stringify({ account: token }));
+    fs.writeFileSync(path.join(home, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: token } }));
+    return home;
+  });
+  const results = await Promise.all(homes.map(home => probeAccount('claude', { claudeAiOauth: { accessToken: 'old-store-token' } },
+    { home, cliPath, model: 'haiku', persistent: true }, true, new AbortController().signal)));
+  assert.deepEqual(results.map(r => r.credential.claudeAiOauth.accessToken), ['a-refreshed', 'b-refreshed']);
+  assert.deepEqual(results.map(r => r.result.usage.windows[0].usedPercent), [11, 22]);
+  for (const [index, home] of homes.entries()) {
+    assert.equal(JSON.parse(fs.readFileSync(path.join(home, '.credentials.json'))).claudeAiOauth.accessToken, results[index].credential.claudeAiOauth.accessToken);
+    assert.ok(!fs.existsSync(path.join(home, '.ai-usage.lock')));
+  }
+});
+
+test('cancelling a persistent probe retains its account login', { skip: process.platform === 'win32' }, async t => {
+  const root = temporary(t), home = path.join(root, '.claude-profile-1');
+  const cliPath = fakeCli(root, 'setInterval(() => {}, 1000);');
+  const controller = new AbortController();
+  const credential = { claudeAiOauth: { accessToken: 'saved' } };
+  const pending = probeAccount('claude', credential, { home, cliPath, model: 'haiku', persistent: true }, true, controller.signal);
+  controller.abort();
+  assert.equal((await pending).result.kind, 'unavailable');
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(home, '.credentials.json'))), credential);
 });
 
 test('a failed keep-alive names the CLI error instead of only the exit code', () => {

@@ -6,7 +6,7 @@ import { ApiCallBudget } from './apiBudget';
 import { AuthProvider, StoredCredential, nativeCredentialPath, parseCredentialJson, writeJsonAtomically } from './authFiles';
 import { LiveResult, consumeCodexResetCredit, fetchClaudeUsage, fetchCodexUsageCli, resolveCli } from './live';
 
-export type ProbeSettings = { home: string; cliPath: string; model: string };
+export type ProbeSettings = { home: string; cliPath: string; model: string; persistent?: boolean };
 export type ProbeResult = { result: LiveResult; credential: StoredCredential; keepAliveError?: string };
 
 /** A sweep reads several accounts in a row; waiting out the shared spacing beats being rate-limited. */
@@ -89,11 +89,11 @@ export function isolatedEnvironment(provider: AuthProvider, home: string): NodeJ
   return env;
 }
 
-export function keepAliveArgs(provider: AuthProvider, model: string): string[] {
+export function keepAliveArgs(provider: AuthProvider, model: string, persistent = false): string[] {
   const prompt = 'what is date today';
   if (provider === 'claude') {
     return ['--print', '--model', model || 'haiku', '--tools', '', '--strict-mcp-config',
-      '--setting-sources', '', '--settings', '{"disableAllHooks":true}',
+      '--setting-sources', persistent ? 'user' : '', '--settings', '{"disableAllHooks":true}',
       '--no-session-persistence', '--max-turns', '1', prompt];
   }
   return ['-a', 'never', 'exec', '--skip-git-repo-check', '--sandbox', 'read-only', '--ephemeral',
@@ -250,7 +250,7 @@ async function claudeUsage(home: string, signal: AbortSignal, budget?: ApiCallBu
   return fetchClaudeUsage(home, budget);
 }
 
-/** Swap saved credentials into a separate home, make a small call, then collect all limit windows. */
+/** Use an account's separate home, make a small call, then collect all limit windows. */
 export async function probeAccount(provider: AuthProvider, credential: StoredCredential, settings: ProbeSettings,
   keepAlive: boolean, signal: AbortSignal, budget?: ApiCallBudget): Promise<ProbeResult> {
   const home = isolatedHome(provider, settings.home);
@@ -259,8 +259,11 @@ export async function probeAccount(provider: AuthProvider, credential: StoredCre
   const file = stagedCredentialPath(provider, home);
   let staged = false;
   try {
-    // Only the provider-owned auth fields, never native settings, hooks, MCP servers or sessions.
-    writeJsonAtomically(file, credential);
+    // A CLI in a persistent home may have refreshed its login since the store was read.
+    // Use that file rather than putting an older refresh token back into it.
+    if (settings.persistent && fs.existsSync(file)) {
+      credential = parseCredentialJson(provider, fs.readFileSync(file, 'utf8'));
+    } else { writeJsonAtomically(file, credential); }
     staged = true;
     const env = isolatedEnvironment(provider, home);
     let keepAliveError: string | undefined;
@@ -268,7 +271,7 @@ export async function probeAccount(provider: AuthProvider, credential: StoredCre
       try {
         const cli = resolveCli(settings.cliPath);
         if (!cli) { throw new Error('Keep-alive CLI not found. Check its configured path.'); }
-        await runKeepAlive(cli, keepAliveArgs(provider, settings.model), home, env, signal);
+        await runKeepAlive(cli, keepAliveArgs(provider, settings.model, settings.persistent), home, env, signal);
       } catch (error) { keepAliveError = error instanceof Error ? error.message : 'Keep-alive failed.'; }
     }
     // Claude Code may remove or replace the staged credential after a successful command (for example while
@@ -294,7 +297,7 @@ export async function probeAccount(provider: AuthProvider, credential: StoredCre
     }
     return { result, credential: updatedCredential, keepAliveError };
   } finally {
-    try { if (staged) { fs.unlinkSync(file); } } finally { lock.release(); }
+    try { if (staged && !settings.persistent) { fs.unlinkSync(file); } } finally { lock.release(); }
   }
 }
 
@@ -308,7 +311,9 @@ export async function resetCodexAccount(credential: StoredCredential, settings: 
   const file = stagedCredentialPath('codex', home);
   let staged = false;
   try {
-    writeJsonAtomically(file, credential);
+    if (settings.persistent && fs.existsSync(file)) {
+      credential = parseCredentialJson('codex', fs.readFileSync(file, 'utf8'));
+    } else { writeJsonAtomically(file, credential); }
     staged = true;
     const cli = resolveCli(settings.cliPath);
     if (!cli) { throw new Error('Codex CLI not found. Check its configured path.'); }
@@ -317,10 +322,10 @@ export async function resetCodexAccount(credential: StoredCredential, settings: 
     const result = await fetchCodexUsageCli(settings.cliPath, home, env, home);
     let refreshed = credential;
     try { refreshed = parseCredentialJson('codex', fs.readFileSync(file, 'utf8')); }
-    catch { /* A completed redemption remains valid even if the CLI removed the staged file. */ }
+    catch { if (settings.persistent) writeJsonAtomically(file, refreshed); }
     return { outcome, result, credential: refreshed };
   } finally {
-    try { if (staged) { fs.unlinkSync(file); } } finally { lock.release(); }
+    try { if (staged && !settings.persistent) { fs.unlinkSync(file); } } finally { lock.release(); }
   }
 }
 

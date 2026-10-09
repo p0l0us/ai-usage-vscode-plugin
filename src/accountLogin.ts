@@ -14,7 +14,7 @@ const LOGIN_TIMEOUT_MS = 15 * 60_000;
  */
 export async function signInWithTerminal(client: ServiceClient, provider: AuthProvider, profileId: string, label: string,
   confirmOtherAccount: (message: string) => Promise<boolean>): Promise<SignInResult | undefined> {
-  const prepared = await client.prepareSignIn(provider);
+  const prepared = await client.prepareSignIn(provider, profileId);
   let terminal: vscode.Terminal;
   try {
     terminal = vscode.window.createTerminal({

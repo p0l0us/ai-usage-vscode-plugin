@@ -101,3 +101,5 @@ then a local usage file, direct API and CLI, stopping at the first usable readin
 Existing explicit source modes and intervals persist unchanged. `codex.autoReset.confirmationRequired` defaults
 to false; when enabled, a connected editor must approve the engine's reset decision. With no approving editor,
 no earned reset credit is spent. Details: [configuration](../docs/CONFIGURATION.md#earned-reset-confirmation).
+
+Saved accounts use persistent `~/.claude-profile-1` and `~/.codex-profile-1` CLI homes (and subsequent numbered homes), containing their own logins and CLI settings. `keepAlive.home` accepts a `{number}` template; home numbers stay attached to profile IDs when the list is reordered. See [account home configuration](../docs/CONFIGURATION.md#account-automation) for synchronization and migration details.

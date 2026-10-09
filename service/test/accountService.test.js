@@ -20,10 +20,12 @@ function fixture(t, options = {}) {
   process.env.CODEX_HOME = codexHome;
   fs.writeFileSync(path.join(claudeHome, '.credentials.json'), JSON.stringify(claudeLogin('a')));
   fs.writeFileSync(path.join(codexHome, 'auth.json'), JSON.stringify({ auth_mode: 'chatgpt', tokens: { access_token: 't', refresh_token: 'r', account_id: 'acc-1' } }));
-  const logs = [], events = [], probes = [];
+  const logs = [], events = [], probes = [], probeHomes = [];
   const values = { a: [10, 10], b: [10, 10], ...options.values };
   const service = new AccountService({
     ownership: options.ownership,
+    seedConfig: { 'claude.keepAlive.home': path.join(root, '.claude-profile-{number}'),
+      'codex.keepAlive.home': path.join(root, '.codex-profile-{number}') },
     home, version: 'test', fetchUsage: async provider => ({ kind: 'ok', usage: usage(provider, [50, 5]) }), log: (message) => logs.push(message),
     identityOf: async (provider, credential) => provider === 'codex'
       ? { email: `${credential.tokens?.account_id}@example.com`, accountId: credential.tokens?.account_id }
@@ -33,6 +35,7 @@ function fixture(t, options = {}) {
     probe: async (provider, credential, settings, keepAlive) => {
       const token = provider === 'claude' ? credential.claudeAiOauth.accessToken : credential.tokens.account_id;
       probes.push([provider, token, keepAlive]);
+      probeHomes.push({ provider, home: settings.home, persistent: settings.persistent });
       const percents = values[token];
       return { credential, keepAliveError: keepAlive ? options.keepAliveErrors?.[token] : undefined,
         result: percents ? { kind: 'ok', usage: usage(provider, percents) } : { kind: 'error', provider, title: provider, message: options.usageErrors?.[token] ?? 'Unavailable' } };
@@ -44,7 +47,7 @@ function fixture(t, options = {}) {
     for (const [key, value] of Object.entries(env)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
     fs.rmSync(root, { recursive: true, force: true });
   });
-  return { root, home, service, logs, events, probes, values, claudeHome, call: (method, params) => service.handle(method, params) };
+  return { root, home, service, logs, events, probes, probeHomes, values, claudeHome, call: (method, params) => service.handle(method, params) };
 }
 
 test('startup refreshes every saved account with keep-alive and rotation off, and cached views publish updates', async t => {
@@ -183,7 +186,7 @@ test('a sign-in is prepared with an isolated home and finished from the file the
   fs.writeFileSync(cli, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
   await f.call('config.set', { values: { 'claude.cliPath': cli, 'claude.keepAlive.home': path.join(f.root, 'claude-tmp') } });
   const work = await f.call('profiles.saveNative', { provider: 'claude', name: 'Work' });
-  const prepared = await f.call('profiles.signIn.prepare', { provider: 'claude' });
+  const prepared = await f.call('profiles.signIn.prepare', { provider: 'claude', id: work.profile.id });
   assert.equal(prepared.cli, cli);
   assert.deepEqual(prepared.args, ['auth', 'login']);
   assert.equal(prepared.env.CLAUDE_CONFIG_DIR, prepared.cwd);
@@ -207,6 +210,8 @@ test('a sign-in is prepared with an isolated home and finished from the file the
   assert.equal(replaced.status, 'replaced');
   assert.equal(replaced.active, true);
   assert.ok(!fs.existsSync(prepared.file));
+  const persistentFile = path.join(path.dirname(prepared.cwd), '.credentials.json');
+  assert.equal(JSON.parse(fs.readFileSync(persistentFile)).claudeAiOauth.accessToken, 'other');
   assert.equal(JSON.parse(fs.readFileSync(path.join(f.claudeHome, '.credentials.json'), 'utf8')).claudeAiOauth.accessToken, 'other');
   assert.equal((await f.call('profiles.list', { provider: 'claude' })).profiles[0].email, 'other@example.com');
   // The stored login lifted the hold: checks run again.
@@ -215,7 +220,47 @@ test('a sign-in is prepared with an isolated home and finished from the file the
   // A cancelled sign-in lifts it too.
   await f.call('profiles.signIn.prepare', { provider: 'claude' });
   await f.call('profiles.signIn.cancel', { provider: 'claude' });
+  assert.equal(JSON.parse(fs.readFileSync(persistentFile)).claudeAiOauth.accessToken, 'other');
   assert.ok((await f.call('automation.keepAliveNow', { provider: 'claude', id: work.profile.id })).usage);
+});
+
+test('service reads per-account homes, preserves them on reorder, and activates CLI-refreshed tokens', async t => {
+  const f = fixture(t);
+  const a = await f.call('profiles.saveNative', { provider: 'claude', name: 'Work' });
+  const b = await f.call('profiles.importCredential', { provider: 'claude', name: 'Backup', credential: claudeLogin('b') });
+  let view = await f.call('profiles.list', { provider: 'claude' });
+  const homes = Object.fromEntries(view.profiles.map(p => [p.id, p.home]));
+  assert.equal(path.basename(homes[a.profile.id]), '.claude-profile-1');
+  assert.equal(path.basename(homes[b.profile.id]), '.claude-profile-2');
+  await f.call('profiles.reorder', { provider: 'claude', id: b.profile.id, step: -1 });
+  view = await f.call('profiles.list', { provider: 'claude' });
+  assert.equal(view.profiles[0].id, b.profile.id);
+  assert.deepEqual(Object.fromEntries(view.profiles.map(p => [p.id, p.home])), homes);
+  const local = path.join(homes[b.profile.id], '.credentials.json');
+  fs.writeFileSync(local, JSON.stringify(claudeLogin('cli-refreshed')));
+  f.values['cli-refreshed'] = [35, 15];
+  await f.call('automation.keepAliveNow', { provider: 'claude', id: b.profile.id });
+  assert.deepEqual(f.probeHomes.at(-1), { provider: 'claude', home: homes[b.profile.id], persistent: true });
+  assert.deepEqual(f.probes.at(-1), ['claude', 'cli-refreshed', true]);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(f.claudeHome, '.credentials.json'))).claudeAiOauth.accessToken, 'a');
+  await f.call('profiles.activate', { provider: 'claude', id: b.profile.id });
+  assert.equal(JSON.parse(fs.readFileSync(path.join(f.claudeHome, '.credentials.json'))).claudeAiOauth.accessToken, 'cli-refreshed');
+  assert.equal(JSON.parse(fs.readFileSync(local)).claudeAiOauth.accessToken, 'cli-refreshed');
+});
+
+test('an explicit imported login replacement updates the active native copy and persistent account home', async t => {
+  const f = fixture(t);
+  const a = await f.call('profiles.saveNative', { provider: 'claude', name: 'Work' });
+  const exported = await f.call('profiles.export', {});
+  exported.entries[0].credential = claudeLogin('imported-refresh');
+  await f.call('profiles.applyImport', { entries: exported.entries,
+    chosen: [{ provider: 'claude', id: a.profile.id }] });
+  f.values['imported-refresh'] = [15, 5];
+  await f.call('automation.keepAliveNow', { provider: 'claude', id: a.profile.id });
+  assert.deepEqual(f.probes.at(-1), ['claude', 'imported-refresh', true]);
+  const view = await f.call('profiles.list', { provider: 'claude' });
+  assert.equal(JSON.parse(fs.readFileSync(path.join(view.profiles[0].home, '.credentials.json'))).claudeAiOauth.accessToken, 'imported-refresh');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(f.claudeHome, '.credentials.json'))).claudeAiOauth.accessToken, 'imported-refresh');
 });
 
 test('export and import go through the same plans the extension shows', async (t) => {

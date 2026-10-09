@@ -66,6 +66,8 @@ export type ProfileView = {
   active: boolean;
   /** 1-based position in the saved list. */
   number: number;
+  /** Persistent account CLI home, when initialized. Independent of list position. */
+  home?: string;
   usage?: SerializedUsage;
   checkedAt?: string;
   lastKeepAliveAt?: string;

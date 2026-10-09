@@ -60,6 +60,7 @@ export interface AutomationProfiles {
   profiles(provider: AuthProvider): Profile[];
   activeProfileId(provider: AuthProvider): string | undefined;
   credential(provider: AuthProvider, id: string): Promise<StoredCredential | undefined>;
+  probeSettings?(provider: AuthProvider, id: string, settings: ProbeSettings): ProbeSettings;
   refreshedCredential(provider: AuthProvider, id: string, before: StoredCredential, after: StoredCredential): Promise<void>;
   matchesNative(provider: AuthProvider, id: string): Promise<boolean>;
   activateProfile(provider: AuthProvider, id: string, automatic?: boolean): Promise<boolean>;
@@ -666,7 +667,8 @@ export class AccountAutomation {
     try {
       credential = await this.profiles.credential(provider, id);
       if (!credential) { throw new Error('Saved credential is missing.'); }
-      outcome = await this.probe(provider, credential, settings, keepAlive, this.abort.signal);
+      const accountSettings = this.profiles.probeSettings?.(provider, id, settings) ?? settings;
+      outcome = await this.probe(provider, credential, accountSettings, keepAlive, this.abort.signal);
       await this.profiles.refreshedCredential(provider, id, credential, outcome.credential);
     } catch (error) {
       outcome = { credential: {}, result: { kind: 'error', provider, title: provider,
@@ -901,7 +903,8 @@ export class AccountAutomation {
     this.write('codex', active, { ...previous, resetAttemptKey: key });
     this.locks.get('codex')?.touch();
     try {
-      const redeemed = await this.reset(credential, settings, key, this.abort.signal);
+      const accountSettings = this.profiles.probeSettings?.('codex', active, settings) ?? settings;
+      const redeemed = await this.reset(credential, accountSettings, key, this.abort.signal);
       await this.profiles.refreshedCredential('codex', active, credential, redeemed.credential);
       const state = this.read('codex', active);
       const { resetAttemptKey: _used, ...rest } = state;

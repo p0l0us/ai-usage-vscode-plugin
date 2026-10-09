@@ -99,7 +99,7 @@ export const SETTINGS: SettingSchema[] = [
   { key: 'keepAlive.enabled', type: 'boolean', description: 'Periodically send a small prompt with every saved account and record the usage it reports.' },
   { key: 'keepAlive.periodHours', type: 'number', min: 0.25, max: 168, description: 'Hours between two keep-alives of one account.' },
   { key: 'keepAlive.model', type: 'string', description: 'Subscription model used for the keep-alive prompt; empty for the CLI default (Codex).' },
-  { key: 'keepAlive.home', type: 'string', description: 'Dedicated CLI home for background checks; ~ is expanded. Must not be the native CLI home.' },
+  { key: 'keepAlive.home', type: 'string', description: 'Persistent account CLI home template; {number} is a stable profile slot and ~ is expanded. Must be separate from the native CLI home.' },
   { key: 'autoRotate.enabled', type: 'boolean', description: 'Switch the active account automatically once it reaches a rotation threshold.' },
   { key: 'autoReset.enabled', type: 'boolean', providers: ['codex'], description: 'Automatically redeem an available earned Codex rate-limit reset when it is more useful than rotating or waiting.' },
   { key: 'autoReset.confirmationRequired', type: 'boolean', providers: ['codex'], description: 'Require a connected editor to approve an earned Codex reset before redemption; without approval no credit is redeemed.' },

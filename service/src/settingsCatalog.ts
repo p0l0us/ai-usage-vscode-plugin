@@ -165,7 +165,7 @@ export const SETTINGS_CATALOG = [
     "key": "claude.keepAlive.enabled",
     "type": "boolean",
     "default": false,
-    "description": "**Account keep-alive and usage collection.** Periodically send the small `#aiUsage.claude.keepAlive.model#` prompt with every saved Claude account, including inactive ones, and record the usage each one reports. Accounts are staged in `#aiUsage.claude.keepAlive.home#`, never in the native CLI home."
+    "description": "**Account keep-alive and usage collection.** Periodically send the small `#aiUsage.claude.keepAlive.model#` prompt with every saved Claude account, including inactive ones, and record the usage each one reports. Each account keeps its login and CLI settings in a persistent home using `#aiUsage.claude.keepAlive.home#`, never in the native CLI home."
   },
   {
     "key": "claude.autoRotate.enabled",
@@ -245,8 +245,8 @@ export const SETTINGS_CATALOG = [
   {
     "key": "claude.keepAlive.home",
     "type": "string",
-    "default": "~/.claude-tmp",
-    "description": "Dedicated CLI home for background account checks. Supports ~; relative paths resolve from your user home. Must be separate from the native CLI home."
+    "default": "~/.claude-profile-{number}",
+    "description": "Persistent CLI home per account. {number} is a stable profile slot; templates without it get -profile-N appended. Supports ~; relative paths resolve from your user home. Must be separate from the native CLI home."
   },
   {
     "key": "claude.cliPath",
@@ -325,7 +325,7 @@ export const SETTINGS_CATALOG = [
     "key": "codex.keepAlive.enabled",
     "type": "boolean",
     "default": false,
-    "description": "**Account keep-alive and usage collection.** Periodically send the small `#aiUsage.codex.keepAlive.model#` prompt with every saved Codex account, including inactive ones, and record the usage each one reports. Accounts are staged in `#aiUsage.codex.keepAlive.home#`, never in the native CLI home."
+    "description": "**Account keep-alive and usage collection.** Periodically send the small `#aiUsage.codex.keepAlive.model#` prompt with every saved Codex account, including inactive ones, and record the usage each one reports. Each account keeps its login and CLI settings in a persistent home using `#aiUsage.codex.keepAlive.home#`, never in the native CLI home."
   },
   {
     "key": "codex.autoRotate.enabled",
@@ -432,8 +432,8 @@ export const SETTINGS_CATALOG = [
   {
     "key": "codex.keepAlive.home",
     "type": "string",
-    "default": "~/.codex-tmp",
-    "description": "Dedicated CLI home for background account checks. Supports ~; relative paths resolve from your user home. Must be separate from the native CLI home."
+    "default": "~/.codex-profile-{number}",
+    "description": "Persistent CLI home per account. {number} is a stable profile slot; templates without it get -profile-N appended. Supports ~; relative paths resolve from your user home. Must be separate from the native CLI home."
   },
   {
     "key": "codex.advanced.rotationDiagnostics",

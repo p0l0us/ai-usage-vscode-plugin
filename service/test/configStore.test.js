@@ -17,7 +17,7 @@ test('defaults match the extension settings: Claude rotates at 95/99.5, Codex at
   assert.equal(config.codex.autoReset.enabled, true);
   assert.equal(config.codex.keepAlive.periodHours, 6);
   assert.equal(config.codex.keepAlive.model, 'gpt-5.6-luna');
-  assert.equal(config.claude.keepAlive.home, '~/.claude-tmp');
+  assert.equal(config.claude.keepAlive.home, '~/.claude-profile-{number}');
 });
 
 test('a parsed file is merged over the defaults and invalid values keep the default', () => {
@@ -84,7 +84,7 @@ test('automation settings bound intervals and honor Codex strategy, trigger and 
   assert.equal(claude.trigger, 'proactive');
   assert.equal(claude.strategy, 'leastWaste');
   assert.equal(claude.minStayMs, 15 * 60_000);
-  assert.equal(claude.home, '~/.claude-tmp');
+  assert.equal(claude.home, '~/.claude-profile-{number}');
   const codex = automationSettings(config, 'codex');
   assert.equal(codex.strategy, 'leastWaste');
   assert.equal(codex.trigger, 'proactive');

@@ -18,10 +18,11 @@ import {
   resetCodexAccount, acquireAccountLock, explainAccountProblem, isolatedEnvironment, loginArgs, loginHome, probeAccount, readableProblem, stagedCredentialPath
 } from './accountProbe';
 import { deserializeUsage } from './cache';
-import { ConfigAuthority, ConfigPatchResult, ConfigView, ServiceConfig, automationSettings, configFileOf, strategySummary } from './configStore';
+import { ConfigAuthority, ConfigPatchResult, ConfigView, ServiceConfig, automationSettings, configFileOf, getConfigValue, strategySummary } from './configStore';
 import { LiveUsage, LiveResult, ProviderId, newestValidUsage, refreshCodexNativeLogin, resolveCli, verifyCodexNativeAccount } from './live';
 import { ExportedProfile, ImportPlan, parseProfileExport, serializeProfileExport } from './profileTransfer';
 import { ActivationOutcome, PrivateProfileBackend, ProfileMetadata, ProfileStore, PROVIDERS, TITLES, importOutcome } from './profileStore';
+import { ProfileHomes } from './profileHomes';
 import {
   ActivationResult, ExportResult, ImportPlanView, ImportSummary, KeepAliveAllResult, ProfileView, ProviderView, SaveNativeResult, ServiceEvent, ServiceInfo,
   SerializedUsage, SignInPreparation, SignInResult, Snapshot, UsageReadResult, serializeKeepAlive
@@ -124,6 +125,8 @@ function isoOrUndefined(value: number | undefined): string | undefined {
  */
 export class AccountService {
   readonly store: ProfileStore;
+  readonly profileHomes: ProfileHomes;
+  private readonly signInHomes = new Map<AuthProvider, { id?: string; home: string }>();
   readonly usageMonitor: UsageMonitor;
   readonly runtime: ServiceRuntime;
   private usageTimer?: NodeJS.Timeout;
@@ -185,14 +188,20 @@ export class AccountService {
     });
     this.store.verifyActivation = (provider, credential, expected) => this.verifyActivation(provider, credential, expected);
     const states = stateDir(options.home);
+    this.profileHomes = new ProfileHomes(states, key => getConfigValue(this.config, key.replace(/^aiUsage\./, '')));
     this.claudeBudget = new ApiCallBudget(path.join(states, 'claude-api-budget.json'),
       () => Math.min(600, Math.max(0, this.config.claude.api.minIntervalSeconds)) * 1000);
     const probe = options.probe ?? probeAccount;
     const profiles: AutomationProfiles = {
       profiles: (provider) => this.store.profiles(provider),
       activeProfileId: (provider) => this.store.activeProfileId(provider),
-      credential: (provider, id) => this.store.credential(provider, id),
-      refreshedCredential: (provider, id, before, after) => this.store.refreshedCredential(provider, id, before, after),
+      credential: (provider, id) => this.accountCredential(provider, id),
+      probeSettings: (provider, id, settings) => ({ ...settings, home: this.accountHome(provider, id), persistent: true }),
+      refreshedCredential: async (provider, id, before, after) => {
+        await this.store.refreshedCredential(provider, id, before, after);
+        const stored = await this.store.credential(provider, id);
+        if (stored) this.profileHomes.acknowledge(provider, this.accountHome(provider, id), stored);
+      },
       matchesNative: (provider, id) => this.store.matchesNative(provider, id),
       activateProfile: async (provider, id, automatic) => {
         try { await this.activate(provider, id, Boolean(automatic)); return true; }
@@ -737,6 +746,7 @@ export class AccountService {
     }
     return {
       ...profile, active, number,
+      home: this.profileHomes.lookup(provider, profile.id, this.config[provider].keepAlive.home),
       usage: this.automation.usage(provider, profile.id) ? state.usage as SerializedUsage : undefined,
       checkedAt: isoOrUndefined(state.checkedAt),
       lastKeepAliveAt: isoOrUndefined(state.lastKeepAliveAt),
@@ -750,8 +760,27 @@ export class AccountService {
 
   // --- activation and its verification -------------------------------------------------------------------
 
+  private accountHome(provider: AuthProvider, id: string): string {
+    return this.profileHomes.resolve(provider, id, this.store.profiles(provider).map(p => p.id), this.config[provider].keepAlive.home);
+  }
+
+  private async accountCredential(provider: AuthProvider, id: string): Promise<StoredCredential | undefined> {
+    const stored = await this.store.credential(provider, id);
+    if (!stored) return undefined;
+    return this.profileHomes.synchronize(provider, this.accountHome(provider, id), stored, async (before, after) => {
+      await this.store.refreshedCredential(provider, id, before, after);
+      return this.store.credential(provider, id);
+    });
+  }
+
+  private async replaceAccountHome(provider: AuthProvider, id: string): Promise<void> {
+    const credential = await this.store.credential(provider, id);
+    if (credential) this.profileHomes.replace(provider, this.accountHome(provider, id), credential);
+  }
+
   private async activate(provider: AuthProvider, id: string, automatic: boolean): Promise<ActivationOutcome> {
     const previous = this.store.activeProfileId(provider);
+    await this.accountCredential(provider, id);
     const outcome = await this.store.activateProfile(provider, id, automatic);
     // Rotation records its switches itself, with the candidates it considered.
     if (!automatic) { this.recordSwitch(provider, previous, id, 'manual'); }
@@ -859,11 +888,14 @@ export class AccountService {
   // --- sign-in with the vendor CLI ------------------------------------------------------------------------------
 
   /** The command a client runs in a terminal to sign in for a profile, with a home that cannot touch the active login. */
-  prepareSignIn(provider: AuthProvider): SignInPreparation {
+  prepareSignIn(provider: AuthProvider, id?: string): SignInPreparation {
     const settings = automationSettings(this.config, provider);
     const cli = resolveCli(settings.cliPath);
     if (!cli) { throw new Error(`${settings.cliPath} was not found. Check the ${provider} CLI path setting.`); }
-    const home = loginHome(provider, settings.home);
+    // Old clients omitted the target. Infer it for a single account; otherwise use a service-owned login folder.
+    const profiles = this.store.profiles(provider);
+    id ??= profiles.length === 1 ? profiles[0].id : undefined;
+    const home = loginHome(provider, id ? this.accountHome(provider, id) : path.join(stateDir(this.options.home), `${provider}-sign-in`));
     const file = stagedCredentialPath(provider, home);
     // A leftover from an earlier sign-in must not be mistaken for this one.
     fs.rmSync(file, { force: true });
@@ -874,6 +906,7 @@ export class AccountService {
     // The user is about to attend a browser sign-in; keep-alives and sweeps of this service wait until it is over,
     // so no check competes with it and no notification about another account interrupts it.
     this.automation.hold(provider, `a ${TITLES[provider]} sign-in is in progress`);
+    this.signInHomes.set(provider, { id, home });
     return { cli, args: loginArgs(provider), cwd: home, env, file };
   }
 
@@ -881,8 +914,10 @@ export class AccountService {
   async finishSignIn(provider: AuthProvider, id: string, allowOtherAccount: boolean): Promise<SignInResult> {
     const profile = this.store.profile(provider, id);
     if (!profile) { throw new Error('The profile no longer exists.'); }
-    const settings = automationSettings(this.config, provider);
-    const file = stagedCredentialPath(provider, loginHome(provider, settings.home));
+    const prepared = this.signInHomes.get(provider);
+    if (prepared?.id && prepared.id !== id) throw new Error('The sign-in was prepared for another profile.');
+    if (!prepared) throw new Error('Prepare a sign-in for this profile first.');
+    const file = stagedCredentialPath(provider, prepared.home);
     let credential: StoredCredential;
     try { credential = parseCredentialJson(provider, fs.readFileSync(file, 'utf8')); }
     catch { this.automation.resume(provider); throw new Error('The sign-in was not completed: the CLI wrote no login.'); }
@@ -894,7 +929,9 @@ export class AccountService {
         message: `You signed in as ${identity.email ?? identity.accountId}, but the profile “${profile.name}” holds ${profile.email ?? profile.accountId}.` };
     }
     const active = await this.automation.withPaused(() => this.store.replaceCredential(provider, id, credential));
+    await this.replaceAccountHome(provider, id);
     fs.rmSync(file, { force: true });
+    this.signInHomes.delete(provider);
     this.automation.resume(provider);
     this.emit({ event: 'stateChanged', provider });
     // The login is saved either way; a busy check elsewhere only delays the usage reading.
@@ -907,8 +944,9 @@ export class AccountService {
   }
 
   cancelSignIn(provider: AuthProvider): void {
-    const settings = automationSettings(this.config, provider);
-    fs.rmSync(stagedCredentialPath(provider, loginHome(provider, settings.home)), { force: true });
+    const prepared = this.signInHomes.get(provider);
+    if (prepared) fs.rmSync(stagedCredentialPath(provider, prepared.home), { force: true });
+    this.signInHomes.delete(provider);
     this.automation.resume(provider);
   }
 
@@ -1024,14 +1062,20 @@ export class AccountService {
           allowDuplicate: params.allowDuplicate === true,
           folder: typeof params.folder === 'string' && params.folder ? params.folder : undefined
         }));
-        if (outcome.status !== 'duplicate') { this.emit({ event: 'stateChanged', provider }); this.background(() => this.automation.tick()); }
+        if (outcome.status !== 'duplicate') {
+          await this.replaceAccountHome(provider, outcome.profile.id);
+          this.emit({ event: 'stateChanged', provider }); this.background(() => this.automation.tick());
+        }
         return outcome as SaveNativeResult;
       }
       case 'profiles.importCredential': {
         const provider = providerParam(params);
         const outcome = await paused(() => this.store.importCredential(provider, stringParam(params, 'name'), params.credential, params.allowDuplicate === true,
           typeof params.folder === 'string' && params.folder ? params.folder : undefined));
-        if (outcome.status !== 'duplicate') { this.emit({ event: 'stateChanged', provider }); this.background(() => this.automation.tick()); }
+        if (outcome.status !== 'duplicate') {
+          await this.replaceAccountHome(provider, outcome.profile.id);
+          this.emit({ event: 'stateChanged', provider }); this.background(() => this.automation.tick());
+        }
         return outcome as SaveNativeResult;
       }
       case 'profiles.rename': {
@@ -1074,12 +1118,29 @@ export class AccountService {
           }))
           : plans.filter((plan) => plan.kind === 'new' || plan.kind === 'restore');
         if (!chosen.length) { return { imported: 0, counts: { new: 0, restore: 0, replace: 0, same: 0 }, summary: 'nothing to import' } satisfies ImportSummary; }
-        const outcome = await paused(() => this.store.applyImport(chosen));
+        const outcome = await paused(async () => {
+          const imported = await this.store.applyImport(chosen);
+          // Replacing an active login must update its native copy too, or the next native sync
+          // would restore the old refresh token into both the store and persistent home.
+          for (const plan of chosen) {
+            const id = plan.target?.id ?? plan.entry.id;
+            if ((plan.kind === 'replace' || plan.kind === 'restore') && this.store.activeProfileId(plan.entry.provider) === id) {
+              await this.store.replaceCredential(plan.entry.provider, id, plan.entry.credential);
+            }
+          }
+          return imported;
+        });
+        for (const plan of chosen) {
+          if (plan.kind !== 'same') await this.replaceAccountHome(plan.entry.provider, plan.target?.id ?? plan.entry.id);
+        }
         for (const provider of PROVIDERS) { this.emit({ event: 'stateChanged', provider }); }
         this.background(() => this.automation.tick());
         return outcome satisfies ImportSummary;
       }
-      case 'profiles.signIn.prepare': return this.prepareSignIn(providerParam(params));
+      case 'profiles.signIn.prepare': {
+        const provider = providerParam(params);
+        return this.prepareSignIn(provider, params.id || params.ref ? this.resolveParam(provider, params).id : undefined);
+      }
       case 'profiles.signIn.finish': {
         const provider = providerParam(params);
         return this.finishSignIn(provider, this.resolveParam(provider, params).id, params.allowOtherAccount === true);

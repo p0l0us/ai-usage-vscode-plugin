@@ -111,7 +111,7 @@ function replaceValue(lines: string[], index: number, pattern: RegExp, value: st
 }
 
 /**
- * Returns `text` with `table.key = value`. Handles an existing `[table]` section, a root-level dotted
+ * Returns `text` with `table.key = value` (an empty table selects a root key). Handles an existing `[table]` section, a root-level dotted
  * `table.key = …` line, or neither (a new section is added). Idempotent.
  */
 export function setCodexConfigValue(text: string, table: string, key: string, value: CodexSettingValue): string {
@@ -123,6 +123,15 @@ export function setCodexConfigValue(text: string, table: string, key: string, va
   }
   const rendered = tomlValue(value);
   const finish = () => lines.join(eol) + eol;
+
+  if (!table) {
+    const rootEnd = lines.findIndex(isTableHeader);
+    const pattern = keyPattern(key);
+    const existing = lines.findIndex((line, index) => (rootEnd === -1 || index < rootEnd) && pattern.test(line));
+    if (existing >= 0) return replaceValue(lines, existing, pattern, rendered) ? finish() : text;
+    lines.unshift(`${key} = ${rendered}`);
+    return finish();
+  }
 
   const header = headerPattern(table);
   const start = lines.findIndex((line) => header.test(line));

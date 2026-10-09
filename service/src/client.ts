@@ -115,7 +115,9 @@ export class ServiceClient extends EventEmitter {
   applyImportEntries(entries: unknown[], chosen?: Array<{ provider: AuthProvider; id: string }>): Promise<ImportSummary> {
     return this.call('profiles.applyImport', { entries, chosen });
   }
-  prepareSignIn(provider: AuthProvider): Promise<SignInPreparation> { return this.call('profiles.signIn.prepare', { provider }); }
+  prepareSignIn(provider: AuthProvider, target?: string | { ref: string }): Promise<SignInPreparation> {
+    return this.call('profiles.signIn.prepare', { provider, ...(typeof target === 'string' ? { id: target } : target) });
+  }
   finishSignIn(provider: AuthProvider, target: string | { ref: string }, allowOtherAccount = false): Promise<SignInResult> {
     return this.call('profiles.signIn.finish', { provider, ...(typeof target === 'string' ? { id: target } : target), allowOtherAccount });
   }
