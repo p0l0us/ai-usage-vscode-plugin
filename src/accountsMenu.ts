@@ -28,7 +28,7 @@ type ProfileItem = vscode.QuickPickItem & {
   readOnly?: boolean;
   /** The login error of the profile's last check; selecting it offers to renew the login or check it again instead of activating. */
   loginProblem?: string;
-  action?: 'save' | 'manage' | 'keepAliveNow' | 'registerMcp' | 'settings' | 'serviceSettings' | 'service' | 'install' | 'back';
+  action?: 'save' | 'manage' | 'openCli' | 'keepAliveNow' | 'registerMcp' | 'settings' | 'service' | 'install' | 'back';
 };
 
 export type MenuHooks = {
@@ -196,13 +196,17 @@ export class AccountsMenu {
           return;
         }
         switch (item.action) {
+          case 'openCli': {
+            if (await this.openCli(client, view, hooks)) return;
+            break;
+          }
           case 'keepAliveNow': {
             const profiles = await this.pickKeepAliveTargets(view);
             if (profiles.length) { await hooks?.sendKeepAlive(provider, profiles); }
             break;
           }
           case 'registerMcp': await hooks?.registerMcp?.(provider); break;
-          case 'settings': case 'serviceSettings': await openAiUsageSettings(`aiUsage.${provider}`); return;
+          case 'settings': await openAiUsageSettings(`aiUsage.${provider}`); return;
           case 'service': await this.services.showMenu({ description: `${TITLES[provider]} accounts`, run: () => this.show(provider, hooks) }); return;
           case 'save':
             // Saving copies the login that is already active into a profile; no process starts using a new account.
@@ -290,6 +294,7 @@ export class AccountsMenu {
     items.push({ label: '$(tools) Manage saved profiles…', detail: 'Import, export, sign in again, rename, reorder, or delete profiles.', action: 'manage' });
     items.push({ label: 'Account features', kind: vscode.QuickPickItemKind.Separator });
     if (view.profiles.length) {
+      items.push({ label: '$(terminal) Open CLI…', detail: `Choose a saved account and open ${TITLES[provider]} in a VS Code terminal with that account's home.`, action: 'openCli' });
       items.push({ label: '$(play) Send keep-alive now…', detail: 'Choose a saved account, or all of them, send the configured keep-alive prompt immediately, and refresh usage statistics.', action: 'keepAliveNow' });
     }
     if (mcp) {
@@ -302,18 +307,45 @@ export class AccountsMenu {
       });
     }
     items.push({
-      label: '$(gear) Keep-alive and rotation settings…',
+      label: '$(gear) Settings…',
       description: `Keep-alive ${view.keepAlive ? 'on' : 'off'} · rotation ${view.autoRotate ? `on (${strategySummary(config, provider)})` : 'off'}${provider === 'codex' ? ` · earned resets ${config.codex.autoReset.enabled ? 'on' : 'off'}` : ''}`,
-      detail: `Opens Settings: turn periodic checks of every saved ${TITLES[provider]} account and automatic rotation on or off, and set the period, model, rotation strategy and thresholds${provider === 'codex' ? ', earned-reset redemption' : ''}, and dedicated home. The account service applies them, also while VS Code is closed.`,
+      detail: `Opens all ${TITLES[provider]} settings, including keep-alive, rotation${provider === 'codex' ? ', earned resets' : ''}, and CLI configuration.`,
       action: 'settings'
     });
-    items.push({ label: `$(settings-gear) ${TITLES[provider]} settings…`, description: `aiUsage.${provider}.*`, detail: `Opens Settings on every ${TITLES[provider]} setting, including the ${TITLES[provider]} config section.`, action: 'serviceSettings' });
     if (withBack) {
       // Last, so the active profile stays the first, preselected item.
       items.push({ label: '', kind: vscode.QuickPickItemKind.Separator });
       items.push({ label: '$(arrow-left) Back', description: 'AI Usage menu of all services', action: 'back' });
     }
     return items;
+  }
+
+  private async openCli(client: ServiceClient, view: ProviderView, hooks?: MenuHooks): Promise<boolean> {
+    const items: ProfileItem[] = view.profiles.map(profile => ({
+      label: `$(terminal) ${profile.name}`,
+      description: profileDescription(profile, view.profiles),
+      detail: profile.home,
+      profile
+    }));
+    items.push({ label: '$(arrow-left) Back', action: 'back' });
+    const selected = await pickWithBack(items, {
+      title: `AI Usage · Open ${TITLES[view.provider]} CLI`, placeHolder: 'Choose an account to open in a terminal',
+      matchOnDescription: true, matchOnDetail: true
+    }, item => item.action === 'back', () => this.show(view.provider, hooks));
+    // Back has already opened the account menu over this submenu.
+    if (selected?.action === 'back') return true;
+    if (!selected?.profile) return false;
+    const prepared = await client.prepareCli(view.provider, selected.profile.id);
+    const terminal = vscode.window.createTerminal({
+      name: `${TITLES[view.provider]} · ${selected.profile.name}`,
+      shellPath: prepared.cli,
+      shellArgs: prepared.args,
+      cwd: selected.profile.folder ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? prepared.cwd,
+      env: prepared.env,
+      strictEnv: true
+    });
+    terminal.show();
+    return true;
   }
 
   private async askName(view: ProviderView, prompt: string, current?: string): Promise<string | undefined> {

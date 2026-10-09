@@ -158,11 +158,14 @@ export type ImportSummary = { imported: number; counts: Record<ImportKind, numbe
 
 export type ExportResult = { entries: ExportedProfile[]; missing: string[]; text: string };
 
-export type SignInPreparation = {
+export type CliPreparation = {
   cli: string;
   args: string[];
   cwd: string;
   env: Record<string, string>;
+};
+
+export type SignInPreparation = CliPreparation & {
   /** Where the vendor CLI writes the login inside the isolated home. */
   file: string;
 };

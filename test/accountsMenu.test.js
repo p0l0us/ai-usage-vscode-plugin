@@ -8,6 +8,7 @@ const warningResponses = [];
 const inputBoxResponses = [];
 const quickPickResponses = [];
 const menus = [];
+const terminals = [];
 const { quickPickFactory } = require('./helpers/quickPick');
 const load = Module._load;
 Module._load = function(id, ...args) {
@@ -25,7 +26,8 @@ Module._load = function(id, ...args) {
       showErrorMessage(message) { errorMessages.push(message); },
       showInputBox: async () => inputBoxResponses.shift(),
       showQuickPick(items, options) { const response = quickPickResponses.shift(); return typeof response === 'function' ? response(items, options) : response; },
-      createQuickPick: quickPickFactory(quickPickResponses, menus)
+      createQuickPick: quickPickFactory(quickPickResponses, menus),
+      createTerminal(options) { const terminal = { options, shown: false, show() { this.shown = true; } }; terminals.push(terminal); return terminal; }
     },
     commands: { executeCommand: async () => undefined },
     workspace: { fs: {}, getConfiguration: () => ({ get: (key, fallback) => fallback, update: async () => undefined }) }
@@ -43,6 +45,7 @@ const profile = (overrides) => ({ id: 'a', name: 'Work', createdAt: '2026-01-01T
 function fixture(views) {
   informationMessages.length = 0; warningMessages.length = 0; errorMessages.length = 0;
   warningResponses.length = 0; inputBoxResponses.length = 0; quickPickResponses.length = 0;
+  terminals.length = 0;
   const calls = [];
   const client = {
     connected: true, info: { version: 'test', clients: 1 },
@@ -62,6 +65,12 @@ function fixture(views) {
     },
     delete: async (provider, id) => { calls.push(['delete', provider, id]); return { profile: { id, name: 'x' }, wasActive: false }; },
     keepAliveNow: async (provider, id) => { calls.push(['keepAliveNow', provider, id]); return {}; },
+    prepareCli: async (provider, id) => {
+      calls.push(['prepareCli', provider, id]);
+      const home = views[provider].profiles.find(p => p.id === id).home;
+      return { cli: `/custom path/${provider}`, args: provider === 'codex' ? ['-c', 'cli_auth_credentials_store="file"'] : [],
+        cwd: home, env: { HOME: home, [provider === 'claude' ? 'CLAUDE_CONFIG_DIR' : 'CODEX_HOME']: home } };
+    },
     getConfig: async () => defaultConfig()
   };
   const services = { enabled: true, connected: client, views: {}, config: defaultConfig(), isInstalled: () => true, require: () => client, ensure: async () => client, install: async () => true, showMenu: async () => { calls.push(['showMenu']); } };
@@ -202,6 +211,48 @@ test('profile actions live in Manage saved profiles and moving a profile updates
   await f.menu.show('codex');
   assert.deepEqual(f.calls, [['reorder', 'codex', 'b', -1]]);
   assert.deepEqual(views.codex.profiles.map((item) => item.id), ['b', 'a']);
+});
+
+for (const provider of ['claude', 'codex']) {
+  test(`${provider}: one Settings entry and Open CLI launches the selected persistent home without activation`, async () => {
+    const home = `/home/user/.${provider}-profile-7`;
+    const folder = provider === 'codex' ? '/workspace/project with spaces' : undefined;
+    const view = { provider, title: provider, profiles: [profile({ active: true, home: `/home/user/.${provider}-profile-1` }),
+      profile({ id: 'b', name: 'Backup', number: 2, home, folder, loginProblem: 'Login expired' })],
+      activeProfileId: 'a', nativeUnsaved: false, checkingActive: false, keepAlive: false, autoRotate: false, strategySummary: '', scopes };
+    const f = fixture({ [provider]: view });
+    quickPickResponses.push(items => {
+      const settings = items.filter(item => item.action === 'settings' || item.action === 'serviceSettings');
+      assert.equal(settings.length, 1);
+      assert.equal(settings[0].label, '$(gear) Settings…');
+      return items.find(item => item.action === 'openCli');
+    });
+    quickPickResponses.push((items, options) => {
+      assert.match(options.title, /Open .* CLI/);
+      assert.deepEqual(items.filter(item => item.profile).map(item => item.profile.id), ['a', 'b']);
+      assert.equal(items.find(item => item.profile?.id === 'b').detail, home);
+      return items.find(item => item.profile?.id === 'b');
+    });
+    await f.menu.show(provider);
+    assert.deepEqual(f.calls, [['prepareCli', provider, 'b']]);
+    assert.equal(terminals.length, 1);
+    assert.equal(terminals[0].shown, true);
+    assert.deepEqual(terminals[0].options, {
+      name: `${provider === 'claude' ? 'Claude' : 'Codex'} · Backup`, shellPath: `/custom path/${provider}`,
+      shellArgs: provider === 'codex' ? ['-c', 'cli_auth_credentials_store="file"'] : [],
+      cwd: folder ?? home, env: { HOME: home, [provider === 'claude' ? 'CLAUDE_CONFIG_DIR' : 'CODEX_HOME']: home }, strictEnv: true
+    });
+  });
+}
+
+test('Open CLI cancellation returns to the account menu without preparing or launching a CLI', async () => {
+  const view = { provider: 'claude', title: 'Claude', profiles: [profile()], nativeUnsaved: false,
+    checkingActive: false, keepAlive: false, autoRotate: false, strategySummary: '', scopes };
+  const f = fixture({ claude: view });
+  quickPickResponses.push(items => items.find(item => item.action === 'openCli'), undefined, undefined);
+  await f.menu.show('claude');
+  assert.deepEqual(f.calls, []);
+  assert.equal(terminals.length, 0);
 });
 
 test('choosing a profile activates it through the service and closes the menu; an exhausted one only warns', async () => {

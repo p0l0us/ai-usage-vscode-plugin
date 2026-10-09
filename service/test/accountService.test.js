@@ -263,6 +263,36 @@ test('an explicit imported login replacement updates the active native copy and 
   assert.equal(JSON.parse(fs.readFileSync(path.join(f.claudeHome, '.credentials.json'))).claudeAiOauth.accessToken, 'imported-refresh');
 });
 
+test('CLI preparation uses each account home, adopts refreshed tokens and preserves native logins and automation', async t => {
+  const f = fixture(t);
+  const cli = path.join(f.root, process.platform === 'win32' ? 'fake-cli.cmd' : 'fake-cli');
+  fs.writeFileSync(cli, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  await f.call('config.set', { values: { 'claude.cliPath': cli, 'codex.cliPath': cli } });
+  await f.call('profiles.saveNative', { provider: 'claude', name: 'Main' });
+  const backup = await f.call('profiles.importCredential', { provider: 'claude', name: 'Backup', credential: claudeLogin('b') });
+  const codex = await f.call('profiles.importCredential', { provider: 'codex', name: 'Second',
+    credential: { tokens: { access_token: 'second-token', refresh_token: 'second-refresh', account_id: 'second-account' } } });
+  const beforeClaude = fs.readFileSync(path.join(f.claudeHome, '.credentials.json'), 'utf8');
+  const beforeCodex = fs.readFileSync(path.join(f.root, 'codex', 'auth.json'), 'utf8');
+  const home = (await f.call('profiles.list', { provider: 'claude' })).profiles.find(p => p.id === backup.profile.id).home;
+  fs.writeFileSync(path.join(home, '.credentials.json'), JSON.stringify(claudeLogin('cli-refreshed')));
+  const probes = f.probes.length;
+  for (const [provider, id, basename] of [['claude', backup.profile.id, '.claude-profile-2'], ['codex', codex.profile.id, '.codex-profile-1']]) {
+    const prepared = await f.call('profiles.cli.prepare', { provider, id });
+    assert.equal(prepared.cli, cli);
+    assert.equal(path.basename(prepared.cwd), basename);
+    assert.equal(prepared.env.HOME, prepared.cwd);
+    assert.equal(prepared.env[provider === 'claude' ? 'CLAUDE_CONFIG_DIR' : 'CODEX_HOME'], prepared.cwd);
+    assert.deepEqual(prepared.args, provider === 'codex' ? ['-c', 'cli_auth_credentials_store="file"'] : []);
+    assert.equal(f.service.automation.heldFor(provider), undefined);
+  }
+  assert.equal((await f.service.store.credential('claude', backup.profile.id)).claudeAiOauth.accessToken, 'cli-refreshed');
+  assert.equal(fs.readFileSync(path.join(f.claudeHome, '.credentials.json'), 'utf8'), beforeClaude);
+  assert.equal(fs.readFileSync(path.join(f.root, 'codex', 'auth.json'), 'utf8'), beforeCodex);
+  assert.equal(f.probes.length, probes, 'preparing a terminal sends no model or usage request');
+  await assert.rejects(f.call('profiles.cli.prepare', { provider: 'claude', id: 'missing' }), /No Claude profile|no longer exists|matches/i);
+});
+
 test('export and import go through the same plans the extension shows', async (t) => {
   const f = fixture(t);
   await f.call('profiles.saveNative', { provider: 'claude', name: 'Work' });

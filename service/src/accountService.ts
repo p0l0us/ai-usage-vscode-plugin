@@ -25,7 +25,7 @@ import { ActivationOutcome, PrivateProfileBackend, ProfileMetadata, ProfileStore
 import { ProfileHomes } from './profileHomes';
 import {
   ActivationResult, ExportResult, ImportPlanView, ImportSummary, KeepAliveAllResult, ProfileView, ProviderView, SaveNativeResult, ServiceEvent, ServiceInfo,
-  SerializedUsage, SignInPreparation, SignInResult, Snapshot, UsageReadResult, serializeKeepAlive
+  SerializedUsage, SignInPreparation, SignInResult, Snapshot, UsageReadResult, serializeKeepAlive, CliPreparation
 } from './protocol';
 import { profilesFile, stateDir } from './paths';
 import { RpcError } from './rpc';
@@ -887,6 +887,18 @@ export class AccountService {
 
   // --- sign-in with the vendor CLI ------------------------------------------------------------------------------
 
+  private async prepareCli(provider: AuthProvider, id: string): Promise<CliPreparation> {
+    const cli = resolveCli(this.config[provider].cliPath);
+    if (!cli) throw new Error(`${this.config[provider].cliPath} was not found. Check the ${provider} CLI path setting.`);
+    await this.accountCredential(provider, id);
+    const home = this.accountHome(provider, id);
+    const env: Record<string, string> = {};
+    for (const [key, value] of Object.entries(isolatedEnvironment(provider, home))) {
+      if (typeof value === 'string') env[key] = value;
+    }
+    return { cli, args: provider === 'codex' ? ['-c', 'cli_auth_credentials_store="file"'] : [], cwd: home, env };
+  }
+
   /** The command a client runs in a terminal to sign in for a profile, with a home that cannot touch the active login. */
   prepareSignIn(provider: AuthProvider, id?: string): SignInPreparation {
     const settings = automationSettings(this.config, provider);
@@ -1136,6 +1148,11 @@ export class AccountService {
         for (const provider of PROVIDERS) { this.emit({ event: 'stateChanged', provider }); }
         this.background(() => this.automation.tick());
         return outcome satisfies ImportSummary;
+      }
+      case 'profiles.cli.prepare': {
+        const provider = providerParam(params), profile = this.resolveParam(provider, params);
+        return this.automation.withAccountLock(provider, () => this.prepareCli(provider, profile.id),
+          { waitMs: MANUAL_CHECK_WAIT_MS, signal: request?.signal });
       }
       case 'profiles.signIn.prepare': {
         const provider = providerParam(params);

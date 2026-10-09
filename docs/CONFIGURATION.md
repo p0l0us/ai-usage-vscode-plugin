@@ -5,10 +5,10 @@ with `aiUsage.` in `settings.json`. In a Remote-SSH, WSL or container window, **
 lets you override options for that host. Machine-specific paths and connection settings appear only in the
 Remote tab there; feature switches also appear in the User tab.
 
-The Claude and Codex Accounts menus end with a **Claude settings…** / **Codex settings…** item that opens Settings
-filtered to that service, including its config section:
+The Claude and Codex Accounts menus each have one **Settings…** item that opens Settings filtered to that
+service, including keep-alive, rotation and its CLI config section:
 
-![Claude settings… item of the Accounts menu](../images/screenshots/accounts-claude-settings.png)
+![Provider settings item of the Accounts menu](../images/screenshots/accounts-claude-settings.png)
 
 ## Sources
 
@@ -145,6 +145,13 @@ Run **AI Usage: Manage Claude/Codex Authentication Profiles** to save the curren
 JSON file, rename/delete profiles, or activate one of up to 20 profiles per service. The profiles, logins included,
 are kept by the [account service](#account-service) in `~/.ai-usage/profiles.json` (mode 0600), or in a project's
 profile file; the extension and the `ai-usage` command only ever go through the service.
+
+Choose **Open CLI…** in either account menu, then select a saved account to launch its CLI in a VS Code
+terminal using its persistent home, such as `~/.claude-profile-1` or `~/.codex-profile-1`. The service
+synchronizes the account's login before launching. The terminal starts in the profile's project folder,
+the current workspace folder, or its account home when no project is open. Each terminal keeps its own
+account environment, so several accounts can be used in parallel while the active account selection stays
+unchanged.
 
 ### Private and project profiles
 

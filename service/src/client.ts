@@ -11,7 +11,7 @@ import type { ProfileMetadata } from './profileStore';
 import type {
   ResetConfirmation, ResetResolution, ConfigState, RequestOptions, ActivationResult, EventName, ExportResult, HelloResult, ImportPlanView, ImportSummary, KeepAliveResult, ProviderView, SaveNativeResult,
   CheckWait, HistoryExportKind, HistoryInfo, HistorySummaryResult, KeepAliveAllResult, SerializedUsage, ServiceEvent, ServiceInfo, SignInPreparation,
-  SignInResult, Snapshot, UsageReadResult
+  SignInResult, Snapshot, UsageReadResult, CliPreparation
 } from './protocol';
 
 /** Why a connection could not be made, so a caller can install, start or just report. */
@@ -117,6 +117,10 @@ export class ServiceClient extends EventEmitter {
   }
   prepareSignIn(provider: AuthProvider, target?: string | { ref: string }): Promise<SignInPreparation> {
     return this.call('profiles.signIn.prepare', { provider, ...(typeof target === 'string' ? { id: target } : target) });
+  }
+  prepareCli(provider: AuthProvider, target: string | { ref: string }, options?: RequestOptions): Promise<CliPreparation> {
+    return this.call('profiles.cli.prepare', { provider, ...(typeof target === 'string' ? { id: target } : target) },
+      options ?? { timeoutMs: 195_000 });
   }
   finishSignIn(provider: AuthProvider, target: string | { ref: string }, allowOtherAccount = false): Promise<SignInResult> {
     return this.call('profiles.signIn.finish', { provider, ...(typeof target === 'string' ? { id: target } : target), allowOtherAccount });
