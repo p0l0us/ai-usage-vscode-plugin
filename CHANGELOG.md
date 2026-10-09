@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.0.21 (unreleased)
+## 1.1.0 (2026-10-09)
 
 - The CLI bridge now advertises image and workspace context support. The service rejects older bridge processes with a clear error instead of attaching to them and failing image requests.
 - Open CLI now keeps the terminal shell open when a saved account's Codex or Claude process exits, so authentication errors remain visible and the account can be signed in again. Concurrent imports cannot save duplicate credentials, and embedded service shutdown never signals the VS Code host process.
