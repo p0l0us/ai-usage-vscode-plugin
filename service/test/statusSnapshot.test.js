@@ -66,7 +66,7 @@ test('status cursor advances for quota/credit freshness and config policy withou
   assert.equal(provider(stale.snapshot, 'codex').native.resetCredits.state, 'stale');
   f.advance(1); assert.equal(f.service.statusSnapshot({ since: stale.snapshot.cursor }).status, 'unchanged');
   assert.deepEqual(f.calls(), calls);
-  await f.service.handle('config.patch', { values: { 'codex.autoRotate.strategy': 'leastWaste' }, baseRevision: f.service.configAuthority.revision });
+  await f.service.handle('config.patch', { values: { 'codex.autoRotate.strategy': 'sequential' }, baseRevision: f.service.configAuthority.revision });
   assert.ok(f.service.statusSnapshot().snapshot.configRevision > first.configRevision);
 });
 

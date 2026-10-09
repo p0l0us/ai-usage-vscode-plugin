@@ -31,7 +31,7 @@ import {
 import { AccountsMenu } from './accountsMenu';
 import { signInWithTerminal } from './accountLogin';
 import { registerMcpProvider } from './mcpProvider';
-import { MCP_SERVER_NAME, McpCommand, McpRegistration, RegistrationOutcome } from './mcpRegistration';
+import { MCP_SERVER_NAME } from './mcpRegistration';
 import { ServiceManager } from './serviceManager';
 import { openAiUsageSettings } from './settingsLink';
 import { compactTokenCount, SessionTokenUsage } from './sessionTokens';
@@ -270,7 +270,7 @@ export function activate(context: vscode.ExtensionContext): void {
     if (!record || context.workspaceState.get<number>(CODEX_SWITCH_NOTIFIED_KEY) === record.switchedAt) {
       return;
     }
-    const stale = await services.require().call<Array<{ pid: number }>>('runtime.staleCodex', { switchedAt: record.switchedAt, parentPid: process.pid });
+    const stale = await services.require().call('runtime.staleCodex', { switchedAt: record.switchedAt, parentPid: process.pid });
     if (!stale.length || context.workspaceState.get<number>(CODEX_SWITCH_NOTIFIED_KEY) === record.switchedAt) {
       return;
     }
@@ -410,7 +410,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const registerMcpWithCli = async (provider: AuthProvider): Promise<void> => {
     const title = provider === 'claude' ? 'Claude' : 'Codex';
     const client = services.require();
-    const { launcher, command, cli, reason, registration: before } = await client.call<{ launcher: string; command?: McpCommand; cli?: string; reason?: string; registration: McpRegistration }>('mcp.registration', { provider });
+    const { launcher, command, cli, reason, registration: before } = await client.call('mcp.registration', { provider });
     const displayedCommand = [command?.command ?? launcher, ...(command?.args ?? ['mcp'])]
       .map((part) => /[\s"]/.test(part) ? JSON.stringify(part) : part).join(' ');
     if (!fs.existsSync(launcher)) {
@@ -424,7 +424,7 @@ export function activate(context: vscode.ExtensionContext): void {
         `AI Usage: the ${title} CLI already runs the “${MCP_SERVER_NAME}” MCP server from ${displayedCommand} ${where}.`, 'Register again', 'Remove');
       if (!choice) { return; }
       if (choice === 'Remove') {
-        const removed = await client.call<{ ok: boolean; detail: string }>('mcp.unregister', { provider });
+        const removed = await client.call('mcp.unregister', { provider });
         log(`${provider}: ${path.basename(cli)} mcp remove ${MCP_SERVER_NAME}: ${removed.ok ? 'removed' : 'failed'}: ${removed.detail}`);
         if (removed.ok) { void vscode.window.showInformationMessage(`AI Usage: the “${MCP_SERVER_NAME}” MCP server was removed from the ${title} CLI.`); }
         else { void vscode.window.showErrorMessage(`AI Usage: could not remove the “${MCP_SERVER_NAME}” MCP server from the ${title} CLI: ${removed.detail}`); }
@@ -437,7 +437,7 @@ export function activate(context: vscode.ExtensionContext): void {
       if (choice !== 'Replace') { return; }
     }
     const result = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: `AI Usage: registering the MCP server with the ${title} CLI…` },
-      () => client.call<RegistrationOutcome>('mcp.register', { provider }));
+      () => client.call('mcp.register', { provider }));
     log(`${provider}: registering the MCP server with ${cli}: ${result.ok ? 'registered' : 'failed'}: ${result.detail}`);
     if (!result.ok) {
       void vscode.window.showErrorMessage(`AI Usage: could not register the MCP server with the ${title} CLI: ${result.detail}`);
@@ -458,7 +458,7 @@ export function activate(context: vscode.ExtensionContext): void {
         items.push({ label: '$(plug) Enable the MCP server…', detail: 'Makes account tools available to agents in this VS Code window and allows CLI registration.', action: 'enable' });
       } else {
         for (const provider of ['claude', 'codex'] as const) {
-          const { registration } = await client.call<{ registration: McpRegistration }>('mcp.registration', { provider });
+          const { registration } = await client.call('mcp.registration', { provider });
           items.push({
             label: `$(plug) Register with ${provider === 'claude' ? 'Claude' : 'Codex'} CLI…`,
             description: registration.current ? 'Registered' : registration.registered ? 'Registered with another command' : 'Not registered',
@@ -503,7 +503,7 @@ export function activate(context: vscode.ExtensionContext): void {
       afterSaved: (provider) => afterProfileActivated(provider, { kind: 'saved', accountChanged: false }),
       back: async (provider) => { log(`${provider}: Accounts menu → Back to the AI Usage menu`); await vscode.commands.executeCommand('aiUsage.showDetails'); },
       signIn: async (provider, profile) => { await signInAgain(provider, profile.id); },
-      mcpRegistration: async (provider) => (await services.require().call<{ registration: McpRegistration }>('mcp.registration', { provider })).registration,
+      mcpRegistration: async (provider) => (await services.require().call('mcp.registration', { provider })).registration,
       registerMcp: registerMcpWithCli,
       sendKeepAlive: async (provider, profiles) => {
         const client = services.require();
@@ -685,7 +685,7 @@ export function activate(context: vscode.ExtensionContext): void {
       config.get<boolean>('aiUsage.chatTokens.enabled', true);
     await Promise.all((['claude', 'codex'] as const).map(async (provider) => {
       const client = enabled ? await services.ensure() : undefined;
-      const raw = client ? await client.call<Omit<SessionTokenUsage, 'updatedAt'> & { updatedAt: string } | null>('usage.sessionTokens', { provider }).catch(() => null) : null;
+      const raw = client ? await client.call('usage.sessionTokens', { provider }).catch(() => null) : null;
       const usage = raw ? { ...raw, updatedAt: new Date(raw.updatedAt) } : undefined;
       if (usage) {
         sessionTokens.set(provider, usage);

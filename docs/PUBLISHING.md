@@ -68,7 +68,7 @@ npm run publish:dry        # everything except the publish step (builds and pack
 
 `npm run publish` queries the Marketplace for the versions already published. If `package.json` has a version that
 exists there or is not newer than the latest, it offers to bump patch/minor/major (via `npm run bump`, which also
-opens a new changelog section) and refuses to continue otherwise. It then compiles, packages to a temporary folder
+opens a new changelog section) and refuses to continue otherwise. It then runs the full plugin, service and bridge test suite, packages to a temporary folder
 and publishes with `VSCE_PAT` or the stored `vsce login`. After a successful publish it asks whether to commit,
 tag and push; fill in `CHANGELOG.md` before answering `y`. Confirming runs:
 
@@ -79,7 +79,7 @@ git add -A && git commit -m "Release vX.Y.Z" && git tag vX.Y.Z && git push && gi
 The step is skipped (and the commands printed for manual use) when you answer `n`, when running with `--yes` or
 without a terminal, or when the tag already exists.
 
-Manual equivalent: `npm run bump`, `npm run compile`, `npx @vscode/vsce package --no-dependencies`,
+Manual equivalent: `npm run bump`, `npm test`, `npx @vscode/vsce package --no-dependencies`,
 `npx @vscode/vsce publish --no-dependencies`.
 
 `--no-dependencies` is required: the extension has no runtime npm dependencies and the flag stops `vsce` from
@@ -107,7 +107,7 @@ extension's (`npm run bump` and `dev:install` update `service/package.json` too)
 ```bash
 cd service
 npm pack --dry-run        # check the contents: bin/, out/ (no source maps), README.md, LICENSE
-npm publish               # prepublishOnly builds out/ first; needs `npm login`
+npm publish               # prepublishOnly runs the full repository suite and builds out/; needs `npm login`
 ```
 
 Check a tarball without publishing: `npm pack`, then `npm install -g --prefix <tmp> ai-usage-service-<version>.tgz`

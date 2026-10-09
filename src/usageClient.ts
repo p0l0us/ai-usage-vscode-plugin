@@ -3,7 +3,7 @@ import { deserializeUsageState, ProviderId, RotationDiagnostics, ServiceClient }
 export async function readServiceUsage(client: Pick<ServiceClient, 'liveUsage' | 'call'>, provider: ProviderId, force: boolean, diagnostics: boolean) {
   const view = await client.liveUsage(provider, force);
   const rotation = diagnostics && provider !== 'copilot'
-    ? await client.call<RotationDiagnostics>('rotation.diagnostics', { provider }) : undefined;
+    ? await client.call('rotation.diagnostics', { provider }) : undefined;
   return { ...deserializeUsageState(view), profileId: view.profileId, diagnostics: rotation };
 }
 export function rotationTooltipLines(diagnostics: RotationDiagnostics): string[] {

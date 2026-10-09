@@ -65,6 +65,47 @@ test('a login that is already saved is reported as a duplicate unless a copy is 
   assert.equal(f.store.profileCount('claude'), 2);
 });
 
+test('an identical credential is detected even when the account identity is unavailable', async (t) => {
+  const f = fixture(t);
+  const first = await f.store.importCredential('claude', 'Unknown', claudeLogin('unknown'));
+  const second = await f.store.importCredential('claude', 'Again', claudeLogin('unknown'));
+  assert.equal(first.status, 'saved');
+  assert.equal(second.status, 'duplicate');
+  assert.equal(second.twin.id, first.profile.id);
+  assert.equal(f.store.profileCount('claude'), 1);
+});
+
+test('concurrent imports commit one copy of a login and recheck duplicate names', async (t) => {
+  const f = fixture(t);
+  let releaseIdentity;
+  const gate = new Promise((resolve) => { releaseIdentity = resolve; });
+  let started;
+  const entered = new Promise((resolve) => { started = resolve; });
+  const store = new ProfileStore(path.join(f.root, 'concurrent-profiles.json'), () => undefined, async (_provider, credential) => {
+    started();
+    await gate;
+    const token = credential.claudeAiOauth.accessToken;
+    return { email: `${token}@example.com`, accountId: token };
+  });
+  const first = store.importCredential('claude', 'First', claudeLogin('same'));
+  await entered;
+  const second = store.importCredential('claude', 'Second', claudeLogin('same'));
+  releaseIdentity();
+  const [saved, duplicate] = await Promise.all([first, second]);
+  assert.equal(saved.status, 'saved');
+  assert.equal(duplicate.status, 'duplicate');
+  assert.equal(duplicate.twin.id, saved.profile.id);
+  assert.equal(store.profileCount('claude'), 1);
+
+  const sameName = await Promise.allSettled([
+    store.importCredential('claude', 'New', claudeLogin('other')),
+    store.importCredential('claude', 'new', claudeLogin('third'))
+  ]);
+  assert.equal(sameName.filter((result) => result.status === 'fulfilled').length, 1);
+  assert.match(sameName.find((result) => result.status === 'rejected').reason.message, /already exists/);
+  assert.equal(store.profileCount('claude'), 2);
+});
+
 test('reordering persists within the same profile scope without changing the active login', async (t) => {
   const f = fixture(t);
   const a = await f.store.saveNative('claude', { name: 'A' });

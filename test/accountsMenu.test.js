@@ -27,14 +27,14 @@ Module._load = function(id, ...args) {
       showInputBox: async () => inputBoxResponses.shift(),
       showQuickPick(items, options) { const response = quickPickResponses.shift(); return typeof response === 'function' ? response(items, options) : response; },
       createQuickPick: quickPickFactory(quickPickResponses, menus),
-      createTerminal(options) { const terminal = { options, shown: false, show() { this.shown = true; } }; terminals.push(terminal); return terminal; }
+      createTerminal(options) { const terminal = { options, shown: false, sent: [], show() { this.shown = true; }, sendText(value) { this.sent.push(value); } }; terminals.push(terminal); return terminal; }
     },
     commands: { executeCommand: async () => undefined },
     workspace: { fs: {}, getConfiguration: () => ({ get: (key, fallback) => fallback, update: async () => undefined }) }
   };
   return load.call(this, id, ...args);
 };
-const { AccountsMenu, usageDetail, pickScope } = require('../out/accountsMenu');
+const { AccountsMenu, usageDetail, pickScope, cliTerminalCommand } = require('../out/accountsMenu');
 Module._load = load;
 const { defaultConfig } = require('../service/out/configStore');
 
@@ -246,12 +246,23 @@ for (const provider of ['claude', 'codex']) {
     assert.equal(terminals.length, 1);
     assert.equal(terminals[0].shown, true);
     assert.deepEqual(terminals[0].options, {
-      name: `${provider === 'claude' ? 'Claude' : 'Codex'} · Backup`, shellPath: `/custom path/${provider}`,
-      shellArgs: provider === 'codex' ? ['-c', 'cli_auth_credentials_store="file"'] : [],
+      name: `${provider === 'claude' ? 'Claude' : 'Codex'} · Backup`,
+      ...(process.platform === 'win32' ? { shellPath: 'powershell.exe', shellArgs: ['-NoLogo', '-NoExit'] } : {}),
       cwd: folder ?? home, env: { HOME: home, [provider === 'claude' ? 'CLAUDE_CONFIG_DIR' : 'CODEX_HOME']: home }, strictEnv: true
     });
+    assert.deepEqual(terminals[0].sent, [cliTerminalCommand(`/custom path/${provider}`,
+      provider === 'codex' ? ['-c', 'cli_auth_credentials_store="file"'] : [])]);
   });
 }
+
+test('Open CLI quotes executable and arguments before sending them to the persistent shell', () => {
+  const command = cliTerminalCommand("/tmp/a b/cli'$(touch marker)", ['-c', 'value="file"; echo broken']);
+  if (process.platform === 'win32') {
+    assert.equal(command, "& '/tmp/a b/cli''$(touch marker)' '-c' 'value=\"file\"; echo broken'");
+  } else {
+    assert.equal(command, "'/tmp/a b/cli'\\''$(touch marker)' '-c' 'value=\"file\"; echo broken'");
+  }
+});
 
 test('Open CLI cancellation returns to the account menu without preparing or launching a CLI', async () => {
   const view = { provider: 'claude', title: 'Claude', profiles: [profile()], nativeUnsaved: false,

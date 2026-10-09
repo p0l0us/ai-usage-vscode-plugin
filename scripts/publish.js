@@ -222,7 +222,8 @@ function tagTargets(tag) {
     process.exit(1);
   }
 
-  run('npm', ['run', 'compile']);
+  // Package only a source tree whose shared engine, adapters and bridge pass their parity suite.
+  run('npm', ['test']);
 
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-release-'));
   const vsix = path.join(tmp, `${pkg.name}-${pkg.version}.vsix`);

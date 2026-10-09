@@ -6,6 +6,12 @@ import type { ExportedProfile, ImportKind } from './profileTransfer';
 import type { KeepAliveNowResult } from './accountAutomation';
 import type { ProviderId, LiveUsage } from './live';
 import type { UsageContext, UsageStateView } from './usageMonitor';
+import type { ProfileMetadata } from './profileStore';
+import type { RotationDiagnostics } from './rotationDiagnostics';
+import type { McpCommand, McpRegistration, RegistrationOutcome } from './mcpRegistration';
+import type { BridgeConnection } from './bridgeRuntime';
+import type { ProcessInfo } from './codexProcesses';
+import type { SessionTokenUsage } from './sessionTokens';
 
 /** The wire contract is independent of the package version. Additive v1 changes accept older clients. */
 export const SERVICE_PROTOCOL_VERSION = 1;
@@ -16,13 +22,17 @@ export type ConfigPatch = { values: Record<string, unknown>; baseRevision: numbe
 export type LifecycleState = 'starting' | 'running' | 'stopping' | 'stopped';
 export type RequestOptions = { timeoutMs?: number; signal?: AbortSignal };
 
-/** Core contract names and results, shared by every socket client. */
+type ProfileReference = { provider: AuthProvider; id?: string; ref?: string };
+type ImportSelection = Array<{ provider: AuthProvider; id: string }>;
+
+/** Contract names, parameters and results shared by every socket client. */
 export type ServiceCommands = {
   'reset.confirmations': { params: undefined; result: ResetConfirmation[] };
   'reset.claim': { params: { id: string }; result: ResetConfirmation | null };
   'reset.resolve': { params: { id: string; approve: boolean }; result: ResetResolution };
   'status.snapshot': { params: StatusFilter | undefined; result: StatusRead };
   'service.info': { params: undefined; result: ServiceInfo };
+  'service.status': { params: undefined; result: ServiceInfo & { clients: Array<{ id: number; client: string; version?: string }> } };
   snapshot: { params: undefined; result: Snapshot };
   'config.get': { params: undefined; result: ServiceConfig };
   'config.read': { params: undefined; result: ConfigState };
@@ -31,9 +41,44 @@ export type ServiceCommands = {
   'usage.live': { params: { provider: ProviderId; force?: boolean }; result: UsageStateView };
   'usage.context': { params: UsageContext; result: unknown };
   'session.folders': { params: { folders: string[] }; result: unknown };
+  'workspace.context': { params: { folders?: string[]; github?: UsageContext; sessionDirectory?: Partial<Record<AuthProvider, string>> }; result: { folders: string[]; github?: UsageContext; sessionDirectory?: Partial<Record<AuthProvider, string>> } };
   'profiles.list': { params: { provider: AuthProvider }; result: ProviderView };
+  'profiles.activate': { params: ProfileReference; result: ActivationResult };
+  'profiles.saveNative': { params: { provider: AuthProvider; name?: string; id?: string; allowDuplicate?: boolean; folder?: string }; result: SaveNativeResult };
+  'profiles.importCredential': { params: { provider: AuthProvider; name: string; credential: unknown; allowDuplicate?: boolean; folder?: string }; result: SaveNativeResult };
+  'profiles.rename': { params: ProfileReference & { name: string }; result: ProfileMetadata };
+  'profiles.reorder': { params: { provider: AuthProvider; id: string; step: -1 | 1 }; result: ProfileMetadata[] };
+  'profiles.delete': { params: ProfileReference; result: { profile: ProfileMetadata; wasActive: boolean } };
+  'profiles.export': { params: { selection?: ImportSelection }; result: ExportResult };
+  'profiles.planImport': { params: { text: string }; result: ImportPlanView[] };
+  'profiles.applyImport': { params: { text?: string; entries?: unknown[]; chosen?: ImportSelection }; result: ImportSummary };
+  'profiles.cli.prepare': { params: ProfileReference; result: CliPreparation };
+  'profiles.signIn.prepare': { params: ProfileReference; result: SignInPreparation };
+  'profiles.signIn.finish': { params: ProfileReference & { allowOtherAccount?: boolean }; result: SignInResult };
+  'profiles.signIn.cancel': { params: { provider: AuthProvider }; result: { ok: true } };
+  'automation.keepAliveNow': { params: ProfileReference & CheckWait & { callerReports?: boolean }; result: KeepAliveResult };
+  'automation.keepAliveAll': { params: { provider: AuthProvider; ids?: string[] } & CheckWait; result: KeepAliveAllResult };
+  'automation.cancel': { params: { token: string }; result: { ok: true } };
+  'automation.rotateNow': { params: { provider: AuthProvider } & CheckWait; result: { switched: boolean; reason?: string; activeProfileId?: string; activeProfileName?: string } };
+  'automation.tick': { params: undefined; result: { ok: true } };
+  'usage.read': { params: ProfileReference; result: UsageReadResult };
+  'usage.observe': { params: { provider: AuthProvider; id: string; usage: SerializedUsage }; result: unknown };
+  'usage.hintLimit': { params: { provider: AuthProvider; usage: SerializedUsage }; result: unknown };
+  'usage.sessionTokens': { params: { provider: AuthProvider }; result: (Omit<SessionTokenUsage, 'updatedAt'> & { updatedAt: string }) | null };
+  'rotation.diagnostics': { params: { provider: AuthProvider }; result: RotationDiagnostics };
+  'history.info': { params: undefined; result: HistoryInfo };
+  'history.summary': { params: { days?: number }; result: HistorySummaryResult };
+  'history.export': { params: { kind: HistoryExportKind }; result: { text: string; extension: string } };
+  'runtime.status': { params: undefined; result: { codexProxyActive: boolean } };
+  'runtime.staleCodex': { params: { switchedAt: number; parentPid: number }; result: ProcessInfo[] };
+  'mcp.registration': { params: { provider: AuthProvider }; result: { launcher: string; command: McpCommand; cli?: string; reason?: string; registration: McpRegistration } };
+  'mcp.register': { params: { provider: AuthProvider }; result: RegistrationOutcome };
+  'mcp.unregister': { params: { provider: AuthProvider }; result: { ok: boolean; detail: string } };
+  'bridge.ensure': { params: undefined; result: BridgeConnection };
+  'bridge.connection': { params: undefined; result: BridgeConnection };
+  'bridge.sync': { params: undefined; result: { ok: true } };
   'log.tail': { params: { lines: number }; result: string[] };
-  'service.shutdown': { params: undefined; result: unknown };
+  'service.shutdown': { params: undefined; result: { ok: true; mode: 'background' | 'embedded' } };
 };
 
 /**

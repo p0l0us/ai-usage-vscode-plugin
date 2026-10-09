@@ -74,7 +74,7 @@ for (const mode of ['embedded', 'background']) test(`${mode}: the bundled servic
   const command = mcpCommand(fixture.home);
   assert.deepEqual(command.args, [path.resolve(__dirname, '../service/bin/ai-usage.js'), 'mcp', '--home', fixture.home]);
   const adapter = stdioAdapter(fixture, command);
-  assert.deepEqual((await adapter.request('tools/list')).result.tools.map(tool => tool.name), ['list_accounts', 'refresh_usage']);
+  assert.deepEqual((await adapter.request('tools/list')).result.tools.map(tool => tool.name), ['list_accounts', 'refresh_usage', 'get_usage_status', 'wait_for_usage_updates']);
   const usage = await adapter.request('tools/call', { name: 'list_accounts', arguments: { service: 'claude' } });
   assert.equal(usage.result.structuredContent.services[0].activeUsage.freshness.state, 'fresh');
   const pid = fixture.client.info.pid;
@@ -123,7 +123,7 @@ test('the installed service adapter stays usable after the editor client closes 
   editor.close();
   const adapter = stdioAdapter(fixture, command);
   assert.equal((await adapter.request('initialize', { protocolVersion: '2025-06-18' })).result.serverInfo.name, 'ai-usage');
-  assert.equal((await adapter.request('tools/list')).result.tools.length, 4, 'installed adapter works without the editor');
+  assert.equal((await adapter.request('tools/list')).result.tools.length, 6, 'installed adapter works without the editor');
   const observer = await ServiceClient.connect({ home: fixture.home, client: 'lifetime-observer' }); fixture.cleanups.push(() => observer.close());
   assert.equal((await observer.serviceInfo()).pid, pid);
   assert.equal(daemon.exitCode, null);

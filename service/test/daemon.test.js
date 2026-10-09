@@ -14,6 +14,7 @@ process.on('exit', () => fs.rmSync(sandbox, { recursive: true, force: true }));
 const { startServiceHost } = require('../out/daemon');
 const { connectService } = require('../out/client');
 const { infoFile, readServiceInfo, socketPath } = require('../out/paths');
+const { stopService } = require('../out/installer');
 
 test('an embedded host serves the socket, refuses a second host, and another can take over once it stops', async (t) => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-host-'));
@@ -56,4 +57,25 @@ test('a client asking the embedded host to shut down stops it like the daemon', 
   await host.stopped;
   assert.equal(readServiceInfo(home), undefined);
   client.close();
+});
+
+test('installer stop closes an embedded engine without signaling its hosting process', async (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-embedded-stop-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(home, 'config.json'), JSON.stringify({ claude: { enabled: false }, codex: { enabled: false, autoReset: { enabled: false } }, copilot: { enabled: false }, bridge: { autoStart: false } }));
+  const host = await startServiceHost({ home, mode: 'embedded' });
+  t.after(() => host.stop());
+  const originalKill = process.kill;
+  const signals = [];
+  process.kill = function (pid, signal) {
+    if (pid === process.pid && signal === 'SIGTERM') { signals.push(signal); return true; }
+    return originalKill.call(process, pid, signal);
+  };
+  try {
+    const stopped = await stopService(home, 2_000);
+    assert.equal(stopped.ok, true, stopped.detail);
+    await host.stopped;
+    assert.deepEqual(signals, []);
+    assert.equal(readServiceInfo(home), undefined);
+  } finally { process.kill = originalKill; }
 });

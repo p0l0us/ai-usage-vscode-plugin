@@ -420,7 +420,7 @@ export function startService(home: string): StepResult {
   return { ok: true, detail: 'started detached' };
 }
 
-/** Asks the running daemon to stop, then waits for its process to go; a stubborn one gets SIGTERM. */
+/** Asks the running engine to stop. Only a daemon owns its process and may be signaled. */
 export async function stopService(home: string, waitMs = 8_000): Promise<StepResult> {
   fs.mkdirSync(path.join(home, 'state'), { recursive: true, mode: 0o700 });
   fs.writeFileSync(path.join(home, 'state', 'service-stopped'), '', { mode: 0o600 });
@@ -435,11 +435,19 @@ export async function stopService(home: string, waitMs = 8_000): Promise<StepRes
   } catch { /* Not answering; fall through to the service manager and the pid. */ }
   if (process.platform === 'linux' && systemdRegistered(home) && systemdUserAvailable()) { run('systemctl', ['--user', 'stop', SYSTEMD_UNIT]); }
   if (!info || !alive) { return { ok: true, detail: asked ? 'stopped' : 'was not running' }; }
+  const embedded = info.mode === 'embedded' || info.embedded === true;
+  const sameInstance = () => {
+    const current = readServiceInfo(home);
+    return Boolean(current && (info.instanceId ? current.instanceId === info.instanceId :
+      current.pid === info.pid && current.startedAt === info.startedAt));
+  };
   const deadline = Date.now() + waitMs;
   while (Date.now() < deadline) {
-    if (!processAlive(info.pid)) { return { ok: true, detail: 'stopped' }; }
+    if (!sameInstance() || (!embedded && !processAlive(info.pid))) { return { ok: true, detail: 'stopped' }; }
     await new Promise((resolve) => setTimeout(resolve, 200));
   }
+  if (embedded) { return { ok: false, detail: 'embedded account service did not stop' }; }
+  if (!sameInstance()) { return { ok: true, detail: 'stopped' }; }
   try { process.kill(info.pid, 'SIGTERM'); } catch { /* Gone meanwhile. */ }
   await new Promise((resolve) => setTimeout(resolve, 500));
   return processAlive(info.pid) ? { ok: false, detail: `process ${info.pid} did not stop` } : { ok: true, detail: 'stopped' };

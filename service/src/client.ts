@@ -11,7 +11,7 @@ import type { ProfileMetadata } from './profileStore';
 import type {
   ResetConfirmation, ResetResolution, ConfigState, RequestOptions, ActivationResult, EventName, ExportResult, HelloResult, ImportPlanView, ImportSummary, KeepAliveResult, ProviderView, SaveNativeResult,
   CheckWait, HistoryExportKind, HistoryInfo, HistorySummaryResult, KeepAliveAllResult, SerializedUsage, ServiceEvent, ServiceInfo, SignInPreparation,
-  SignInResult, Snapshot, UsageReadResult, CliPreparation
+  SignInResult, Snapshot, UsageReadResult, CliPreparation, ServiceCommands
 } from './protocol';
 
 /** Why a connection could not be made, so a caller can install, start or just report. */
@@ -69,8 +69,8 @@ export class ServiceClient extends EventEmitter {
 
   supports(capability: string): boolean { return this.capabilities.includes(capability); }
 
-  call<T>(method: string, params?: unknown, options?: number | RequestOptions): Promise<T> {
-    return this.rpc.call(method, params, options) as Promise<T>;
+  call<K extends keyof ServiceCommands>(method: K, params?: ServiceCommands[K]['params'], options?: number | RequestOptions): Promise<ServiceCommands[K]['result']> {
+    return this.rpc.call(method, params, options) as Promise<ServiceCommands[K]['result']>;
   }
 
   resetConfirmations(): Promise<ResetConfirmation[]> { return this.call('reset.confirmations'); }

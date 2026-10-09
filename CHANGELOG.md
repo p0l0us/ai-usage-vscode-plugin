@@ -1,6 +1,9 @@
 # Changelog
 
-## 1.0.19 (unreleased)
+## 1.0.20 (unreleased)
+
+- Open CLI now keeps the terminal shell open when a saved account's Codex or Claude process exits, so authentication errors remain visible and the account can be signed in again. Concurrent imports cannot save duplicate credentials, and embedded service shutdown never signals the VS Code host process.
+- The socket client checks every service command against the shared TypeScript contract. Both extension and service publishing run the full parity suite before packaging.
 
 - Claude and Codex account menus offer **Open CLI…**: choose an account to launch its CLI in a VS Code terminal using its persistent home. Each menu now has a single **Settings…** entry.
 

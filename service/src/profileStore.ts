@@ -202,6 +202,18 @@ export class ProfileStore {
     private readonly options: ProfileStoreOptions = {}
   ) {}
 
+  /** New-profile validation includes asynchronous identity lookup; keep its read and commit together. */
+  private saveQueue: Promise<void> = Promise.resolve();
+
+  private async serializedSave<T>(operation: () => Promise<T>): Promise<T> {
+    const previous = this.saveQueue;
+    let release!: () => void;
+    this.saveQueue = new Promise<void>((resolve) => { release = resolve; });
+    await previous;
+    try { return await operation(); }
+    finally { release(); }
+  }
+
   /** The project folders connected clients declared, in the order they were first declared. */
   private projectFolders: string[] = [];
   /** Each project profile file as last read, by path, so an unchanged file is neither parsed nor written again. */
@@ -434,13 +446,18 @@ export class ProfileStore {
     try { return await this.identityOf(provider, credential); } catch { return {}; }
   }
 
-  /** The saved profile that already holds this login, by email; undefined when the login cannot be identified. */
+  /** The saved profile that already holds this login, by identity or matching credential. */
   async duplicateOf(provider: AuthProvider, credential: StoredCredential): Promise<ProfileMetadata | undefined> {
-    let email: string | undefined;
-    try { email = (await this.identityOf(provider, credential)).email; } catch { return undefined; }
-    const twin = email ? this.state()[provider].profiles.find((profile) => profile.email === email) : undefined;
-    if (twin) { this.log(`${provider}: login ${email} is already saved as "${twin.name}"`); }
+    const identity = await this.identity(provider, credential);
+    const twin = this.duplicateProfile(provider, credential, identity, this.state());
+    if (twin) { this.log(`${provider}: login is already saved as "${twin.name}"`); }
     return twin ? strip(twin) : undefined;
+  }
+
+  private duplicateProfile(provider: AuthProvider, credential: StoredCredential, identity: CredentialIdentity, state: ProfileFile): StoredProfile | undefined {
+    return state[provider].profiles.find((profile) =>
+      Boolean((identity.email && profile.email === identity.email) || (identity.accountId && profile.accountId === identity.accountId) ||
+        (profile.credential && isSameCredentialOwner(provider, profile.credential, credential))));
   }
 
   async credential(provider: AuthProvider, id: string): Promise<StoredCredential | undefined> {
@@ -597,32 +614,43 @@ export class ProfileStore {
   }
 
   private async saveNew(provider: AuthProvider, rawName: string, credential: StoredCredential, active: boolean, allowDuplicate = false, folderOption?: string): Promise<SaveOutcome> {
-    const invalid = validateName(rawName);
-    if (invalid) { throw new Error(invalid); }
-    const name = rawName.trim();
-    const folder = this.resolveScope(folderOption);
-    const state = this.state();
-    const providerState = state[provider];
-    if (providerState.profiles.length >= MAX_PROFILES) {
-      throw new Error(`${TITLES[provider]} already has the maximum of ${MAX_PROFILES} saved profiles.`);
-    }
-    if (providerState.profiles.some((profile) => profile.name.toLowerCase() === name.toLowerCase())) {
-      throw new Error(`A ${TITLES[provider]} profile named “${name}” already exists.`);
-    }
-    if (!allowDuplicate) {
-      const twin = await this.duplicateOf(provider, credential);
-      if (twin) { return { status: 'duplicate', twin, warning: duplicateWarning(provider, twin) }; }
-    }
-    const now = new Date().toISOString();
-    const profile: StoredProfile = { id: randomUUID(), name, createdAt: now, updatedAt: now, ...(folder ? { folder } : {}), credential };
-    // Re-read: the duplicate check may have taken a while, and the file is the only truth.
-    const fresh = this.state();
-    fresh[provider].profiles.push(profile);
-    if (active) { fresh[provider].activeProfileId = profile.id; }
-    this.updateState(fresh);
-    await this.recordIdentity(provider, profile.id, credential);
-    this.log(`${provider}: saved authentication profile "${name}"${active ? ' (active)' : ''}${folder ? ` in project ${folder}` : ''}`);
-    return { status: 'saved', profile: this.profile(provider, profile.id)! };
+    return this.serializedSave(async () => {
+      const invalid = validateName(rawName);
+      if (invalid) { throw new Error(invalid); }
+      const name = rawName.trim();
+      const folder = this.resolveScope(folderOption);
+      const state = this.state();
+      const providerState = state[provider];
+      if (providerState.profiles.length >= MAX_PROFILES) {
+        throw new Error(`${TITLES[provider]} already has the maximum of ${MAX_PROFILES} saved profiles.`);
+      }
+      if (providerState.profiles.some((profile) => profile.name.toLowerCase() === name.toLowerCase())) {
+        throw new Error(`A ${TITLES[provider]} profile named “${name}” already exists.`);
+      }
+      const identity = allowDuplicate ? undefined : await this.identity(provider, credential);
+      const now = new Date().toISOString();
+      const profile: StoredProfile = { id: randomUUID(), name, createdAt: now, updatedAt: now, ...(folder ? { folder } : {}), credential };
+      // Re-read: an unrelated synchronous mutation may have run during the identity lookup.
+      const fresh = this.state();
+      if (fresh[provider].profiles.length >= MAX_PROFILES) {
+        throw new Error(`${TITLES[provider]} already has the maximum of ${MAX_PROFILES} saved profiles.`);
+      }
+      if (fresh[provider].profiles.some((existing) => existing.name.toLowerCase() === name.toLowerCase())) {
+        throw new Error(`A ${TITLES[provider]} profile named “${name}” already exists.`);
+      }
+      const twin = !allowDuplicate ? this.duplicateProfile(provider, credential, identity ?? {}, fresh) : undefined;
+      if (twin) {
+        this.log(`${provider}: login is already saved as "${twin.name}"`);
+        const metadata = strip(twin);
+        return { status: 'duplicate', twin: metadata, warning: duplicateWarning(provider, metadata) };
+      }
+      fresh[provider].profiles.push(profile);
+      if (active) { fresh[provider].activeProfileId = profile.id; }
+      this.updateState(fresh);
+      await this.recordIdentity(provider, profile.id, credential);
+      this.log(`${provider}: saved authentication profile "${name}"${active ? ' (active)' : ''}${folder ? ` in project ${folder}` : ''}`);
+      return { status: 'saved', profile: this.profile(provider, profile.id)! };
+    });
   }
 
   rename(provider: AuthProvider, id: string, rawName: string): ProfileMetadata {

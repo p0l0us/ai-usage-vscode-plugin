@@ -22,6 +22,14 @@ const TITLES: Record<AuthProvider, string> = { claude: 'Claude', codex: 'Codex' 
 const PROVIDERS: AuthProvider[] = ['claude', 'codex'];
 const MAX_PROFILES = 20;
 
+/** Run the CLI from a shell so an authentication or startup error remains visible after it exits. */
+export function cliTerminalCommand(cli: string, args: string[]): string {
+  const quote = process.platform === 'win32'
+    ? (value: string) => `'${value.replace(/'/g, "''")}'`
+    : (value: string) => `'${value.replace(/'/g, "'\\''")}'`;
+  return `${process.platform === 'win32' ? '& ' : ''}${[cli, ...args].map(quote).join(' ')}`;
+}
+
 type ProfileItem = vscode.QuickPickItem & {
   profile?: ProfileView;
   /** Set when the profile has nothing left in any window; selecting it is a no-op warning, not an activation. */
@@ -328,13 +336,13 @@ export class AccountsMenu {
     const prepared = await client.prepareCli(view.provider, selected.profile.id);
     const terminal = vscode.window.createTerminal({
       name: `${TITLES[view.provider]} · ${selected.profile.name}`,
-      shellPath: prepared.cli,
-      shellArgs: prepared.args,
+      ...(process.platform === 'win32' ? { shellPath: 'powershell.exe', shellArgs: ['-NoLogo', '-NoExit'] } : {}),
       cwd: selected.profile.folder ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? prepared.cwd,
       env: prepared.env,
       strictEnv: true
     });
     terminal.show();
+    terminal.sendText(cliTerminalCommand(prepared.cli, prepared.args));
     return true;
   }
 

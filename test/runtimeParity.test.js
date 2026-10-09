@@ -67,6 +67,19 @@ for (const mode of ['background', 'embedded']) {
     await assert.rejects(reconnect.patchConfig({ 'accountService.enabled': false }, latest.revision), error => error.code === 'config-local-setting');
   });
 
+  test(`${mode}: simultaneous imports through separate clients keep one credential`, async t => {
+    const f = await runtimeFixture(t, mode);
+    const peer = await f.connect('concurrent-import-peer');
+    const credential = { claudeAiOauth: { accessToken: 'shared-login' } };
+    const outcomes = await Promise.all([
+      f.client.importCredential('claude', 'First', credential),
+      peer.importCredential('claude', 'Second', credential)
+    ]);
+    assert.deepEqual(outcomes.map((outcome) => outcome.status).sort(), ['duplicate', 'saved']);
+    assert.equal((await f.client.list('claude')).profiles.length, 1);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(f.home, 'profiles.json'), 'utf8')).claude.profiles.length, 1);
+  });
+
   test(`${mode}: typed errors and incompatible protocol versions have the same client behavior`, async t => {
     const f = await runtimeFixture(t, mode);
     await assert.rejects(f.client.call('unknown.parity.method'), error => error instanceof RpcError && error.code === 'unknown_method');
@@ -126,7 +139,7 @@ for (const mode of ['background', 'embedded']) {
     const initialized = await mcp.request('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'parity' } });
     assert.equal(initialized.result.serverInfo.name, 'ai-usage');
     const tools = await mcp.request('tools/list');
-    assert.deepEqual(tools.result.tools.map(tool => tool.name), ['list_accounts', 'refresh_usage']);
+    assert.deepEqual(tools.result.tools.map(tool => tool.name), ['list_accounts', 'refresh_usage', 'get_usage_status', 'wait_for_usage_updates']);
     const result = await mcp.request('tools/call', { name: 'list_accounts', arguments: { service: 'claude' } });
     assert.equal(result.result.isError, undefined);
     const summary = result.result.structuredContent.services[0];

@@ -1,4 +1,5 @@
 import { ServiceClient } from '../service/out';
+import type { ServiceCommands } from '../service/out/protocol';
 import * as vscode from 'vscode';
 import * as http from 'http';
 import * as fs from 'fs/promises';
@@ -19,9 +20,9 @@ type Diagnosis = { backend: string; status: string; models?: Catalog[]; code?: s
 
 let serviceConnection: (() => Promise<Pick<ServiceClient, 'call'>>) | undefined;
 export function configureBridgeService(connect: () => Promise<Pick<ServiceClient, 'call'>>): void { serviceConnection = connect; }
-export async function bridgeServiceCall<T>(method: string): Promise<T> {
+export async function bridgeServiceCall<K extends 'bridge.connection' | 'bridge.ensure' | 'bridge.sync'>(method: K): Promise<ServiceCommands[K]['result']> {
   if (!serviceConnection) throw new Error('The AI Usage service connection is not ready.');
-  return (await serviceConnection()).call<T>(method);
+  return (await serviceConnection()).call(method);
 }
 
 // Credentials stay on this host. Never follow redirects or send the local token
@@ -31,7 +32,7 @@ export async function bridgeGet<T>(route: string, cancellation?: vscode.Cancella
 }
 
 export async function bridgeConnection(): Promise<{ endpoint: URL; token: string; workspaceContext?: unknown }> {
-  const connection = await bridgeServiceCall<{ endpoint: string; token: string; workspaceContext?: unknown }>('bridge.connection');
+  const connection = await bridgeServiceCall('bridge.connection');
   const endpoint = new URL(connection.endpoint);
   if (endpoint.protocol !== 'http:' || !['127.0.0.1', 'localhost', '[::1]'].includes(endpoint.hostname) || endpoint.username || endpoint.password) {
     throw new Error('The CLI bridge URL must be a loopback HTTP address.');
