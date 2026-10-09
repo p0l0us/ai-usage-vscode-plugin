@@ -14,7 +14,7 @@ function quickPickFactory(responses, menus = []) {
       show() {
         menu.title = picker.title; menu.shown = true; menus.push(menu);
         const response = responses.shift();
-        const item = typeof response === 'function' ? response(picker.items, { title: picker.title, placeHolder: picker.placeholder }) : response;
+        const item = typeof response === 'function' ? response(picker.items, { title: picker.title, placeHolder: picker.placeholder }, picker) : response;
         Promise.resolve(item).then((picked) => {
           if (picked) { picker.selectedItems = [picked]; picker.activeItems = [picked]; listeners.accept.forEach((listener) => listener()); }
           else { picker.hide(); }

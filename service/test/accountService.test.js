@@ -23,6 +23,7 @@ function fixture(t, options = {}) {
   const logs = [], events = [], probes = [];
   const values = { a: [10, 10], b: [10, 10], ...options.values };
   const service = new AccountService({
+    ownership: options.ownership,
     home, version: 'test', fetchUsage: async provider => ({ kind: 'ok', usage: usage(provider, [50, 5]) }), log: (message) => logs.push(message),
     identityOf: async (provider, credential) => provider === 'codex'
       ? { email: `${credential.tokens?.account_id}@example.com`, accountId: credential.tokens?.account_id }
@@ -38,13 +39,42 @@ function fixture(t, options = {}) {
     }
   });
   service.events.on('event', (event) => events.push(event));
-  t.after(() => {
-    service.dispose();
+  t.after(async () => {
+    await service.dispose();
     for (const [key, value] of Object.entries(env)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
     fs.rmSync(root, { recursive: true, force: true });
   });
   return { root, home, service, logs, events, probes, values, claudeHome, call: (method, params) => service.handle(method, params) };
 }
+
+test('startup refreshes every saved account with keep-alive and rotation off, and cached views publish updates', async t => {
+  const f = fixture(t, { ownership: { held: () => true, assertHeld() {} }, values: { 'acc-1': [30, 5], c: [20, 5] } });
+  await f.call('config.set', { values: { 'claude.autoRotate.enabled': false, 'codex.autoRotate.enabled': false,
+    'codex.autoReset.enabled': false, 'bridge.autoStart': false, 'copilot.enabled': false } });
+  const saved = await f.call('profiles.saveNative', { provider: 'claude', name: 'Work' });
+  await f.call('profiles.importCredential', { provider: 'claude', name: 'Backup', credential: claudeLogin('b') });
+  await f.call('profiles.importCredential', { provider: 'claude', name: 'Third', credential: claudeLogin('c') });
+  await f.call('profiles.saveNative', { provider: 'codex', name: 'Codex' });
+  f.service.automation.observe('claude', saved.profile.id, usage('claude', [75, 5]));
+  f.events.length = 0;
+  f.service.start();
+  const deadline = Date.now() + 5_000;
+  while (f.probes.length < 4 || f.events.filter(event => event.event === 'stateChanged').length < 4) {
+    assert.ok(Date.now() < deadline, 'startup completed the saved-account refresh');
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  assert.deepEqual(f.probes.map(([provider, token, keepAlive]) => [provider, token, keepAlive]).sort(),
+    [['claude', 'a', false], ['claude', 'b', false], ['claude', 'c', false], ['codex', 'acc-1', false]].sort());
+  for (const provider of ['claude', 'codex']) {
+    const view = await f.call('profiles.list', { provider });
+    assert.ok(view.profiles.every(profile => profile.usage && profile.checkedAt));
+    assert.ok(f.events.some(event => event.event === 'usageChanged' && event.provider === provider));
+    assert.deepEqual(await f.call('profiles.list', { provider }), view, 'another window reads the same cached data');
+  }
+  assert.equal(f.probes.length, 4, 'reading views never probes the providers');
+  await f.service.tick();
+  assert.equal(f.probes.length, 4, 'a fresh cache is reused on the next tick');
+});
 
 test('profiles are listed as views with numbers, active marks, readings and problems', async (t) => {
   const f = fixture(t, { keepAliveErrors: { b: 'Keep-alive CLI exited with code 1: out of credits' } });
@@ -63,7 +93,7 @@ test('profiles are listed as views with numbers, active marks, readings and prob
   assert.ok(backup.checkedAt);
   assert.deepEqual(backup.problems.map((problem) => [problem.check, problem.label]), [['keepAlive', 'Insufficient credits']]);
   assert.equal(view.keepAlive, false);
-  assert.equal(view.strategySummary, 'soonestReset, limit, 5h ≥ 95%, 7d ≥ 99.5%');
+  assert.equal(view.strategySummary, 'leastWaste, proactive, 5h ≥ 95%, 7d ≥ 99.5%');
   assert.ok(!('credential' in backup));
 });
 
@@ -125,7 +155,7 @@ test('an observed reading of the active account is stored, and a hand-run sweep 
   assert.equal(view.activeNumber, 2);
   const again = await f.call('automation.rotateNow', { provider: 'claude' });
   assert.equal(again.switched, false);
-  assert.match(again.reason, /below its thresholds/);
+  assert.match(again.reason, /no candidate scored clearly better/);
 });
 
 test('configuration changes are validated, saved, announced and reloaded from a hand-edited file', async (t) => {
@@ -139,11 +169,11 @@ test('configuration changes are validated, saved, announced and reloaded from a 
   await f.call('config.set', { values: { 'codex.keepAlive.periodHours': 12 } });
   assert.equal(f.events.filter((event) => event.event === 'configChanged').length, 1, 'an unchanged value announces nothing');
   const edited = JSON.parse(fs.readFileSync(path.join(f.home, 'config.json'), 'utf8'));
-  edited.claude.autoRotate.strategy = 'leastWaste';
+  edited.claude.autoRotate.strategy = 'evenPace';
   await new Promise((resolve) => setTimeout(resolve, 20));
   fs.writeFileSync(path.join(f.home, 'config.json'), JSON.stringify(edited));
   await f.call('automation.tick');
-  assert.equal((await f.call('config.get')).claude.autoRotate.strategy, 'leastWaste');
+  assert.equal((await f.call('config.get')).claude.autoRotate.strategy, 'evenPace');
   assert.equal(f.events.filter((event) => event.event === 'configChanged').length, 2);
 });
 

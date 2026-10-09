@@ -2,7 +2,7 @@
   "name": "ai-usage-vscode-plugin",
   "displayName": "AI subscription management and usage",
   "description": "Manage your Claude Code, Codex and GitHub Copilot subscriptions and see what is left of them: switch between saved accounts without signing in again, keep them warm, rotate on exhaustion, and read live 5h/7d windows, premium requests and org billing in the status bar and chat input. Open source, contributions welcome.",
-  "version": "1.0.12",
+  "version": "1.0.13",
   "publisher": "p0l0us",
   "license": "GPL-3.0-only",
   "repository": {
@@ -7180,7 +7180,7 @@
               "leastWaste",
               "sequential"
             ],
-            "default": "soonestReset",
+            "default": "leastWaste",
             "enumDescriptions": [
               "Soonest reset first: use the account whose weekly window resets soonest, so allowance about to expire is spent first. An account far ahead of an even spend with more than half its week left goes to the back of the queue.",
               "Even pace: use the account furthest below a straight line from 0% at the start of its week to 100% at its reset. No account runs out early; best combined with the proactive trigger.",
@@ -7196,7 +7196,7 @@
               "limit",
               "proactive"
             ],
-            "default": "limit",
+            "default": "proactive",
             "enumDescriptions": [
               "Switch only when the active account reaches a rotation threshold.",
               "Also switch when the strategy ranks another account clearly better, at most once per `#aiUsage.claude.autoRotate.minStayMinutes#`. Has no effect with the sequential strategy."
@@ -7207,7 +7207,7 @@
           "aiUsage.claude.autoRotate.minStayMinutes": {
             "type": "number",
             "minimum": 5,
-            "default": 30,
+            "default": 15,
             "markdownDescription": "**Claude minimum stay before a proactive switch, in minutes.** With the `proactive` trigger, an account that became active, automatically or by hand, is kept at least this long unless it reaches its limit.",
             "order": 13
           },
@@ -7386,7 +7386,7 @@
               "leastWaste",
               "sequential"
             ],
-            "default": "sequential",
+            "default": "leastWaste",
             "order": 12,
             "enumDescriptions": [
               "Soonest reset first: spend weekly allowance that expires sooner, except an account far ahead of an even pace early in its week.",
@@ -7402,7 +7402,7 @@
               "limit",
               "proactive"
             ],
-            "default": "limit",
+            "default": "proactive",
             "order": 13,
             "enumDescriptions": [
               "Switch only when the active account reaches a rotation threshold.",
@@ -7413,7 +7413,7 @@
           "aiUsage.codex.autoRotate.minStayMinutes": {
             "type": "number",
             "minimum": 5,
-            "default": 30,
+            "default": 15,
             "order": 14,
             "markdownDescription": "**Codex minimum stay before a proactive switch.** Limit-triggered rotation ignores this stay."
           },

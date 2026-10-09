@@ -222,7 +222,7 @@ export const SETTINGS_CATALOG = [
       "leastWaste",
       "sequential"
     ],
-    "default": "soonestReset",
+    "default": "leastWaste",
     "description": "**Claude rotation strategy.** How automatic rotation chooses the account to switch to. Ranking uses the readings already collected for each account (see `#aiUsage.claude.keepAlive.enabled#`); the chosen account is always read again and sent a keep-alive before switching."
   },
   {
@@ -232,14 +232,14 @@ export const SETTINGS_CATALOG = [
       "limit",
       "proactive"
     ],
-    "default": "limit",
+    "default": "proactive",
     "description": "**Claude rotation trigger.** When automatic rotation switches accounts."
   },
   {
     "key": "claude.autoRotate.minStayMinutes",
     "type": "number",
     "min": 5,
-    "default": 30,
+    "default": 15,
     "description": "**Claude minimum stay before a proactive switch, in minutes.** With the `proactive` trigger, an account that became active, automatically or by hand, is kept at least this long unless it reaches its limit."
   },
   {
@@ -389,7 +389,7 @@ export const SETTINGS_CATALOG = [
       "leastWaste",
       "sequential"
     ],
-    "default": "sequential",
+    "default": "leastWaste",
     "description": "**Codex rotation strategy.** Ranks eligible accounts using saved readings, then checks the selected account again before switching. Reset-aware timing also applies to every strategy."
   },
   {
@@ -399,14 +399,14 @@ export const SETTINGS_CATALOG = [
       "limit",
       "proactive"
     ],
-    "default": "limit",
+    "default": "proactive",
     "description": "**Codex rotation trigger.** When automatic rotation switches accounts."
   },
   {
     "key": "codex.autoRotate.minStayMinutes",
     "type": "number",
     "min": 5,
-    "default": 30,
+    "default": 15,
     "description": "**Codex minimum stay before a proactive switch.** Limit-triggered rotation ignores this stay."
   },
   {

@@ -154,7 +154,21 @@ export class AccountsMenu {
         placeHolder: 'Choose a profile to activate, or manage saved profiles',
         matchOnDescription: true,
         matchOnDetail: true
-      }, (candidate) => candidate.action === 'back', async () => hooks?.back?.(provider));
+      }, (candidate) => candidate.action === 'back', async () => hooks?.back?.(provider), picker => {
+        const update = () => {
+          const current = this.services.views[provider];
+          if (!current) return;
+          const key = (item: ProfileItem) => item.profile?.id ?? item.action ?? item.label;
+          const active = new Set(picker.activeItems.map(key));
+          picker.items = this.items(current, this.services.config ?? config, Boolean(hooks?.back), mcp, hooks?.activeUsage);
+          picker.activeItems = picker.items.filter(item => active.has(key(item)));
+        };
+        const state = this.services.onStateChanged?.(changed => { if (!changed || changed === provider) update(); });
+        const events = this.services.onEvent?.(event => { if (event.event === 'configChanged') update(); });
+        // A reading may have arrived between fetching the initial view and subscribing.
+        update();
+        return { dispose: () => { state?.dispose(); events?.dispose(); } };
+      });
       if (!item || item.action === 'back') { return; }
       try {
         if (item.profile) {
@@ -250,7 +264,7 @@ export class AccountsMenu {
           profile.limit.readOnly ? 'At its usage limit' : profile.limit.dimmed ? 'Fable limit reached' : undefined,
           loginProblem ? 'Login problem' : undefined].filter(Boolean).join(' · ') || undefined,
         detail: usageDetail(profile, profile.active ? activeUsage?.(provider, profile.id) : undefined) ?? (profile.checkedAt
-          ? `Last checked ${new Date(profile.checkedAt).toLocaleString()} · its usage windows have reset since; checked again by a keep-alive or rotation`
+          ? `Last checked ${new Date(profile.checkedAt).toLocaleString()} · waiting for the service to refresh usage after reset`
           : `Saved ${new Date(profile.updatedAt).toLocaleString()} · Usage not checked yet`),
         profile,
         readOnly: profile.limit.readOnly,

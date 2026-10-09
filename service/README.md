@@ -61,7 +61,13 @@ the OS releases the endpoint when its process exits.
 
 For example: `ai-usage config codex.proxy.enabled true`,
 `ai-usage config codex.advanced.rotationDiagnostics true`, and `ai-usage rotation-weights codex`.
-Use `ai-usage service start|stop` for background process lifecycle.
+Use `ai-usage service start|stop` for background process lifecycle. A manual stop prevents automatic
+restarts from editor reconnects or CLI reads until an explicit Start or Restart.
+
+The service refreshes every saved account of an enabled provider at startup without keep-alive prompts,
+then refreshes at the provider check interval and after quota resets. Cached readings survive client
+disconnects and are published to connected editors through update events. Provider budgets, backoff
+and interactive holds still apply.
 The proxy uses one ownership lease per OS user, independent of configured port (default `43117`). A port conflict
 is reported rather than silently choosing another port.
 

@@ -87,6 +87,28 @@ test('the usage detail line shows every window, the check time and known problem
   assert.match(usageDetail(codex), /Earned resets: 1 of 2 observed available \(next expires in 2h\)/);
 });
 
+test('an open account picker updates from service events and retains the focused account', async () => {
+  const views = { claude: { provider: 'claude', title: 'Claude', profiles: [profile({ active: true })],
+    activeProfileId: 'a', nativeUnsaved: false, checkingActive: false, keepAlive: false, autoRotate: false, strategySummary: '', scopes } };
+  const f = fixture(views);
+  const listeners = new Set();
+  f.services.onStateChanged = listener => { listeners.add(listener); return { dispose: () => listeners.delete(listener) }; };
+  quickPickResponses.push(async (items, options, picker) => {
+    const focused = items.find(item => item.profile?.id === 'a');
+    picker.activeItems = [focused];
+    assert.doesNotMatch(focused.detail, /5h:/);
+    views.claude = { ...views.claude, profiles: [profile({ active: true, usage: { provider: 'claude', title: 'Claude',
+      fetchedAt: new Date().toISOString(), windows: [{ label: '5h', usedPercent: 42 }] } })] };
+    f.services.views.claude = views.claude;
+    for (const listener of listeners) listener('claude');
+    assert.match(picker.items.find(item => item.profile?.id === 'a').detail, /5h: 42%/);
+    assert.equal(picker.activeItems[0].profile.id, 'a');
+    return undefined;
+  });
+  await f.menu.show('claude');
+  assert.equal(listeners.size, 0, 'closing the picker releases its subscription');
+});
+
 test('usage displays round percentages while stored and live readings retain their precision', () => {
   const now = new Date();
   const saved = profile({ usage: { provider: 'claude', title: 'Claude', fetchedAt: now.toISOString(), windows: [

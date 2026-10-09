@@ -69,6 +69,51 @@ async function until(condition, timeoutMs = 8_000) {
   }
 }
 
+test('the background service survives window disposal and a manual stop is respected by reopened windows and CLI reads', async t => {
+  const { installService, stopService, readServiceInfo } = require('../service/out');
+  const { spawnSync } = require('node:child_process');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-background-'));
+  const previous = process.env.AI_USAGE_HOME;
+  const home = path.join(root, 'home');
+  process.env.AI_USAGE_HOME = home;
+  settings.clear();
+  fs.mkdirSync(home, { recursive: true });
+  fs.writeFileSync(path.join(home, 'config.json'), JSON.stringify({ claude: { enabled: false }, codex: { enabled: false,
+    autoReset: { enabled: false } }, copilot: { enabled: false }, bridge: { autoStart: false } }));
+  const managers = [];
+  t.after(async () => {
+    await Promise.all(managers.map(manager => manager.stop()));
+    await stopService(home);
+    if (previous === undefined) delete process.env.AI_USAGE_HOME; else process.env.AI_USAGE_HOME = previous;
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  const installed = installService({ home, sourceDir: path.join(__dirname, '..', 'service'),
+    node: { command: process.execPath, args: [], env: {}, version: process.version.slice(1), source: 'test' }, autostart: false });
+  const open = name => {
+    const manager = new ServiceManager(windowContext(path.join(root, name)), () => {});
+    managers.push(manager);
+    return manager;
+  };
+  const first = open('first');
+  const client = await first.ensure();
+  assert.ok(client);
+  assert.equal(client.info.mode, 'background');
+  const pid = client.info.pid;
+  await first.stop();
+  const second = open('second');
+  assert.equal((await second.ensure()).info.pid, pid, 'a reopened window uses the same process');
+  await stopService(home);
+  await until(() => !second.connected);
+  assert.equal(await second.ensure(), undefined, 'reconnection does not undo an explicit stop');
+  assert.equal(await open('third').ensure(), undefined, 'a fresh window honors the stop too');
+  const cli = spawnSync(process.execPath, [path.join(installed.dir, 'bin', 'ai-usage.js'), 'status'], { encoding: 'utf8', env: process.env });
+  assert.equal(cli.status, 1);
+  assert.match(cli.stderr, /stopped manually/);
+  const autostart = spawnSync(process.execPath, [path.join(installed.dir, 'bin', 'ai-usage.js'), 'daemon'], { encoding: 'utf8', env: process.env });
+  assert.equal(autostart.status, 0, 'autostart also respects the manual stop');
+  assert.equal(readServiceInfo(home), undefined, 'a CLI read does not restart the stopped service');
+});
+
 test('without the background service one window hosts the service, the others use it, and one takes over when it closes', async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-windows-'));
   const previous = process.env.AI_USAGE_HOME;

@@ -204,6 +204,7 @@ export class AccountService {
       (provider, credential, settings, keepAlive, signal) => probe(provider, credential, settings, keepAlive, signal, provider === 'claude' ? this.claudeBudget : undefined),
       this.now, options.reset);
     this.automation.resetContext = () => this.configAuthority.revision;
+    this.automation.onAccountChecked = provider => this.emit({ event: 'stateChanged', provider });
     this.automation.onResetConfirmation = decision => this.emit({ event: 'resetConfirmation', decision });
     this.automation.admit = () => this.admit();
     this.automation.onAccountProblem = (provider, id, reason, revoked) => {
@@ -470,7 +471,7 @@ export class AccountService {
     this.usageTimer = setInterval(() => void this.pollUsage(), 5_000);
     this.usageTimer.unref?.();
     void this.pollUsage();
-    void this.tick();
+    void this.tick(true).catch(error => this.log(`startup usage: ${String(error)}`));
   }
 
   /**
@@ -672,18 +673,25 @@ export class AccountService {
   }
 
   /** One round of the periodic work: follow outside switches, sweep, retry the Claude identity sync. */
-  tick(): Promise<void> {
+  tick(refreshAll = false): Promise<void> {
     if (this.disposed) { return Promise.resolve(); }
     if (this.options.ownership && !this.options.ownership.held()) { return Promise.resolve(); }
-    return this.track(this.tickNow());
+    return this.track(this.tickNow(refreshAll));
   }
 
-  private async tickNow(): Promise<void> {
+  private async tickNow(refreshAll: boolean): Promise<void> {
     this.reloadConfigIfChanged();
     for (const provider of PROVIDERS) {
       try {
         if (await this.followNative(provider)) { this.emit({ event: 'stateChanged', provider }); }
       } catch (error) { this.log(`${provider}: could not follow the native login: ${error instanceof Error ? error.message : String(error)}`); }
+    }
+    if (this.timer) {
+      await Promise.all(PROVIDERS.map(async provider => {
+        if (!this.config[provider].enabled) return;
+        try { await this.automation.refreshUsage(provider, refreshAll); }
+        catch (error) { this.log(`${provider}: saved-account usage refresh deferred: ${String(error)}`); }
+      }));
     }
     await this.automation.tick();
     await this.retryClaudeAccountMetadata();

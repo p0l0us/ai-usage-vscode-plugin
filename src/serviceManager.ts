@@ -4,7 +4,7 @@ import * as vscode from 'vscode';
 import {
   defaultConfig, AuthProvider, ProviderView, ServiceClient, ServiceConfig, ServiceEvent, ServiceHost, Snapshot, compareVersions, connectService, findNode,
   installService, launcherDir, logFile, readCurrentInstall, readServiceInfo, restartService, serviceHome, serviceStatus, startService, startServiceHost,
-  stopService, uninstallService
+  stopService, uninstallService, serviceManuallyStopped
 } from '../service/out';
 import { ConfigSync, readSeedSettings } from './configSync';
 import { pickWithBack } from './quickPick';
@@ -136,6 +136,7 @@ export class ServiceManager implements vscode.Disposable {
     this.lastAttemptAt = Date.now();
     this.connecting = (async () => {
       try {
+        if (serviceManuallyStopped(this.home)) { return await this.connectExisting(); }
         const installed = readCurrentInstall(this.home);
         if (installed && this.enabled && this.background) {
           if (compareVersions(this.bundledVersion(), installed.version) > 0) {
@@ -192,15 +193,15 @@ export class ServiceManager implements vscode.Disposable {
 
   /** Called every minute: reconnects after a loss, without prompting. */
   tick(): void {
-    if (this.disposed || this.connected || this.connecting || Date.now() - this.lastAttemptAt < RECONNECT_MS) { return; }
+    if (this.disposed || serviceManuallyStopped(this.home) || this.connected || this.connecting || Date.now() - this.lastAttemptAt < RECONNECT_MS) { return; }
     void this.ensure();
   }
 
   private scheduleReconnect(delay = 1_000): void {
     clearTimeout(this.takeoverTimer);
-    if (this.disposed) return;
+    if (this.disposed || serviceManuallyStopped(this.home)) return;
     this.takeoverTimer = setTimeout(() => {
-      void this.ensure().then(client => { if (!client && !this.disposed) this.scheduleReconnect(); });
+      void this.ensure().then(client => { if (!client && !this.disposed && !serviceManuallyStopped(this.home)) this.scheduleReconnect(); });
     }, delay);
     this.takeoverTimer.unref();
   }
@@ -210,6 +211,7 @@ export class ServiceManager implements vscode.Disposable {
       const client = await connectService({
         home: this.home, client: 'vscode', version: this.extensionVersion(), subscribe: 'all', waitMs: 15_000,
         start: () => {
+          if (serviceManuallyStopped(this.home)) { throw new Error('The account service was stopped manually. Use Account Service… → Start to resume it.'); }
           const started = startService(this.home);
           this.log(`service: ${started.ok ? `starting (${started.detail})` : `could not start: ${started.detail}`}`);
           if (!started.ok) { throw new Error(started.detail); }

@@ -410,7 +410,16 @@ and reconnect instead of pushing their entire settings. An explicit editor engin
 configuration revision; a conflicting key edit is rejected and the client reloads authoritative values.
 Explicit CLI writes may set requested keys without a revision guard. CLI changes are
 announced to connected editors. Presentation and editor connection preferences remain local to the editor.
-Use `ai-usage service start|stop` to manage the background process.
+Use `ai-usage service start|stop` to manage the background process. A manual stop is honored by editor
+reconnects and CLI reads; use Start or Restart to resume it. Closing or reloading VS Code disconnects the
+window from a background service without stopping it.
+
+**Saved-account usage.** On a fresh service start, every saved account of an enabled provider gets a usage-only
+check, even with keep-alive and automatic rotation off. The service then refreshes saved readings at the
+provider check interval and after a reported quota reset, respecting shared request budgets, backoff and
+interactive holds. Readings persist in the service cache. A reloaded window reads this cache; it does not
+restart collection. Service events update the status bar and open account pickers as checks finish.
+A provider failure can leave a reading unavailable until a successful retry.
 See [service ownership](SERVICE_ARCHITECTURE.md) for the boundaries and deployment modes.
 
 **What is where.** Everything is under `~/.ai-usage` (`AI_USAGE_HOME` moves it): `profiles.json` (the private
@@ -474,9 +483,9 @@ in between two accounts. Once the wait runs out, the notification says that the 
 | `autoRotate.fiveHourThresholdPercent` | `95` | `100` | Threshold for the 5h window; Codex's default rotates only on a used-up window. |
 | `autoRotate.weeklyThresholdPercent` | `99.5` | `99` | Threshold for the weekly windows (`7d`, and `7d Fable` when it counts). |
 | `autoRotate.modelLimits` | `auto` | — | Whether `7d Fable` counts: `auto` (when Claude Code's `model` is Fable or unset), `always`, `never`. |
-| `autoRotate.strategy` | `soonestReset` | `sequential` | How the next account is chosen: `soonestReset`, `evenPace`, `leastWaste` or `sequential`. |
-| `autoRotate.trigger` | `limit` | `limit` | `limit` switches only at a threshold; `proactive` also switches to a clearly better account (except with `sequential`). |
-| `autoRotate.minStayMinutes` | `30` | `30` | With `proactive`, how long a newly active account is kept before another proactive switch. |
+| `autoRotate.strategy` | `leastWaste` | `leastWaste` | How the next account is chosen: `soonestReset`, `evenPace`, `leastWaste` or `sequential`. |
+| `autoRotate.trigger` | `proactive` | `proactive` | `limit` switches only at a threshold; `proactive` also switches to a clearly better account (except with `sequential`). |
+| `autoRotate.minStayMinutes` | `15` | `15` | With `proactive`, how long a newly active account is kept before another proactive switch. |
 | `keepAlive.home` | `~/.claude-tmp` | `~/.codex-tmp` | Dedicated CLI home; must be separate from the native home. |
 | `keepAlive.model` | `haiku` | `gpt-5.6-luna` | Select a subscription model for the small request. |
 | `cliPath` | `claude` | `codex` | CLI command or executable path. |
@@ -517,13 +526,13 @@ waiting, rotating and redeeming are described in [Codex reset-aware timing](ROTA
 - **Where.** Only to an account below its threshold in **every** counted window, read again and sent a keep-alive
   just before the switch. This holds for every strategy and trigger. When no account qualifies, the active one is
   kept and a notification says so.
-- **Which first** (`aiUsage.claude.autoRotate.strategy`; Codex is always `sequential`):
-  - [`soonestReset`](ROTATION.md#soonestreset-default) (default): the weekly window that resets soonest, so expiring
+- **Which first** (`aiUsage.<provider>.autoRotate.strategy`):
+  - [`soonestReset`](ROTATION.md#soonestreset): the weekly window that resets soonest, so expiring
     allowance is spent first.
   - [`evenPace`](ROTATION.md#evenpace): the account furthest behind an even spend from 0% to 100% over its week.
-  - [`leastWaste`](ROTATION.md#leastwaste): the most weekly allowance left per hour until reset.
+  - [`leastWaste`](ROTATION.md#leastwaste) (default): the most weekly allowance left per hour until reset.
   - [`sequential`](ROTATION.md#sequential): the next saved profile in list order.
-- **Proactive.** `aiUsage.claude.autoRotate.trigger: proactive` also leaves a working account for a clearly better
+- **Proactive.** `aiUsage.<provider>.autoRotate.trigger: proactive` (default) also leaves a working account for a clearly better
   one, after `autoRotate.minStayMinutes`. Thresholds still apply. See
   [Proactive switching](ROTATION.md#proactive-switching) and [Which setup to choose](ROTATION.md#which-setup-to-choose).
 

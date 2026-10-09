@@ -256,6 +256,8 @@ export class AccountAutomation {
    */
   onNoCandidate?: (provider: AuthProvider, detail: string) => void;
   onEarnedReset?: (id: string, outcome: 'reset' | 'alreadyRedeemed' | 'nothingToReset' | 'noCredit', available?: number) => void;
+  /** A saved account's usage or check result changed, including background reads and keep-alives. */
+  onAccountChecked?: (provider: AuthProvider, id: string) => void;
 
   /** Set by the service: where readings, switches, sweeps and exhausted stretches are recorded for later analysis. */
   history?: UsageHistory;
@@ -503,6 +505,24 @@ export class AccountAutomation {
     return this.checkNow(provider, id, false, (state) => state, true, wait);
   }
 
+  /** Refresh saved accounts without model prompts, respecting holds, account locks and provider backoff. */
+  async refreshUsage(provider: AuthProvider, force = false): Promise<void> {
+    if (this.disposed || this.paused || this.holds.has(provider) || this.locks.has(provider)) return;
+    await this.withAccountLock(provider, async () => {
+      for (const profile of this.profiles.profiles(provider)) {
+        if (this.disposed || this.paused || this.holds.has(provider)) break;
+        const settings = this.settings(provider);
+        const state = this.read(provider, profile.id);
+        const usage = deserializeUsage(state);
+        const now = this.now();
+        const resetSinceCheck = usage?.windows.some(window => window.resetsAt &&
+          window.resetsAt.getTime() <= now && window.resetsAt.getTime() > (state.checkedAt ?? 0));
+        if (!force && state.checkedAt !== undefined && now - state.checkedAt < settings.checkIntervalMs && !resetSinceCheck) continue;
+        await this.checkAccount(provider, profile.id, settings, false);
+      }
+    });
+  }
+
   /** After a new sign-in replaced a profile's login: forget the dead one's errors and read its usage right away. */
   credentialReplaced(provider: AuthProvider, id: string): Promise<KeepAliveNowResult> {
     return this.checkNow(provider, id, false, (state) =>
@@ -693,6 +713,7 @@ export class AccountAutomation {
       }
     }
     this.log(`${provider}: account ${id} ${keepAlive ? 'keep-alive / ' : ''}usage: ${result.kind}${usageError ? ` (${usageError})` : ''}${outcome.keepAliveError ? `; keep-alive: ${outcome.keepAliveError}` : ''}`);
+    this.onAccountChecked?.(provider, id);
     return { usage: result.kind === 'ok' ? result.usage : undefined, keepAliveError: outcome.keepAliveError, usageError };
   }
 

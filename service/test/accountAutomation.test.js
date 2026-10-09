@@ -101,6 +101,32 @@ test('99.5% default threshold preserves precision and checks both periods', () =
   assert.equal(eligibleAccount(expired), false);
 });
 
+test('saved-account monitoring refreshes after resets, preserves cache across restarts, and respects holds and backoff', async t => {
+  const f = fixture(t, { values: { a: [10, 10] }, settings: { claude: { checkIntervalMs: 2 * HOUR } } });
+  await f.service.refreshUsage('claude', true);
+  assert.equal(f.calls.length, 3);
+  assert.ok(f.calls.every(([, , keepAlive]) => !keepAlive));
+  const restarted = f.make();
+  t.after(() => restarted.dispose());
+  assert.ok(restarted.usage('claude', 'b'), 'persisted inactive readings survive a fresh engine instance');
+  await restarted.refreshUsage('claude');
+  assert.equal(f.calls.length, 3, 'fresh persisted readings need no check');
+  f.observe('claude', [['5h', 10, 0.1], ['7d', 10, 120]], 'b');
+  f.advance(0.2 * HOUR);
+  await restarted.refreshUsage('claude');
+  assert.deepEqual(f.calls.slice(3), [['claude', 'b', false]], 'a reset refreshes the account before the regular interval');
+  restarted.hold('claude', 'sign-in');
+  await restarted.refreshUsage('claude', true);
+  assert.equal(f.calls.length, 4, 'an interactive hold prevents background checks');
+  restarted.resume('claude');
+  f.values.c = undefined;
+  f.options.transientErrors = { c: true };
+  await restarted.refreshUsage('claude', true);
+  const count = f.calls.length;
+  await restarted.refreshUsage('claude', true);
+  assert.equal(f.calls.length, count + 2, 'even a startup refresh leaves a failing account in backoff');
+});
+
 test('disabled automation performs no background calls', async t => {
   const f = fixture(t);
   await f.service.tick();

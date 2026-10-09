@@ -393,10 +393,16 @@ function spawnDetached(command: string, args: string[], env: Record<string, stri
   child.unref();
 }
 
+/** Automatic reconnects must not undo a stop requested through the plugin or CLI. */
+export function serviceManuallyStopped(home: string): boolean {
+  return fs.existsSync(path.join(home, 'state', 'service-stopped'));
+}
+
 /** Starts the installed daemon through the registered autostart, or detached when there is none. */
 export function startService(home: string): StepResult {
   const current = readCurrentInstall(home);
   if (!current) { return { ok: false, detail: 'the account service is not installed' }; }
+  fs.rmSync(path.join(home, 'state', 'service-stopped'), { force: true });
   const env = { ...current.node.env, AI_USAGE_HOME: home };
   if (process.platform === 'linux' && systemdRegistered(home) && systemdUserAvailable()) {
     const result = run('systemctl', ['--user', 'start', SYSTEMD_UNIT]);
@@ -416,6 +422,8 @@ export function startService(home: string): StepResult {
 
 /** Asks the running daemon to stop, then waits for its process to go; a stubborn one gets SIGTERM. */
 export async function stopService(home: string, waitMs = 8_000): Promise<StepResult> {
+  fs.mkdirSync(path.join(home, 'state'), { recursive: true, mode: 0o700 });
+  fs.writeFileSync(path.join(home, 'state', 'service-stopped'), '', { mode: 0o600 });
   const info = readServiceInfo(home);
   const alive = info ? processAlive(info.pid) : false;
   let asked = false;

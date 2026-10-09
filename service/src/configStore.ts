@@ -152,9 +152,9 @@ export function defaultProviderConfig(provider: AuthProvider): ProviderConfig {
       fiveHourThresholdPercent: claude ? 95 : 100,
       weeklyThresholdPercent: claude ? 99.5 : 99,
       modelLimits: 'auto',
-      strategy: claude ? 'soonestReset' : 'sequential',
-      trigger: 'limit',
-      minStayMinutes: 30
+      strategy: 'leastWaste',
+      trigger: 'proactive',
+      minStayMinutes: 15
     }
   };
 }

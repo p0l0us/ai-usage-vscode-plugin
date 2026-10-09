@@ -8,7 +8,7 @@ import { readableProblem } from './accountProbe';
 import { ServiceClient, ServiceUnavailableError, connectService } from './client';
 import { GLOBAL_SETTINGS, SETTINGS, listConfig } from './configStore';
 import { runDaemon } from './daemon';
-import { findNode, installService, launcherPath, readCurrentInstall, restartService, serviceStatus, startService, stopService, uninstallService } from './installer';
+import { findNode, installService, launcherPath, readCurrentInstall, restartService, serviceStatus, startService, stopService, uninstallService, serviceManuallyStopped } from './installer';
 import { Logger } from './logger';
 import { runMcpStdio } from './mcp';
 import { logFile, serviceHome } from './paths';
@@ -209,6 +209,9 @@ async function confirm(question: string, flags: Flags): Promise<boolean> {
 
 function startInstalledOrLocal(home: string): () => void {
   return () => {
+    if (serviceManuallyStopped(home)) {
+      throw new ServiceUnavailableError('The account service was stopped manually. Run "ai-usage service start" to resume it.', 'not-running');
+    }
     const installed = readCurrentInstall(home);
     if (installed) {
       const started = startService(home);
@@ -587,6 +590,7 @@ export async function main(argv: string[], io?: CliOutput): Promise<number> {
       case 'service': return serviceCommand(home, rest, flags);
       case 'daemon': {
         // Started detached by the autostart or a client: a failure here has no terminal, so it goes to the log.
+        if (serviceManuallyStopped(home)) { return 0; }
         try { await runDaemon({ home, foreground: flags.verbose === true }); return 0; }
         catch (error) { new Logger(logFile(home)).log(`fatal: ${error instanceof Error ? error.message : String(error)}`); throw error; }
       }
@@ -660,7 +664,10 @@ async function serviceCommand(home: string, rest: string[], flags: Flags): Promi
     case 'start': { const result = startService(home); out(`${result.ok ? green('✓') : red('✗')} ${result.detail}\n`); return result.ok ? 0 : 1; }
     case 'stop': { const result = await stopService(home); out(`${result.ok ? green('✓') : red('✗')} ${result.detail}\n`); return result.ok ? 0 : 1; }
     case 'restart': { const result = await restartService(home); out(`${result.ok ? green('✓') : red('✗')} ${result.detail}\n`); return result.ok ? 0 : 1; }
-    case 'run': await runDaemon({ home, foreground: true }); return 0;
+    case 'run': {
+      fs.rmSync(path.join(home, 'state', 'service-stopped'), { force: true });
+      await runDaemon({ home, foreground: true }); return 0;
+    }
     case 'path': out(`${launcherPath(home)}\n`); return 0;
     default:
       err(`Unknown service action "${action}": use status, install, uninstall, start, stop, restart or run.\n`);

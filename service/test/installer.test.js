@@ -3,7 +3,7 @@ const test = require('node:test');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { findNode, installService, readCurrentInstall, systemdUnitText, launchdPlistText, windowsLauncherText, launchScriptText, startService, stopService, serviceStatus, pruneOldInstalls, launcherPath } = require('../out/installer');
+const { findNode, installService, readCurrentInstall, systemdUnitText, launchdPlistText, windowsLauncherText, launchScriptText, startService, stopService, serviceStatus, pruneOldInstalls, launcherPath, serviceManuallyStopped } = require('../out/installer');
 const { pingService } = require('../out/client');
 const { servicePackageDir } = require('../out/version');
 
@@ -78,4 +78,7 @@ test('installing copies the package, writes the launchers, and the service start
   const stopped = await stopService(home);
   assert.equal(stopped.ok, true, stopped.detail);
   assert.equal(serviceStatus(home).running, false);
+  assert.equal(serviceManuallyStopped(home), true);
+  assert.equal(startService(home).ok, true);
+  assert.equal(serviceManuallyStopped(home), false, 'an explicit start allows reconnection again');
 });

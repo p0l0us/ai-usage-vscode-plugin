@@ -10,8 +10,9 @@ what happens:
   provider-reported credit count and expiry.
 
 The settings themselves are listed in [Account automation](CONFIGURATION.md#account-automation). All examples below
-use the Claude defaults (5-hour threshold **95**, weekly threshold **99.5**, strategy `soonestReset`, trigger `limit`)
-unless they say otherwise. Codex defaults to **100**, **99**, `sequential` and `limit`. A week is 168 hours.
+use the Claude thresholds (5-hour **95**, weekly **99.5**) unless they say otherwise. Codex thresholds default
+to **100** and **99**. Both providers default to `leastWaste`, `proactive` and a **15-minute** minimum stay.
+Strategy examples name the strategy they illustrate. A week is 168 hours.
 
 The **Keep-alive and rotation settings…** item of each Accounts menu shows what is in effect. Here Claude has
 keep-alives on and rotation on with `leastWaste`, `proactive` and custom thresholds, and Codex has keep-alives off
@@ -24,7 +25,7 @@ and rotation at the 99% weekly threshold:
 - [What starts a rotation](#what-starts-a-rotation)
 - [Choosing the next account](#choosing-the-next-account)
   - [`sequential`](#sequential)
-  - [`soonestReset`](#soonestreset-default)
+  - [`soonestReset`](#soonestreset)
   - [`evenPace`](#evenpace)
   - [`leastWaste`](#leastwaste)
   - [The four strategies side by side](#the-four-strategies-side-by-side)
@@ -116,7 +117,7 @@ uses the general windows) and is sent a keep-alive, because a usage
 reading alone does not prove that the login works. A candidate that fails either check is skipped, and a broken
 login is reported.
 
-The strategy decides the **order**. With the default `limit` trigger, every strategy attempts a switch when the
+The strategy decides the **order**. With the `limit` trigger, every strategy attempts a switch when the
 active account reaches a threshold; only [proactive switching](#proactive-switching) makes the strategy start
 switches of its own. Codex's [reset-aware timing](#codex-reset-aware-timing) can defer an attempt briefly.
 
@@ -135,7 +136,7 @@ tries A, B and C in that order.
 
 Choose `sequential` when you want predictable order, for example a main account followed by backups.
 
-### `soonestReset` (Claude default)
+### `soonestReset`
 
 **Score: hours until the weekly window resets. Lowest first.** Allowance that is about to expire is spent before it
 is lost.
@@ -187,7 +188,7 @@ line while you work. With the `limit` trigger it only decides where to land when
 ### `leastWaste`
 
 **Score: weekly allowance left per hour until reset. Highest first.** Allowance left is the weekly threshold minus the
-usage, so 99.5 − used with the defaults. This spends accounts in proportion to how quickly their allowance would
+usage, so 99.5 − used with the Claude default threshold. This spends accounts in proportion to how quickly their allowance would
 otherwise go to waste.
 
 **5-hour bonus:** when an account's 5-hour window still has room and resets **within the hour**, its rate is raised
@@ -279,7 +280,7 @@ each account's reset time. It applies these rules:
   - at least 3 hours sooner reset with `soonestReset`,
   - at least 5 points further behind its line with `evenPace`,
   - at least 0.1 %/hour more allowance with `leastWaste`.
-- **Minimum stay.** No proactive switch happens within `autoRotate.minStayMinutes` (default 30) of an account becoming
+- **Minimum stay.** No proactive switch happens within `autoRotate.minStayMinutes` (default 15) of an account becoming
   active, automatically or by hand.
 - **Thresholds still apply both ways.** A proactive target must be below every threshold, like any other target. When
   the active account reaches a threshold it is rotated at once, without waiting for the minimum stay and without the
@@ -298,8 +299,8 @@ elapsed, so it is 12.9 points ahead of its line.
 | D | 60% | 90 h | 60 − 46.4 = +13.6 | no |
 | K | 30% | 100 h | 30 − 40.5 = −10.5 | yes, and best, but its `5h` is at 96% → not eligible |
 
-After 30 minutes on A, the extension switches to B. Had K's 5-hour window been below 95%, K would have been chosen.
-Once on B, it stays at least 30 minutes, then the comparison starts again from B.
+After the 15-minute minimum stay on A, the next sweep switches to B. Had K's 5-hour window been below 95%, K would have been chosen.
+Once on B, it stays at least 15 minutes, then the comparison starts again from B.
 
 **Example: `soonestReset` with `proactive`.** The active account's weekly window resets in 100 hours. A candidate
 resetting in 98 hours is not 3 hours sooner, so nothing happens. A candidate resetting in 90 hours (and not
@@ -341,8 +342,8 @@ turn when the Codex account proxy is on, and otherwise need the extension restar
 
 ## Codex
 
-Codex supports all four strategies and both triggers. Its defaults remain `sequential` and `limit`, so existing
-setups keep their saved-profile order. Its weekly threshold is `aiUsage.codex.autoRotate.weeklyThresholdPercent`
+Codex supports all four strategies and both triggers. It defaults to `leastWaste`, `proactive` and a 15-minute
+minimum stay, as does Claude. Its weekly threshold is `aiUsage.codex.autoRotate.weeklyThresholdPercent`
 (default **99**), and its 5-hour threshold is `aiUsage.codex.autoRotate.fiveHourThresholdPercent` (default **100**,
 so a reported 5-hour window blocks an account or starts a rotation only once it is used up; lower it to leave
 earlier). `modelLimits` applies only to Claude. API-key-only Codex profiles report no subscription windows and are

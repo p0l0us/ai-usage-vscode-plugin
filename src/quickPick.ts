@@ -9,7 +9,8 @@ export type PickOptions = Pick<vscode.QuickPickOptions, 'title' | 'placeHolder' 
  * closed everything. Any other item closes the menu and resolves as `showQuickPick` would.
  */
 export function pickWithBack<T extends vscode.QuickPickItem>(items: T[], options: PickOptions,
-  isBack: (item: T) => boolean, back: () => Promise<unknown>): Promise<T | undefined> {
+  isBack: (item: T) => boolean, back: () => Promise<unknown>,
+  watch?: (picker: vscode.QuickPick<T>) => vscode.Disposable): Promise<T | undefined> {
   return new Promise<T | undefined>((resolve, reject) => {
     const picker = vscode.window.createQuickPick<T>();
     picker.title = options.title;
@@ -17,21 +18,25 @@ export function pickWithBack<T extends vscode.QuickPickItem>(items: T[], options
     picker.matchOnDescription = Boolean(options.matchOnDescription);
     picker.matchOnDetail = Boolean(options.matchOnDetail);
     picker.items = items;
+    const watcher = watch?.(picker);
     let goingBack = false;
     picker.onDidAccept(() => {
       const item = picker.selectedItems[0] ?? picker.activeItems[0];
       if (!item || goingBack) { return; }
       if (!isBack(item)) {
+        watcher?.dispose();
         resolve(item);
         picker.hide();
         return;
       }
       goingBack = true;
+      watcher?.dispose();
       // The next menu has replaced this one by the time `back` settles; disposing this one then leaves it alone.
       back().then(() => { picker.dispose(); resolve(item); }, (error: unknown) => { picker.dispose(); reject(error); });
     });
     picker.onDidHide(() => {
       if (goingBack) { return; }
+      watcher?.dispose();
       picker.dispose();
       resolve(undefined);
     });

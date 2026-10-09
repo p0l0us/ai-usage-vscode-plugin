@@ -1,6 +1,12 @@
 # Changelog
 
-## 1.0.12 (unreleased)
+## 1.0.13 (unreleased)
+
+- The service refreshes saved-account usage at startup and periodically, even with keep-alive and rotation off. Checks publish updates to open account pickers, and reloaded windows reuse service readings.
+- Manual service stops are respected by editor reconnects and CLI reads until an explicit Start or Restart.
+
+- Claude and Codex rotation default to `leastWaste`, `proactive` and a 15-minute minimum stay in the extension and standalone service; saved settings take precedence.
+- Provider settings shortcuts filter by setting ID so Codex searches do not include related Claude settings.
 
 - MCP now supports cached status resources, usage-change subscriptions and a cancellable wait tool, including per-account usage and Codex earned-reset counts with explicit freshness. Status observation does not trigger provider calls.
 - MCP agent guidance exposes live rotation settings, permits occasional account switches and asks agents to obtain user approval to disable competing automatic rotation before sustained agent-controlled selection.
