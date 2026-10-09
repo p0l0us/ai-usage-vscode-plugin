@@ -249,7 +249,9 @@ export class AccountsMenu {
         description: [profileDescription(profile, view.profiles),
           profile.limit.readOnly ? 'At its usage limit' : profile.limit.dimmed ? 'Fable limit reached' : undefined,
           loginProblem ? 'Login problem' : undefined].filter(Boolean).join(' · ') || undefined,
-        detail: usageDetail(profile, profile.active ? activeUsage?.(provider, profile.id) : undefined) ?? `Saved ${new Date(profile.updatedAt).toLocaleString()} · Usage not checked yet`,
+        detail: usageDetail(profile, profile.active ? activeUsage?.(provider, profile.id) : undefined) ?? (profile.checkedAt
+          ? `Last checked ${new Date(profile.checkedAt).toLocaleString()} · its usage windows have reset since; checked again by a keep-alive or rotation`
+          : `Saved ${new Date(profile.updatedAt).toLocaleString()} · Usage not checked yet`),
         profile,
         readOnly: profile.limit.readOnly,
         loginProblem

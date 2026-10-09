@@ -3,12 +3,15 @@ const test = require('node:test');
 const Module = require('node:module');
 const settings = new Map();
 const updates = [];
+/** Settings declared without a default: VS Code reports their type's empty value when nobody set them. */
+const noDefault = new Map();
 const load = Module._load;
 Module._load = function(id, ...args) {
   if (id === 'vscode') return {
     ConfigurationTarget: { Global: 1 },
     workspace: { getConfiguration: () => ({
-      get: (key, fallback) => (settings.has(key) ? settings.get(key) : fallback),
+      get: (key, fallback) => (settings.has(key) ? settings.get(key) : noDefault.has(key) ? noDefault.get(key) : fallback),
+      inspect: (key) => ({ key, defaultValue: noDefault.has(key) ? undefined : null, globalValue: settings.get(key) }),
       update: async (key, value) => { updates.push([key, value]); settings.set(key, value); }
     }) }
   };
@@ -76,4 +79,16 @@ test('user settings are read for seeding, differences are found, and pulls write
   settings.set('aiUsage.claude.autoRotate.fiveHourThresholdPercent', 90);
   const pushed = sync.changedKeys({ affectsConfiguration: (key) => key === 'aiUsage.claude.autoRotate.fiveHourThresholdPercent' }, serviceConfig);
   assert.deepEqual(pushed, { 'claude.autoRotate.fiveHourThresholdPercent': 90 });
+});
+
+test('a setting without a default that nobody set is not sent, so the service accepts the rest', () => {
+  settings.clear(); noDefault.clear();
+  noDefault.set('aiUsage.refreshIntervalMinutes', 0);
+  settings.set('aiUsage.claude.autoRotate.enabled', true);
+  const values = readSettings(defaultConfig());
+  assert.equal('refreshIntervalMinutes' in values, false);
+  assert.equal(values['claude.autoRotate.enabled'], true);
+  settings.set('aiUsage.refreshIntervalMinutes', 5);
+  assert.equal(readSettings(defaultConfig()).refreshIntervalMinutes, 5, 'a value the user set is sent');
+  noDefault.clear();
 });

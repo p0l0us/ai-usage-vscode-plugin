@@ -1,7 +1,11 @@
 # Changelog
 
-## 1.0.7 (unreleased)
+## 1.0.8 (unreleased)
 
+- The settings sync to the service no longer fails on connect with "refreshIntervalMinutes must be at least 1": a
+  setting without a default that nobody set is not sent, so the service gets the rest of the settings again.
+- An account whose last reading is older than its usage reset says when it was last checked instead of "Usage not
+  checked yet".
 - The service now owns live Claude/Codex/Copilot usage, source fallback, cache and backoff, native CLI settings,
   credential updates, the Codex proxy and CLI bridge. The extension displays service values and forwards settings;
   it does not fall back to provider reads after a service disconnect. Native logins work without saved profiles.

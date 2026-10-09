@@ -28,8 +28,15 @@ export function configKeyOf(settingKey: string): string | undefined {
 export function readSettings(config: ServiceConfig, configuration = vscode.workspace.getConfiguration()): Record<string, unknown> {
   const values: Record<string, unknown> = {};
   for (const entry of listConfig(config)) {
-    const value = configuration.get<unknown>(settingKey(entry.key));
-    if (value !== undefined) { values[entry.key] = value; }
+    const key = settingKey(entry.key);
+    const value = configuration.get<unknown>(key);
+    if (value === undefined) { continue; }
+    // A setting without a default that nobody set comes back as its type's empty value (0 for a number), which is
+    // not a choice and may not even be valid for the service; one such value would make it reject the whole batch.
+    const inspected = configuration.inspect?.<unknown>(key);
+    if (inspected && inspected.defaultValue === undefined && [inspected.globalValue, inspected.workspaceValue, inspected.workspaceFolderValue]
+      .every((candidate) => candidate === undefined)) { continue; }
+    values[entry.key] = value;
   }
   return values;
 }

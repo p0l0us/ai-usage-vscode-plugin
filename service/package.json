@@ -1,6 +1,6 @@
 {
   "name": "ai-usage-service",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "description": "Claude Code and Codex account manager: saves logins as profiles, switches between them, sends keep-alives and rotates accounts at their limits, as a background service with the ai-usage command and an MCP server. Works without VS Code; the AI Usage VS Code extension uses it too.",
   "keywords": [
     "claude",
