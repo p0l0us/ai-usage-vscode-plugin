@@ -93,7 +93,7 @@ test('the usage detail line shows every window, the check time and known problem
   const codex = profile({ usage: { provider: 'codex', title: 'Codex', fetchedAt: new Date(now).toISOString(),
     windows: [{ label: '7d', usedPercent: 80, resetsAt: new Date(now + 24 * 3_600_000).toISOString() }],
     resetCredits: { availableCount: 1, totalCount: 2, earliestExpiresAt: Math.floor((now + 2 * 3_600_000) / 1000) } } });
-  assert.match(usageDetail(codex), /Earned resets: 1 of 2 observed available \(next expires in 2h\)/);
+  assert.match(usageDetail(codex), /7d: 80% \(1d\) · \$\(refresh\) 1 · Checked /);
 });
 
 test('an open account picker updates from service events and retains the focused account', async () => {
@@ -118,7 +118,7 @@ test('an open account picker updates from service events and retains the focused
   assert.equal(listeners.size, 0, 'closing the picker releases its subscription');
 });
 
-test('Codex menu labels show reset counts for every account, including zero, expired quotas, stale and unknown reports', async () => {
+test('Codex menu shows reset counts once after usage, including zero, expired quotas, stale and unknown reports', async () => {
   const now = Date.now();
   const usage = (count, age = 0, expiredQuota = false) => ({ provider: 'codex', title: 'Codex', fetchedAt: new Date(now - age).toISOString(),
     windows: [{ label: '5h', usedPercent: 90, resetsAt: new Date(now + (expiredQuota ? -1000 : 3_600_000)).toISOString() }],
@@ -134,13 +134,18 @@ test('Codex menu labels show reset counts for every account, including zero, exp
   quickPickResponses.push(items => {
     const rows = items.filter(item => item.profile);
     assert.deepEqual(rows.map(item => item.label), [
-      '$(check) Work · $(refresh) 0', 'Login expired · $(refresh) 1', '$(circle-slash) Quota reset · $(refresh) 3',
-      '$(key) Old reading · $(refresh) 4 (stale)', '$(key) Missing report · $(refresh) ?'
+      '$(check) Work', 'Login expired', '$(circle-slash) Quota reset',
+      '$(key) Old reading', '$(key) Missing report'
     ]);
-    assert.match(rows[0].detail, /Earned resets: 0 available/);
-    assert.match(rows[2].detail, /Usage reset; waiting for a new reading · Earned resets: 3 available/);
-    assert.match(rows[3].detail, /Earned resets: availability stale \(last reported 4 available\)/);
-    assert.match(rows[4].detail, /Earned resets: unknown/);
+    for (const row of rows) {
+      assert.equal((row.detail.match(/\$\(refresh\)/g) ?? []).length, 1);
+      assert.doesNotMatch(row.detail, /Earned resets:/);
+    }
+    assert.match(rows[0].detail, /\$\(refresh\) 0 · Checked/);
+    assert.match(rows[1].detail, /5h: 90% \(1h\) · \$\(refresh\) 1 · Checked/);
+    assert.match(rows[2].detail, /Usage reset; waiting for a new reading · \$\(refresh\) 3/);
+    assert.match(rows[3].detail, /5h: 90% \(1h\) · \$\(refresh\) 4 \(stale\) · Checked/);
+    assert.match(rows[4].detail, /5h: 90% \(1h\) · \$\(refresh\) \? · Checked/);
     return undefined;
   });
   // Toolbar visibility only controls the toolbar; menu counts remain available.
@@ -161,11 +166,13 @@ test('an open Codex picker updates the reset count from service events', async (
   const listeners = new Set();
   f.services.onStateChanged = listener => { listeners.add(listener); return { dispose: () => listeners.delete(listener) }; };
   quickPickResponses.push((items, options, picker) => {
-    assert.match(items[0].label, /\$\(refresh\) 3$/);
+    assert.doesNotMatch(items[0].label, /\$\(refresh\)/);
+    assert.match(items[0].detail, /5h: 95% · \$\(refresh\) 3 · Checked/);
     picker.activeItems = [items[0]];
     f.services.views.codex = { ...view, profiles: [profile({ active: true, usage: usage(2) })] };
     for (const listener of listeners) listener('codex');
-    assert.match(picker.items[0].label, /\$\(refresh\) 2$/);
+    assert.doesNotMatch(picker.items[0].label, /\$\(refresh\)/);
+    assert.match(picker.items[0].detail, /5h: 95% · \$\(refresh\) 2 · Checked/);
     assert.equal(picker.activeItems[0].profile.id, 'a');
     return undefined;
   });

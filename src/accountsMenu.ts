@@ -4,7 +4,7 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import {
   AuthProvider, ImportPlanView, LiveUsage, ProfileView, ProviderView, ServiceClient, ServiceConfig, deserializeUsage,
-  explainAccountProblem, formatEarnedResets, formatResetRemaining, nativeCredentialPath, newestValidUsage, parseCredentialJson, projectResetCredits, strategySummary
+  explainAccountProblem, formatResetRemaining, nativeCredentialPath, newestValidUsage, parseCredentialJson, projectResetCredits, strategySummary
 } from '../service/out';
 import { MCP_SERVER_NAME, McpRegistration } from './mcpRegistration';
 import { pickWithBack } from './quickPick';
@@ -104,13 +104,11 @@ export function usageDetail(profile: ProfileView, displayedUsage?: LiveUsage, pr
     // Credit freshness is independent of quota resets; use the same projection as the toolbar.
     const credits = projectResetCredits(displayedUsage, now.getTime(), profile.usage);
     if (credits.state === 'known') {
-      const line = formatEarnedResets(credits);
-      const expiry = credits.earliestExpiresAt ? formatResetRemaining(new Date(credits.earliestExpiresAt * 1000), now) : '';
-      parts.push(`Earned resets: ${line}${expiry ? ` (next expires in ${expiry})` : ''}`);
+      parts.push(formatEarnedResetCount(credits.availableCount));
     } else if (credits.state === 'stale') {
-      parts.push(`Earned resets: availability stale (last reported ${credits.lastReportedAvailableCount} available)`);
+      parts.push(`${formatEarnedResetCount(credits.lastReportedAvailableCount)} (stale)`);
     } else if (stored || displayedUsage) {
-      parts.push('Earned resets: unknown');
+      parts.push('$(refresh) ?');
     }
   }
   if (usage) { parts.push(`Checked ${usage.fetchedAt.toLocaleString()}`); }
@@ -263,16 +261,12 @@ export class AccountsMenu {
     const provider = view.provider;
     const items: ProfileItem[] = view.profiles.map((profile) => {
       const displayedUsage = profile.active ? activeUsage?.(provider, profile.id) : undefined;
-      const credits = provider === 'codex' ? projectResetCredits(displayedUsage, Date.now(), profile.usage) : undefined;
-      const resets = credits?.state === 'known' ? formatEarnedResetCount(credits.availableCount)
-        : credits?.state === 'stale' ? `${formatEarnedResetCount(credits.lastReportedAvailableCount)} (stale)`
-        : credits ? '$(refresh) ?' : undefined;
       // An exhausted account cannot be activated anyway, so its login trouble waits until the window resets.
       const loginProblem = profile.limit.readOnly ? undefined : profile.loginProblem;
       const icon = profile.active ? 'check' : 'key';
       const label = profile.limit.readOnly ? `$(circle-slash) ${profile.name}` : profile.limit.dimmed || loginProblem ? profile.name : `$(${icon}) ${profile.name}`;
       return {
-        label: `${label}${resets ? ` · ${resets}` : ''}`,
+        label,
         iconPath: loginProblem ? new vscode.ThemeIcon('warning', new vscode.ThemeColor('editorWarning.foreground'))
           : profile.limit.dimmed ? new vscode.ThemeIcon(icon, new vscode.ThemeColor('disabledForeground')) : undefined,
         description: [profileDescription(profile, view.profiles),
