@@ -1,0 +1,20 @@
+✔ defaults match the extension settings: Claude rotates at 95/99.5, Codex at 100/99 with reset awareness (4.328049ms)
+✔ a parsed file is merged over the defaults and invalid values keep the default (2.159045ms)
+✔ setConfigValue coerces command-line strings, validates and never mutates the input (5.067003ms)
+✔ listConfig lists every applicable key with Claude first and Codex without the Claude-only ones (2.152734ms)
+✔ the file round-trips and a missing file yields the defaults (11.138297ms)
+✔ automation settings bound intervals and honor Codex strategy, trigger and reset awareness (2.517273ms)
+✔ the mcp block is a global setting: off by default, switching on, listed after the provider settings and synced like them (4.294152ms)
+✔ the history block is a global setting: on by default, a year of retention, directory empty (2.133263ms)
+✔ every VS Code setting is also a validated standalone CLI setting, with identical defaults (26.924375ms)
+✔ new clients default to auto with 30-minute checks and opt-in reset confirmation (2.005313ms)
+✔ legacy persisted source modes and explicit intervals survive normalization and disk round-trip (22.036634ms)
+✔ new engine settings retain per-key revision conflicts and persisted user settings (6.750189ms)
+ℹ tests 12
+ℹ suites 0
+ℹ pass 12
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 297.92521

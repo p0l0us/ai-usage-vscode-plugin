@@ -1,0 +1,21 @@
+✔ initialize negotiates the protocol version, names the server and gives instructions (5.953543ms)
+✔ tools/list offers the four tools with schemas and annotations, without the switching tools when switching is off (1.845576ms)
+✔ switch_account, rotate_account and refresh_usage pass the reference through and report the outcome (4.738304ms)
+✔ each tool uses one live configuration snapshot without retaining it for later calls (2.158037ms)
+✔ MCP rejects malformed envelopes and extra tool arguments before engine actions (0.93093ms)
+✔ filtered account lists expose both live policies and reflect user-approved configuration changes without writing them (6.394549ms)
+✔ occasional account selection stays allowed with automatic rotation enabled and reports possible override (0.957331ms)
+✔ MCP guidance and profile facts distinguish general exhaustion from a model-limited fallback (1.300876ms)
+✔ background: MCP reads the shared engine's live rotation prerequisites across configuration toggles (3217.753507ms)
+✔ embedded: MCP reads the shared engine's live rotation prerequisites across configuration toggles (583.605377ms)
+ℹ tests 10
+ℹ suites 0
+ℹ pass 10
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 5351.574526
+63a7d4463609b5a3ba209c5e6964b7ab091526a954f893534d1038815ba2ae79  service/src/mcp.ts
+09291996c35035c278600502d032b985bad7fb740b18d8a06411509181cbdebb  service/test/mcp.test.js
+c4d6d6d8f0d757456e035bc25fd44b7ac470ffb5ad15e1db7bd3b66ae1fc3dc1  docs/MCP.md

@@ -1,0 +1,5 @@
+installed the account service 1.0.11 to /home/p0l0us/.ai-usage/service/1.0.11 (node 24.15.0 from PATH); launcher /home/p0l0us/.ai-usage/bin/ai-usage
+autostart: systemd user unit /home/p0l0us/.config/systemd/user/ai-usage.service enabled, lingering enabled
+✓ Installed the account service 1.0.11 (started through systemd). Autostart: systemd user unit ai-usage.service.
+  Command: /home/p0l0us/.ai-usage/bin/ai-usage
+  Add /home/p0l0us/.ai-usage/bin to your PATH to run "ai-usage" from anywhere.

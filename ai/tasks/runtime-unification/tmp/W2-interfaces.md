@@ -1,0 +1,21 @@
+# W2 contract proposal
+- Shared protocol version `SERVICE_PROTOCOL_VERSION = 1`, capabilities `SERVICE_CAPABILITIES = ['engine','config-revision','request-cancellation','usage-live','session-context','lifecycle']` from protocol.ts.
+- HelloParams adds `protocolVersion?: number`, `requiredCapabilities?: string[]`. RpcServer checks before onHello and merges `{protocolVersion,capabilities}` into hello. New client requires v1 + engine; optional capabilities checked through client.supports(). Old clients without protocolVersion accepted (v1 additive compatibility); incompatible explicit versions/capabilities refused.
+- RpcRequest adds `deadlineAt?: number`; RpcServer handle gets optional fourth arg `RpcRequestContext { signal: AbortSignal; deadlineAt?: number; requestId: number }`; `rpc.cancel {id}` aborts the matching connection request. Disconnect/server stop abort requests. Cancellation stops queued work; after execution starts mutation outcome can remain unknown. W1 must check signal before handle/queued mutations and pass to cancellable operations where possible.
+- ServiceClient.getConfigState() calls `config.state` returning `{revision:number, config:ServiceConfig}`. patchConfig(values, expectedRevision) calls `config.patch` with `{values,expectedRevision}` and returns same. Existing config.get/config.set remain compatible; W3 must use patch revision, no whole snapshot writes.
+- RpcError codes: unauthorized, incompatible, invalid_request, timeout, cancelled, closed, conflict, unknown_method, invalid_params, internal; data optional. Existing engine typed error codes pass through.
+- Native MCP calls client.liveUsage(provider,force), profile optional in refresh_usage; uses cached/live state and explicit freshness, unknown/stale, model window annotations. No model mutation tools.
+- MCP adapter process `service/bin/ai-usage.js mcp --home <home>` only ServiceClient.connect; never starts detached engine. VS Code provider chooses installed CLI when available or bundled script under extension service/bin using current runtime + ELECTRON_RUN_AS_NODE=1. W3 setup should no longer require installation.
+
+## Final configuration agreement (overrides proposal above)
+- `getConfigState()` -> `config.read`, `patchConfig(values, expectedRevision)` -> `config.patch {values,baseRevision:expectedRevision}`. W1 ConfigView includes revision/config/revisions/scopes; alias ConfigState should be structurally compatible.
+- W2 constants authoritative protocol v1 and capability strings engine/config-revision/request-cancellation/usage-live/session-context/lifecycle. RpcServer emits them in hello; ServiceClient requires first three. W1 service.info must import constants rather than use numeric v2.
+- Engine error codes config-conflict/config-local-setting/config-invalid pass through RpcError.code/data; no replay.
+- ServiceClient.local removed now; W3/W4 must migrate to host/socket.
+
+## Bundled MCP CLI registration
+Conductor expanded W2 ownership service/src/mcpRegistration.ts. `mcpCommand(home): McpCommand {command,args,env?}` chooses existing installed launcher or bundled `node service/bin/ai-usage.js mcp --home <home>` (Electron adds ELECTRON_RUN_AS_NODE). `readMcpRegistration`, `mcpRegisterArgs`, `registerMcpServer` now accept string (legacy launcher) OR McpCommand. W1 handler must use descriptor for read/register; return existing `launcher: descriptor.command` plus `command: descriptor` to avoid installation check. Both adapters connect only; they do not start engines.
+
+Legacy ownership probe: RpcClient.connect({allowLegacyHello:true}) omits version/capability requirements, accepts old hello metadata, and that client permits ONLY hello calls. W1 helloAt must use this for discovery to recognize pre-contract hosts before mutations. ServiceClient remains strict.
+
+MCP finalized: 4 tools retained, refresh_usage.profile optional (native active login when omitted). services.activeUsage includes saved/profileId/status/freshness/modelLimited/usage/problem; profiles add freshness/loginStored, usable requires fresh valid reading. Expired reset -> stale. Per-tool config snapshot fetched once (OPT-02); no cross-tool cache. Window scope account|model plus model name; switches change account only. StdIO has bounded input, cancellation notification propagates to RPC signal; unavailable/disabled engines advertise no tools.

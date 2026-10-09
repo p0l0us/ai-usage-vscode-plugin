@@ -1,0 +1,33 @@
+
+> ai-usage-vscode-plugin@1.0.10 compile
+> node scripts/generate-manifest.js && node scripts/generate-service-settings.js && node scripts/package-service-bridge.js && tsc -p service && tsc -p ./
+
+generated 1361 chip commands
+npm notice
+npm notice New major version of npm available! 11.12.1 -> 12.2.0
+npm notice Changelog: https://github.com/npm/cli/releases/tag/v12.2.0
+npm notice To update run: npm install -g npm@12.2.0
+npm notice
+✔ codex tracks native children, isolates their output, and forks saved context with durable lineage (394.306459ms)
+✔ claude tracks native children, isolates their output, and forks saved context with durable lineage (943.872356ms)
+✔ configured task lifetime survives the former three-minute request and five-minute tool limits (2.936282ms)
+✔ agent graph bounds entries, skips cycles, and omits unrelated sessions and child result payloads (6.618486ms)
+✔ the usage detail line shows every window, the check time and known problems (26.38735ms)
+✔ usage displays round percentages while stored and live readings retain their precision (1.58834ms)
+✔ profile actions live in Manage saved profiles and moving a profile updates its order (4.849723ms)
+✔ choosing a profile activates it through the service and closes the menu; an exhausted one only warns (1.43559ms)
+✔ a profile with a login problem offers renew, keep-alive or back instead of activating (3.79604ms)
+✔ the MCP registration item is offered while mcp.enabled is on and a hook exists, shows the CLI entry, and runs the hook (3.422532ms)
+✔ saving the current login asks for a name, warns about a duplicate, and can update an existing profile (2.198931ms)
+✔ without the service the menu offers to install it (0.920693ms)
+✔ where to keep a profile is asked only when both kinds are possible, and names the project (0.618802ms)
+✔ Back at the end of an Accounts menu opens the previous menu over it, then closes it (0.979075ms)
+✔ usage percentages display whole numbers, including floating-point quota artifacts (1.308736ms)
+ℹ tests 15
+ℹ suites 0
+ℹ pass 15
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 2678.444608

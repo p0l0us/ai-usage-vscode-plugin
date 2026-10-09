@@ -1,0 +1,54 @@
+✔ Codex automatically redeems only provider-reported earned resets and shows the observed total (32.164759ms)
+✔ an earned reset is saved when natural recovery is near or no credits are reported (7.913777ms)
+✔ an earned reset waits for another account recovering in one minute (25.848708ms)
+✔ a failed earned reset retries with the same idempotency key (21.118783ms)
+✔ a redeemed credit is not spent twice when the follow-up usage read fails (20.823282ms)
+✔ reset confirmation preview spends nothing and does not persist an attempt; claim and approval are one-use (12.832734ms)
+✔ reset confirmation cancel cannot redeem or replay (2.806633ms)
+✔ reset confirmation disconnect cannot redeem or replay (2.117509ms)
+✔ reset confirmation expiry cannot redeem or replay (2.411506ms)
+✔ reset confirmation quota cannot redeem or replay (3.939441ms)
+✔ reset confirmation account cannot redeem or replay (3.577914ms)
+✔ reset confirmation config cannot redeem or replay (2.191029ms)
+✔ reset confirmation shutdown cannot redeem or replay (1.494154ms)
+✔ reset confirmation freshness cannot redeem or replay (1.739936ms)
+✔ reset confirmation native cannot redeem or replay (2.016767ms)
+✔ a cancelled queued approval cannot authorize the independent sweep that holds its lock (504.469649ms)
+✔ Claude model-quota fallback selects a general-eligible screenshot account (sequential) (15.90822ms)
+✔ Claude model-quota fallback selects a general-eligible screenshot account (soonestReset) (6.647079ms)
+✔ Claude model-quota fallback selects a general-eligible screenshot account (evenPace) (19.64598ms)
+✔ Claude model-quota fallback selects a general-eligible screenshot account (leastWaste) (25.274193ms)
+✔ Claude prefers later full model headroom over an earlier model-exhausted fallback (7.176992ms)
+✔ Claude keeps an active general-eligible model-limited account when no model-capable alternative exists (5.012888ms)
+✔ Claude fallback keeps configured general thresholds and never accepts unknown general quota (4.063035ms)
+✔ Claude fallback verifies quota again after keep-alive and rejects a now-general-exhausted candidate (5.138848ms)
+✔ Claude fallback retains failed-login checks and never changes the configured keep-alive model (11.892151ms)
+✔ Claude counted-model preference remains compatible with modelLimits never (5.460203ms)
+✔ Claude counted-model preference remains compatible with modelLimits auto (5.219904ms)
+✔ Claude counted-model preference remains compatible with modelLimits always (7.629915ms)
+✔ Codex model-window eligibility remains strict; Claude fallback does not apply to other providers (2.968249ms)
+✔ manual selection permits a Fable-exhausted general-capable account and shows its actual limitation (43.106697ms)
+✔ background: Claude model quota fallback keeps general quota hard and limitation truthful (264.685551ms)
+✔ background: Claude model quota prefer keeps general quota hard and limitation truthful (249.334724ms)
+✔ background: Claude model quota stay keeps general quota hard and limitation truthful (268.287084ms)
+✔ background: Claude model quota verify keeps general quota hard and limitation truthful (198.909553ms)
+✔ background: Claude model quota manual keeps general quota hard and limitation truthful (210.880648ms)
+✔ embedded: Claude model quota fallback keeps general quota hard and limitation truthful (168.064101ms)
+✔ embedded: Claude model quota prefer keeps general quota hard and limitation truthful (72.980134ms)
+✔ embedded: Claude model quota stay keeps general quota hard and limitation truthful (54.608168ms)
+✔ embedded: Claude model quota verify keeps general quota hard and limitation truthful (72.50518ms)
+✔ embedded: Claude model quota manual keeps general quota hard and limitation truthful (65.652427ms)
+ℹ tests 40
+ℹ suites 0
+ℹ pass 40
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 3331.643776
+51e78d6071e7ed0cc5856b35155662497c7b5eccb585cf82e5010d9b2ca58be3  service/src/accountAutomation.ts
+8ada91ac7e3816f7a67bb3dd5dc9650bc261bf44f94cdf81a0e2f119a32cfb83  service/test/accountAutomation.test.js
+918112025dc31e43e674b865444053a8a4eaa264d383db31c9a1e294c1c93316  test/modelQuotaFallbackParity.test.js
+18a510952f2bdaeb51dfb85b148069dbb34f171356dd1e5cfc6a54b5f235ac7d  test/helpers/modelQuotaFallbackHostChild.js
+782178efd8aa66e813f46bd7a8a8f4792342e1f989e5a1d3f9f4ac3cbc5bdae2  test/accountsMenu.test.js
+19e641b6954a7343120973a2a2dfb68cb9231d13d57bce90c9191d251d8352f9  docs/ROTATION.md

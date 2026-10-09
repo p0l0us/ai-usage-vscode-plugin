@@ -1,0 +1,8 @@
+# Final acceptance — 2026-10-09T11:23:29.907722+00:00
+9/9 accepted. Full requirement/artifact/validation mapping in orchestration.md and W8-report.md.
+W9 evidence: src/usageFormatting.ts uses Math.round for rendered percentage strings; extension status/details/tooltip and accountsMenu call it; existing chips already round. Raw usage objects and rotation/threshold code unchanged. test/usageFormatting.test.js covers screenshot float artifact0.0999999999999432 and normal rounding; accountsMenu precision regression retains stored/live values. Worker focused11/11, independent affected gate15/15. Changelog updated without version bump.
+No pending fixes, reviews, generators, tests or user decisions. Final source frozen. Native platform limit documented. No live state/install/publication performed.
+
+## Accepted continuation 2026-10-09T11:52:07.628301+00:00
+All16 units accepted, including originalW1-W9 and W10auto/W11confirmation/W12configdocs/W13modeparity/W14independentreview/W16serviceMCP/W15gate. Sourceauto freshcache/local→API→CLI,30min defaults preserveexplicitstoredvalues; optionalconfirmationfalse default withengine one-use/cancellation/stale guards; serviceownsMCP andplugin thin controls/register. NoactualCLIinstall.
+Evidence: W10-report47narrow and W14independent13; W11-report109narrow thenfinal31+1 overlapping checks, W13reset18actualmodecases; W12-report12configtests; W14-report38independentreset, all3newfindingsresolved; W16-report9lifetime/registrationtests. W15-reportfull512511pass1staleassertfail, testonlyfixed then7/7 affected pass. All512current tests coveredpassing acrossinvocations;26audithashes unchanged. NativeMac/Windows/liveproviders/interactiveUI unexecuted. No remainingrequiredwork.

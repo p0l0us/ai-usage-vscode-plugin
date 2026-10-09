@@ -1,0 +1,15 @@
+✔ setting names map to service keys only for known settings of the right service (1.785379ms)
+✔ the MCP switches are seeded, pulled and pushed like the provider settings (6.135873ms)
+✔ user settings are read for seeding, differences are found, and pulls write only what differs (2.678446ms)
+✔ a setting without a default that nobody set is not sent, so the service accepts the rest (1.771801ms)
+✔ invalid legacy settings are ignored without breaking config reads or changing editor settings (3.73677ms)
+✔ presentation, deployment and workspace values stay editor-local on seed, hydration and user change (1.769904ms)
+✔ an unrelated user change during hydration is not discarded by a global writing guard (0.916147ms)
+ℹ tests 7
+ℹ suites 0
+ℹ pass 7
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 158.107538

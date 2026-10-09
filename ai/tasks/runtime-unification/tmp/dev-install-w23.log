@@ -1,0 +1,35 @@
+
+> ai-usage-vscode-plugin@1.0.11 dev:install
+> node scripts/dev-install.js
+
+
+> ai-usage-vscode-plugin@1.0.12 compile
+> node scripts/generate-manifest.js && node scripts/generate-service-settings.js && node scripts/package-service-bridge.js && tsc -p service && tsc -p ./
+
+generated 1361 chip commands
+ INFO  Files included in the VSIX:
+ai-usage-vscode-plugin-1.0.12-dev.vsix
+├─ [Content_Types].xml 
+├─ extension.vsixmanifest 
+└─ extension/
+   ├─ CLAUDE.md [1.59 KB]
+   ├─ LICENSE.txt [34.33 KB]
+   ├─ changelog.md 
+   ├─ package.json [1004.42 KB]
+   ├─ readme.md 
+   ├─ bridge/ (15 files) [128.08 KB]
+   ├─ images/ (30 files) [778.96 KB]
+   ├─ media/ (3 files) [3.65 KB]
+   ├─ out/ (39 files) [497.05 KB]
+   └─ service/ (102 files) [1010.68 KB]
+
+=> Run vsce ls --tree to see all included files.
+
+ DONE  Packaged: /tmp/ai-usage-dev-qdb0be/ai-usage-vscode-plugin-1.0.12-dev.vsix (196 files, 1.3 MB)
+
+→ installing into /home/p0l0us/.vscode-server/cli/servers/Stable-2a59476c9bfcb90b3ddc372c36762471b7dfad1c/server/bin/code-server
+Installing extensions...
+Extension 'ai-usage-vscode-plugin-1.0.12-dev.vsix' was successfully installed.
+
+Installed p0l0us.ai-usage-vscode-plugin@1.0.12 (dev build; package.json and CHANGELOG.md were bumped). Reload the VS Code window to activate.
+VSIX: /tmp/ai-usage-dev-qdb0be/ai-usage-vscode-plugin-1.0.12-dev.vsix
