@@ -4,6 +4,7 @@ import * as path from 'path';
 import { AuthProvider, writeJsonAtomically } from './authFiles';
 import { AutomationSettings, RotationStrategy, RotationTrigger, modelWindowFilter } from './accountAutomation';
 import { claudeConfigDir } from './live';
+import { RpcError } from './rpc';
 
 /**
  * The service's own settings, one block per provider plus the `mcp` block, kept in `config.json`. The VS Code
@@ -11,7 +12,7 @@ import { claudeConfigDir } from './live';
  * reads and writes them directly.
  */
 
-export type UsageSource = 'api' | 'cli' | 'sessionLog' | 'accountFile' | 'both';
+export type UsageSource = 'auto' | 'api' | 'cli' | 'sessionLog' | 'accountFile' | 'both';
 export type CopilotConfig = { enabled: boolean; source: UsageSource; account: string; checkIntervalMinutes: number };
 export type BridgeBackendConfig = { executable: string; persistSessions: boolean; openInCli: boolean; openInExtension: boolean; sessionDirectory: string; subagentsEnabled: boolean; requestTimeoutMinutes: number; toolTimeoutMinutes: number };
 export type BridgeConfig = { modelsEnabled: boolean; autoStart: boolean; url: string; tokenFile: string; codex: BridgeBackendConfig; claude: BridgeBackendConfig };
@@ -38,7 +39,7 @@ export type ProviderConfig = {
     /** Dedicated CLI home for background checks; must be separate from the native CLI home. */
     home: string;
   };
-  autoReset: { enabled: boolean };
+  autoReset: { enabled: boolean; confirmationRequired: boolean };
   autoRotate: {
     enabled: boolean;
     resetAware: boolean;
@@ -101,6 +102,7 @@ export const SETTINGS: SettingSchema[] = [
   { key: 'keepAlive.home', type: 'string', description: 'Dedicated CLI home for background checks; ~ is expanded. Must not be the native CLI home.' },
   { key: 'autoRotate.enabled', type: 'boolean', description: 'Switch the active account automatically once it reaches a rotation threshold.' },
   { key: 'autoReset.enabled', type: 'boolean', providers: ['codex'], description: 'Automatically redeem an available earned Codex rate-limit reset when it is more useful than rotating or waiting.' },
+  { key: 'autoReset.confirmationRequired', type: 'boolean', providers: ['codex'], description: 'Require a connected editor to approve an earned Codex reset before redemption; without approval no credit is redeemed.' },
   { key: 'autoRotate.resetAware', type: 'boolean', providers: ['codex'], description: 'Avoid automatic switches in the five minutes before a Codex usage window resets; reconsider after the reset.' },
   { key: 'autoRotate.fiveHourThresholdPercent', type: 'number', min: 1, max: 100, description: 'Rotate when the 5-hour window reaches this percentage; a candidate must be below it.' },
   { key: 'autoRotate.weeklyThresholdPercent', type: 'number', min: 1, max: 100, description: 'Rotate when a weekly window reaches this percentage; a candidate must be below it.' },
@@ -137,12 +139,12 @@ for (const entry of SETTINGS_CATALOG) {
 export function defaultProviderConfig(provider: AuthProvider): ProviderConfig {
   const claude = provider === 'claude';
   return {
-    enabled: true, source: 'both', accountFile: { checkIntervalSeconds: 15 }, proxy: { enabled: false, port: 43117 },
+    enabled: true, source: 'auto', accountFile: { checkIntervalSeconds: 15 }, proxy: { enabled: false, port: 43117 },
     cliPath: provider,
-    checkIntervalMinutes: claude ? 10 : 5,
+    checkIntervalMinutes: 30,
     api: { minIntervalSeconds: 30 },
     keepAlive: { enabled: false, periodHours: claude ? 2 : 6, model: claude ? 'haiku' : 'gpt-5.6-luna', home: `~/.${provider}-tmp` },
-    autoReset: { enabled: !claude },
+    autoReset: { enabled: !claude, confirmationRequired: false },
     autoRotate: {
       enabled: false,
       resetAware: !claude,
@@ -326,6 +328,7 @@ export function automationSettings(config: ServiceConfig, provider: AuthProvider
     enabled: own.keepAlive.enabled,
     autoRotate: own.autoRotate.enabled,
     autoReset: provider === 'codex' && own.autoReset.enabled,
+    resetConfirmationRequired: provider === 'codex' && own.autoReset.confirmationRequired,
     fiveHourThresholdPercent: clampPercent(own.autoRotate.fiveHourThresholdPercent, claude ? 95 : 100),
     weeklyThresholdPercent: clampPercent(own.autoRotate.weeklyThresholdPercent, claude ? 99.5 : 99),
     countsWindow: modelWindowFilter(own.autoRotate.modelLimits, claude ? claudeCodeModel() : undefined),
@@ -352,4 +355,223 @@ export function strategySummary(config: ServiceConfig, provider: AuthProvider): 
 /** The config file inside a service home. */
 export function configFileOf(home: string): string {
   return path.join(home, 'config.json');
+}
+
+// --- config authority: revisions, scopes and the owner's writes -------------------------------------------------
+
+/**
+ * What a setting governs. `engine` settings drive the service; `presentation` ones are stored and shared for clients
+ * but change nothing in the engine; `local` ones are an editor's own integration choices (whether and how it
+ * connects) that clients never patch; `workspace` ones are a global default that each connection may override in
+ * its workspace context.
+ */
+export type SettingScope = 'engine' | 'presentation' | 'local' | 'workspace';
+
+const LOCAL_KEYS = new Set(['accountService.enabled', 'accountService.background']);
+const WORKSPACE_KEYS = new Set(['bridge.codex.sessionDirectory', 'bridge.claude.sessionDirectory']);
+const PRESENTATION_KEYS = new Set(['chatTokens.enabled', 'updateIntervalMinutes', 'refreshIntervalMinutes', 'accounts',
+  'claude.statusBar.accountNumber', 'codex.statusBar.accountNumber', 'codex.switchRestartHint',
+  'claude.advanced.rotationDiagnostics', 'codex.advanced.rotationDiagnostics']);
+
+export function settingScope(dotted: string): SettingScope {
+  if (LOCAL_KEYS.has(dotted)) { return 'local'; }
+  if (WORKSPACE_KEYS.has(dotted)) { return 'workspace'; }
+  if (PRESENTATION_KEYS.has(dotted) || dotted.startsWith('statusBar.') || dotted.startsWith('chatChips.')) { return 'presentation'; }
+  return 'engine';
+}
+
+/** Every dotted key a client can address, in `listConfig` order. */
+export function configKeys(): string[] {
+  return listConfig(defaultConfig()).map((entry) => entry.key);
+}
+
+export type ConfigView = { config: ServiceConfig; revision: number; revisions: Record<string, number>; scopes: Record<string, SettingScope> };
+export type ConfigPatchResult = { config: ServiceConfig; revision: number; changed: string[] };
+
+/** A rejected configuration change; `code` and `data` travel to the client with the error. */
+export class ConfigError extends RpcError {
+  constructor(message: string, code: 'config-conflict' | 'config-local-setting' | 'config-invalid', readonly data?: Record<string, unknown>) { super(message, code); }
+}
+
+type ConfigDocument = { config: ServiceConfig; revision: number; revisions: Record<string, number> };
+
+function readDocument(file: string): { document?: ConfigDocument; missing: boolean; invalid: boolean; raw?: Record<string, unknown> } {
+  let text: string;
+  try { text = fs.readFileSync(file, 'utf8'); }
+  catch (error) { return { missing: (error as NodeJS.ErrnoException).code === 'ENOENT', invalid: false }; }
+  let parsed: unknown;
+  try { parsed = JSON.parse(text); } catch { return { missing: false, invalid: true }; }
+  if (!isObject(parsed)) { return { missing: false, invalid: true }; }
+  const revision = typeof parsed.revision === 'number' && Number.isInteger(parsed.revision) && parsed.revision >= 0 ? parsed.revision : 0;
+  const revisions: Record<string, number> = {};
+  if (isObject(parsed.revisions)) {
+    for (const [key, value] of Object.entries(parsed.revisions)) {
+      if (typeof value === 'number' && Number.isInteger(value) && value >= 0) { revisions[key] = Math.min(value, revision); }
+    }
+  }
+  return { document: { config: normalizeConfig(parsed), revision, revisions }, missing: false, invalid: false, raw: parsed };
+}
+
+function changedKeys(before: ServiceConfig, after: ServiceConfig): string[] {
+  const keys: string[] = [];
+  const old = new Map(listConfig(before).map((entry) => [entry.key, JSON.stringify(entry.value)]));
+  for (const entry of listConfig(after)) {
+    if (old.get(entry.key) !== JSON.stringify(entry.value)) { keys.push(entry.key); }
+  }
+  return keys;
+}
+
+export type ConfigAuthorityOptions = {
+  log?: (message: string) => void;
+  /** Throws when this process may not write the file (it lost the home's lease); checked before every write. */
+  assertWritable?: () => void;
+  /** Values for keys the file does not have yet (a first run); existing settings are never replaced by them. */
+  seed?: Record<string, unknown>;
+  /** Persist the seed (and a missing file) right away; only the lease owner does. */
+  persist?: boolean;
+};
+
+/**
+ * The engine's persisted configuration. Every key carries the revision that last changed it, so a client's patch
+ * made against an older view is refused for exactly the keys someone else changed meanwhile, and a reconnecting
+ * client never overwrites them. Only the lease owner writes; before writing it merges a hand edit of the file, and an
+ * unparsable file is set aside rather than overwritten.
+ */
+export class ConfigAuthority {
+  private document: ConfigDocument;
+  private stamp?: string;
+  private invalidFile = false;
+  private readonly log: (message: string) => void;
+
+  constructor(private readonly file: string, private readonly options: ConfigAuthorityOptions = {}) {
+    this.log = options.log ?? (() => undefined);
+    const read = readDocument(file);
+    this.document = read.document ?? { config: defaultConfig(), revision: 0, revisions: {} };
+    this.invalidFile = read.invalid;
+    if (read.invalid) { this.log(`config: ${file} is not valid JSON; using defaults until it is fixed or a setting is changed`); }
+    this.stamp = this.fileStamp();
+    const seeded = this.seed(options.seed ?? {}, read.raw, read.missing || read.invalid);
+    if (options.persist && (seeded.length || read.missing)) { this.write(); }
+  }
+
+  get config(): ServiceConfig { return this.document.config; }
+  get revision(): number { return this.document.revision; }
+  revisionOf(key: string): number { return this.document.revisions[key] ?? 0; }
+
+  view(): ConfigView {
+    const scopes: Record<string, SettingScope> = {};
+    for (const key of configKeys()) { scopes[key] = settingScope(key); }
+    return { config: structuredClone(this.document.config), revision: this.document.revision, revisions: { ...this.document.revisions }, scopes };
+  }
+
+  /** Fills keys absent from the raw file with the seed values; returns the keys it filled. */
+  private seed(values: Record<string, unknown>, raw: Record<string, unknown> | undefined, everything: boolean): string[] {
+    const filled: string[] = [];
+    let next = this.document.config;
+    for (const [key, value] of Object.entries(values)) {
+      const { provider, schema } = resolveKey(key);
+      const present = !everything && raw !== undefined && lookup(provider ? raw[provider] : raw, schema.key.split('.')) !== undefined;
+      if (present) { continue; }
+      try {
+        const candidate = setConfigValue(next, key, value);
+        if (JSON.stringify(getConfigValue(candidate, key)) !== JSON.stringify(getConfigValue(next, key))) { filled.push(key); }
+        next = candidate;
+      } catch (error) { this.log(`config: ignored the initial value of ${key}: ${error instanceof Error ? error.message : String(error)}`); }
+    }
+    if (filled.length) {
+      this.document = { ...this.document, config: next };
+      this.bump(filled);
+      this.log(`config: first values for ${filled.join(', ')}`);
+    }
+    return filled;
+  }
+
+  private fileStamp(): string | undefined {
+    try { const stat = fs.statSync(this.file); return `${stat.mtimeMs}:${stat.size}:${stat.ino}`; } catch { return undefined; }
+  }
+
+  private bump(keys: string[]): void {
+    if (!keys.length) { return; }
+    const revision = this.document.revision + 1;
+    const revisions = { ...this.document.revisions };
+    for (const key of keys) { revisions[key] = revision; }
+    this.document = { ...this.document, revision, revisions };
+  }
+
+  /**
+   * Picks up a hand edit of the file: the keys whose values changed get a new revision. Returns those keys, or
+   * undefined when the file did not change (or is unreadable, which keeps the current values).
+   */
+  reloadIfChanged(): string[] | undefined {
+    const stamp = this.fileStamp();
+    if (stamp === this.stamp) { return undefined; }
+    this.stamp = stamp;
+    const read = readDocument(this.file);
+    if (read.invalid) {
+      if (!this.invalidFile) { this.log(`config: ${this.file} is not valid JSON any more; keeping the current settings`); }
+      this.invalidFile = true;
+      return undefined;
+    }
+    this.invalidFile = false;
+    if (!read.document) { return undefined; }
+    const changed = changedKeys(this.document.config, read.document.config);
+    // A file written by an older service lacks revisions; ours stay authoritative and only move forward.
+    const revision = Math.max(this.document.revision, read.document.revision);
+    this.document = { config: read.document.config, revision, revisions: { ...this.document.revisions, ...read.document.revisions } };
+    this.bump(changed);
+    return changed;
+  }
+
+  /**
+   * Applies dotted-key values. With `baseRevision`, a key changed after that revision is a conflict and nothing is
+   * applied; without it the change is unconditional (an explicit write by a user). Local settings are refused when
+   * `refuseLocal` is set (client patches). Returns the keys whose values actually changed.
+   */
+  patch(values: Record<string, unknown>, options: { baseRevision?: number; refuseLocal?: boolean; source?: string } = {}): ConfigPatchResult {
+    const keys = Object.keys(values);
+    if (options.refuseLocal) {
+      const local = keys.filter((key) => settingScope(key) === 'local');
+      if (local.length) { throw new ConfigError(`${local.join(', ')} ${local.length === 1 ? 'is a' : 'are'} local editor setting${local.length === 1 ? '' : 's'}, not service configuration.`, 'config-local-setting', { keys: local }); }
+    }
+    // A hand edit made since the last read counts as a change by someone else.
+    const external = this.reloadIfChanged();
+    if (external?.length) { this.log(`config: merged ${external.join(', ')} edited in ${path.basename(this.file)}`); }
+    let next = this.document.config;
+    for (const [key, value] of Object.entries(values)) {
+      try { next = setConfigValue(next, key, value); }
+      catch (error) { throw new ConfigError(error instanceof Error ? error.message : String(error), 'config-invalid', { keys: [key] }); }
+    }
+    if (options.baseRevision !== undefined) {
+      // A key already holding the requested value is no conflict: both sides agree.
+      const stale = keys.filter((key) => this.revisionOf(key) > options.baseRevision!
+        && JSON.stringify(getConfigValue(this.document.config, key)) !== JSON.stringify(getConfigValue(next, key)));
+      if (stale.length) {
+        const current: Record<string, unknown> = {};
+        for (const key of stale) { current[key] = getConfigValue(this.document.config, key); }
+        throw new ConfigError(`${stale.join(', ')} changed since revision ${options.baseRevision} (now ${this.document.revision}); read the configuration again.`,
+          'config-conflict', { revision: this.document.revision, keys: stale, values: current });
+      }
+    }
+    const changed = keys.filter((key) => JSON.stringify(getConfigValue(this.document.config, key)) !== JSON.stringify(getConfigValue(next, key)));
+    if (!changed.length) { return { config: this.document.config, revision: this.document.revision, changed }; }
+    const previous = this.document;
+    this.document = { ...this.document, config: next };
+    this.bump(changed);
+    try { this.write(); }
+    catch (error) { this.document = previous; throw error; }
+    return { config: this.document.config, revision: this.document.revision, changed };
+  }
+
+  /** Writes the document atomically; an unparsable file on disk is set aside first, never overwritten. */
+  private write(): void {
+    this.options.assertWritable?.();
+    if (this.invalidFile) {
+      const aside = `${this.file}.invalid-${new Date().toISOString().replace(/[:.]/g, '-')}`;
+      try { fs.renameSync(this.file, aside); this.log(`config: kept the unreadable ${path.basename(this.file)} as ${path.basename(aside)}`); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') { throw error; } }
+      this.invalidFile = false;
+    }
+    writeJsonAtomically(this.file, { ...this.document.config, revision: this.document.revision, revisions: this.document.revisions } as unknown as Record<string, unknown>);
+    this.stamp = this.fileStamp();
+  }
 }

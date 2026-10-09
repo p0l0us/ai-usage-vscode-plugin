@@ -6,9 +6,9 @@ export type BridgeFrame = { bridge_subagent?: { session_id: string; agent: impor
 
 /** Consume bounded SSE frames; a truncated stream is an error, never a successful answer. */
 export async function streamBridge(body: unknown, onFrame: (frame: BridgeFrame, sessionId?: string) => void | Promise<void>, cancellation: vscode.CancellationToken): Promise<{ sessionId?: string; finishReason?: string }> {
-  const { endpoint, token } = await bridgeConnection();
+  const { endpoint, token, workspaceContext } = await bridgeConnection();
   if (cancellation.isCancellationRequested) throw new vscode.CancellationError();
-  const data = JSON.stringify(body);
+  const data = JSON.stringify({ ...(body as Record<string, unknown>), bridge_workspace_context: workspaceContext });
   if (Buffer.byteLength(data) > 8 * 1024 * 1024) throw new Error('The bridge request exceeds 8 MiB. Reduce conversation context or attachments.');
   return new Promise((resolve, reject) => {
     let buffer = ''; let done = false; let finished = false; let bytes = 0;

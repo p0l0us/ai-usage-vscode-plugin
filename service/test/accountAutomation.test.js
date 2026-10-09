@@ -958,3 +958,110 @@ test('independent account operations serialize while nested sweep checks reuse t
   await new Promise(resolve=>setImmediate(resolve));assert.deepEqual(events,['first','nested']);
   release();await Promise.all([first,second]);assert.deepEqual(events,['first','nested','first done','second']);
 });
+
+
+function confirmationFixture(t) {
+  return fixture(t, { ids: ['a'], values: { a: [100, 10] }, credits: { a: 1 },
+    settings: { codex: { autoReset: true, resetConfirmationRequired: true } } });
+}
+
+test('reset confirmation preview spends nothing and does not persist an attempt; claim and approval are one-use', async t => {
+  const f = confirmationFixture(t);
+  await f.service.tick();
+  const before = fs.readdirSync(f.settings.codex.home).filter(file => file.endsWith('.json')).map(file => fs.readFileSync(path.join(f.settings.codex.home, file), 'utf8'));
+  const [decision] = f.service.resetConfirmations();
+  assert.equal(decision.accountId, 'a'); assert.equal(decision.plannedCredits, 1);
+  assert.equal(decision.availableCredits, 1); assert.equal(f.resets.length, 0);
+  assert.equal(f.service.claimReset(decision.id, 1).id, decision.id);
+  assert.equal(f.service.claimReset(decision.id, 2), null);
+  assert.equal((await f.service.resolveReset(decision.id, true, 2)).status, 'stale');
+  assert.deepEqual(fs.readdirSync(f.settings.codex.home).filter(file => file.endsWith('.json')).map(file => fs.readFileSync(path.join(f.settings.codex.home, file), 'utf8')), before);
+  assert.ok(before.every(text => !text.includes('resetAttemptKey')));
+  const outcomes = await Promise.all([f.service.resolveReset(decision.id, true, 1), f.service.resolveReset(decision.id, true, 1)]);
+  assert.equal(outcomes.filter(result => result.status === 'completed').length, 1);
+  assert.equal(f.resets.length, 1);
+  assert.equal((await f.service.resolveReset(decision.id, true, 1)).status, 'stale');
+});
+
+for (const scenario of ['cancel', 'disconnect', 'expiry', 'quota', 'account', 'config', 'shutdown', 'freshness', 'native']) {
+  test(`reset confirmation ${scenario} cannot redeem or replay`, async t => {
+    const f = confirmationFixture(t); await f.service.tick();
+    const [decision] = f.service.resetConfirmations(); f.service.claimReset(decision.id, 1);
+    if (scenario === 'cancel') assert.equal((await f.service.resolveReset(decision.id, false, 2)).status, 'cancelled');
+    if (scenario === 'disconnect') f.service.forgetResetClient(1);
+    if (scenario === 'expiry') f.advance(5 * 60_000);
+    if (scenario === 'quota') { f.service.observe('codex', 'a', { ...usage('codex', [100, 10], Date.now()), resetCredits: { availableCount: 0 } }); await f.service.tick(); }
+    if (scenario === 'account') f.active.codex = 'b';
+    if (scenario === 'config') f.settings.codex.resetConfirmationRequired = false;
+    if (scenario === 'freshness') f.advance(3 * 60_000);
+    if (scenario === 'native') f.options.matchesNative = false;
+    if (scenario === 'shutdown') f.service.dispose();
+    assert.equal((await f.service.resolveReset(decision.id, true, 1)).status, 'stale');
+    assert.equal(f.resets.length, 0);
+  });
+}
+
+test('unclaimed confirmation stays safe without UI; cancelled unchanged facts do not reprompt', async t => {
+  const f = confirmationFixture(t); await f.service.tick();
+  const [decision] = f.service.resetConfirmations();
+  await f.service.resolveReset(decision.id, false);
+  f.advance(60_000); await f.service.tick();
+  assert.equal(f.resets.length, 0); assert.deepEqual(f.service.resetConfirmations(), []);
+});
+
+
+test('cancel or native identity change during awaited final validation prevents the reset leaf', async t => {
+  for (const mutation of ['cancel', 'native']) {
+    const f = confirmationFixture(t); await f.service.tick();
+    const [decision] = f.service.resetConfirmations(); f.service.claimReset(decision.id, 1);
+    const original = f.service.profiles.credential;
+    let reads = 0;
+    f.service.profiles.credential = async (...args) => {
+      const value = await original(...args);
+      if (++reads === 3) {
+        if (mutation === 'cancel') await f.service.resolveReset(decision.id, false, 1);
+        else f.options.matchesNative = false;
+      }
+      return value;
+    };
+    await f.service.resolveReset(decision.id, true, 1);
+    assert.equal(f.resets.length, 0, mutation);
+  }
+});
+
+
+test('lease admission lost during final validation denies approved credit mutation', async t => {
+  const f = confirmationFixture(t); await f.service.tick();
+  const [decision] = f.service.resetConfirmations(); f.service.claimReset(decision.id, 1);
+  const original = f.service.profiles.credential; let reads = 0; let denied = false;
+  f.service.admit = () => { if (denied) throw new Error('Synthetic lease lost'); };
+  f.service.profiles.credential = async (...args) => {
+    const credential = await original(...args); if (++reads === 3) denied = true; return credential;
+  };
+  await assert.rejects(f.service.resolveReset(decision.id, true, 1), /lease lost/);
+  assert.equal(f.resets.length, 0);
+  assert.equal((await f.service.resolveReset(decision.id, true, 1)).status, 'stale');
+});
+
+
+test('a cancelled queued approval cannot authorize the independent sweep that holds its lock', async t => {
+  const f = confirmationFixture(t); await f.service.tick();
+  const [decision] = f.service.resetConfirmations(); f.service.claimReset(decision.id, 1);
+  f.service.write('codex', 'rotation-sweep', { checkedAt: 0, nextAllowedAt: 0 });
+  let release, entered;
+  const blocked = new Promise(resolve => { release = resolve; });
+  const ready = new Promise(resolve => { entered = resolve; });
+  const original = f.service.profiles.matchesNative; let first = true;
+  f.service.profiles.matchesNative = async (...args) => {
+    if (first) { first = false; entered(); await blocked; }
+    return original(...args);
+  };
+  const sweep = f.service.tick(); await ready;
+  // The preceding manual waiter keeps the cancelled approval queued while the sweep resumes.
+  const manualWaiter = f.service.withAccountLock('codex', async () => {}, { waitMs: 1000 });
+  const controller = new AbortController();
+  const approval = f.service.resolveReset(decision.id, true, 1, { waitMs: 1000, signal: controller.signal });
+  controller.abort(); release();
+  await assert.rejects(approval, /Cancelled/); await sweep; await manualWaiter;
+  assert.equal(f.resets.length, 0);
+});

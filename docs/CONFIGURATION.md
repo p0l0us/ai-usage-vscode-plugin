@@ -12,13 +12,28 @@ filtered to that service, including its config section:
 
 ## Sources
 
-Each provider has a `source` setting that selects where the account service reads usage. The extension displays the returned readings and does not fetch usage itself while the service connection is enabled:
+Each provider has a `source` setting that selects where the account service reads usage. The extension displays the returned readings; both deployment modes use the shared runtime:
 
 | Setting | Options | Default | Notes |
 |---|---|---|---|
-| `aiUsage.claude.source` | `both`, `cli`, `api`, `accountFile` | `both` | `cli` runs Claude Code's own `/usage` (set `aiUsage.claude.cliPath` if it is not on PATH): no model is called and nothing is billed, but Claude Code reaches the usage endpoint to answer it, so it is spaced like `api`. `accountFile` reads the usage Claude Code itself cached in `~/.claude.json` — no network call, so it can be polled every few seconds (`aiUsage.claude.accountFile.checkIntervalSeconds`), but it is only as fresh as Claude Code's own last request, and Claude Code drops that cache on an account switch until something asks it for usage again. |
-| `aiUsage.codex.source` | `both`, `cli`, `api`, `sessionLog` | `both` | `cli` runs `codex app-server` (set `aiUsage.codex.cliPath` if it is not on PATH). The service reads earned-reset availability through app-server with `both`, `cli` or `api`. `sessionLog` makes no extra status-bar request, but is only as fresh as your last Codex turn; account automation may still check a saved active profile when auto-reset is on. |
+| `aiUsage.claude.source` | `auto`, `both`, `cli`, `api`, `accountFile` | `auto` | `cli` runs Claude Code's own `/usage` (set `aiUsage.claude.cliPath` if it is not on PATH): no model is called and nothing is billed, but Claude Code reaches the usage endpoint to answer it, so it is spaced like `api`. `accountFile` reads the usage Claude Code itself cached in `~/.claude.json` — no network call, so it can be polled every few seconds (`aiUsage.claude.accountFile.checkIntervalSeconds`), but it is only as fresh as Claude Code's own last request, and Claude Code drops that cache on an account switch until something asks it for usage again. |
+| `aiUsage.codex.source` | `auto`, `both`, `cli`, `api`, `sessionLog` | `auto` | `cli` runs `codex app-server` (set `aiUsage.codex.cliPath` if it is not on PATH). Explicit `both`, `cli` and `api` modes also read earned-reset availability through app-server; `auto` does not launch it to enrich a successful cheaper reading. `sessionLog` makes no extra status-bar request, but is only as fresh as your last Codex turn; account automation may still check a saved active profile when auto-reset is on. |
 | `aiUsage.copilot.source` | `api` | `api` | The Copilot CLI has no headless usage command. |
+
+`auto` tries an identity-keyed shared cache, the local account file (Claude) or session log (Codex), the direct
+usage API, then the vendor CLI, stopping at the first fresh usable reading. Direct API calls avoid launching a CLI;
+Claude's `/usage` still calls the same endpoint, so spawning it costs more work without avoiding that rate limit.
+Readings retain their original timestamps. A reading must be younger than `checkIntervalMinutes`, contain usable
+quota windows and have no expired reset; future timestamps are rejected. Provider budgets and backoff still apply,
+including to CLI paths that reach the same endpoint. Codex session logs cannot identify a saved account, so they do
+not update saved-profile usage. Auto does not make an extra app-server call just to collect earned-reset credits.
+Usage source polling sends no model prompt. Account keep-alives and rotation checks retain their separate settings
+and can make model calls; selecting `auto` does not enable them.
+
+Claude and Codex default to **30 minutes** (`aiUsage.<provider>.checkIntervalMinutes`). Auto uses minutes for both
+freshness and checks; Claude's separate `accountFile.checkIntervalSeconds` applies to explicit `accountFile` and
+`both`. Existing saved source selections and intervals, including `both`, 10 or 5 minutes, stay unchanged; only
+missing settings receive the new defaults. Copilot keeps its existing API source and five-minute interval.
 
 `both` combines the two: the local file is re-read on every check and used while its reading is no older than that
 service's `checkIntervalMinutes`; once it falls behind, because the CLI has been idle or has never written one, the
@@ -148,9 +163,9 @@ file to the folder's `.ai-usage.profiles.json`. From a terminal, `ai-usage save 
 another folder). The three settings are mirrored to the service's `privateProfiles.enabled`,
 `projectProfiles.enabled` and `projectProfiles.file`.
 
-Known limitation: the account service is one per host, so the project profiles of every folder open in any
-connected window (and any folder named to `ai-usage --project`) are merged into one list, and a project can be
-used with another open project's profiles. Keeping them apart per folder may come later.
+Known limitation: project profiles from folders declared by connected clients are available in the shared profile
+list. Per-connection workspace context isolates session-token readings, Copilot context and bridge inference
+folders; it does not isolate project-profile visibility.
 
 The file holds login tokens in plain text. When the folder is a Git repository, the first project profile saved
 there adds the file's path to the folder's `.gitignore`, and a notification says so. Do not commit the file.
@@ -385,25 +400,26 @@ stop|restart|run` manages the service, `log` shows its log and `mcp` serves the
 profiles and, with `save` and `import`, keeps the new profile there. VS Code terminals see the command through
 the extension's terminal environment; elsewhere add `~/.ai-usage/bin` to your PATH.
 
-**Settings.** Every `aiUsage.*` setting is also a service/CLI setting with the prefix removed. The schema is
-generated from the same manifest, including usage sources and intervals, native CLI configuration, proxy and bridge
-settings, advanced diagnostics and UI preferences. The service persists them in `~/.ai-usage/config.json`.
-VS Code applies its effective settings on every connection and pushes later changes. CLI changes are announced to
-connected editors and reflected in their user settings. When editors disagree, the latest configuration write wins;
-reconnecting reapplies that editor's effective settings. Without VS Code, configure everything with `ai-usage config`.
-UI preferences are stored for clients; service connection preferences do not start or stop an OS process.
+**Settings.** Engine settings share a generated manifest schema and are persisted in `~/.ai-usage/config.json`.
+`ai-usage config` uses their keys without the `aiUsage.` prefix. Editors load persisted engine values on connection
+and reconnect instead of pushing their entire settings. An explicit editor engine-setting edit carries the last observed
+configuration revision; a conflicting key edit is rejected and the client reloads authoritative values.
+Explicit CLI writes may set requested keys without a revision guard. CLI changes are
+announced to connected editors. Presentation and editor connection preferences remain local to the editor.
+Use `ai-usage service start|stop` to manage the background process.
 See [service ownership](SERVICE_ARCHITECTURE.md) for the boundaries and deployment modes.
 
 **What is where.** Everything is under `~/.ai-usage` (`AI_USAGE_HOME` moves it): `profiles.json` (the private
-profiles with their logins, mode 0600), `config.json`, `state/` (per-account readings, sweep records, lock files
-and the shared Claude endpoint call ledger), `service.log`, `service.sock`
-(a named pipe on Windows) and `service.token`, which clients present first. **AI Usage: Account Service…** shows
+profiles with their logins, mode 0600), `config.json`, `state/` (per-account readings, sweep records and the shared
+Claude endpoint call ledger), `service.log`, `service.sock` (a named pipe on Windows) and `service.token`, which
+clients present first. Runtime ownership is held separately by an OS endpoint: an abstract socket on Linux, a named
+pipe on Windows, or a fixed loopback TCP port on other platforms. **AI Usage: Account Service…** shows
 the status, opens the log and starts, stops, restarts, reinstalls or uninstalls the service; uninstalling keeps the
 data files.
 
 | Setting | Default | Purpose |
 | --- | --- | --- |
-| `aiUsage.accountService.enabled` | `true` | Use the shared service connection. Off: the same engine runs inside the plugin with direct calls, including local score calculation. Does not uninstall or stop an existing background service. |
+| `aiUsage.accountService.enabled` | `true` | Use the shared runtime. Off selects editor-owned hosting through the same socket; an existing owner is reused. Does not uninstall or stop a background service. |
 | `aiUsage.accountService.background` | `true` | Offer to install the service as a background process. Off, or until it is installed: it runs inside VS Code while a window is open. Turning it off does not uninstall an installed service. |
 
 **Without VS Code.** The service is also the npm package `ai-usage-service` (Node.js 20 or newer, no
@@ -414,14 +430,14 @@ way as its own.
 ## MCP server for AI agents (experimental)
 
 The account service can serve its profiles to AI agents over the Model Context Protocol: `ai-usage mcp` is a stdio
-MCP server whose tools list every saved profile with its usage windows (`list_accounts`), read a fresh reading for
-one profile (`refresh_usage`) and, when allowed, switch the active account (`switch_account`) or run a rotation
+MCP server whose tools list saved profiles and native-login usage with freshness and model-scoped windows
+(`list_accounts`), request a reading for a saved profile or the native login (`refresh_usage`) and, when allowed, switch the active account (`switch_account`) or run a rotation
 sweep (`rotate_account`). While it is on, the extension also offers the server to the agents of the VS Code window
 as **AI Usage accounts**, so Copilot agent mode and other consumers of the editor's MCP servers see it without any
-configuration. **Set up MCP server…** in the top-level AI Usage menu installs and enables it, then registers it with
+configuration. **Set up MCP server…** in the top-level AI Usage menu enables the bundled server, then registers it with
 the Claude or Codex CLI. Their Accounts menus offer the same registration while MCP is on. Registration runs the
-CLI's own `mcp add` for `~/.ai-usage/bin/ai-usage mcp`, and other command-line agents register that command
-themselves. The feature is experimental, off by default, and described in [MCP server for AI agents](MCP.md): the tools, their answers, how to register the
+CLI's own `mcp add` for the available bundled or installed command, and other command-line agents register
+that command themselves. Background installation is optional. The feature is experimental, off by default, and described in [MCP server for AI agents](MCP.md): the tools, their answers, how to register the
 server with Claude Code and Codex, and what a switch by an agent means.
 
 | Setting | Default | Purpose |
@@ -572,7 +588,18 @@ bridge records file. This does not add native IDE features that the bridge proto
 
 `aiUsage.claude.advanced.rotationDiagnostics` and `aiUsage.codex.advanced.rotationDiagnostics` default to `false`.
 Enable either to show all saved account scores, candidate order, exclusions, reading timestamps and the reason the
-current account remains selected in its status bar tooltip. The service supplies these values when enabled; with
-the service connection disabled, the plugin uses the same shared engine to calculate them. Tooltip rendering
+current account remains selected in its status bar tooltip. The shared runtime supplies these values in both deployment modes. Tooltip rendering
 never calls a provider. `ai-usage rotation-weights claude|codex` exposes the same information in the terminal.
 See the [score definitions and examples](SERVICE_ARCHITECTURE.md#advanced-rotation-tooltip) and [rotation policy](ROTATION.md).
+
+## Earned reset confirmation
+
+`aiUsage.codex.autoReset.confirmationRequired` defaults to `false`, preserving automatic earned-credit redemption
+when `autoReset.enabled` is on. Enable confirmation to require approval in a connected editor before any credit
+is spent. This setting does not enable auto-reset. The editor shows the engine's proposed account, quota windows,
+credit count and reason; the engine rechecks its policy and current account, settings and credits before redeeming.
+
+Only one editor can claim a decision. Cancel, closing the dialog, disconnecting the claiming editor, expiry after
+five minutes, changed facts or runtime shutdown prevent approval from spending a credit. Approval is single use.
+With no approving editor, the engine leaves the credit untouched. Standalone CLI and MCP usage reads cannot
+approve a pending reset. See [shared runtime ownership](SERVICE_ARCHITECTURE.md).

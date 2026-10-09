@@ -1,7 +1,13 @@
 # Changelog
 
-## 1.0.10 (unreleased)
+## 1.0.11 (unreleased)
 
+- Claude and Codex now default to `auto` sources: fresh cache, local usage file, direct API, then CLI, stopping at
+  the first usable reading. New configurations check every 30 minutes; existing modes and intervals remain unchanged.
+- Optional `codex.autoReset.confirmationRequired` requires one connected editor to approve an earned reset before
+  the engine revalidates and redeems it. Off by default; with confirmation on and no approval, no credit is spent.
+
+- Usage percentages in the status bar, tooltips and account menus round to whole numbers without changing the underlying readings.
 - **Back** in a Claude or Codex Accounts menu and in the Account service menu returns to the previous menu again
   instead of closing everything: the previous menu now opens over the one you leave. Closing it first returned focus
   to the chat or editor, and that focus closed the reopened menu.
@@ -12,10 +18,12 @@
 - The service now owns live Claude/Codex/Copilot usage, source fallback, cache and backoff, native CLI settings,
   credential updates, the Codex proxy and CLI bridge. The extension displays service values and forwards settings;
   it does not fall back to provider reads after a service disconnect. Native logins work without saved profiles.
-- Every VS Code setting is available through `ai-usage config`, using a generated shared schema. Editor settings
-  apply on connection; CLI changes propagate back to connected editors. Standalone service configuration needs no VS Code.
-- Background, embedded and plugin-local modes reuse the same service engine. Embedded mode now uses service-owned
-  profile storage; nonconflicting legacy VS Code credentials migrate on connection.
+- Engine settings use a generated shared schema and revision-checked updates through `ai-usage config` and VS Code.
+  Editors read persisted configuration on connection; presentation settings stay local. Standalone configuration needs no VS Code.
+- Background and editor-owned deployments share one runtime ownership lease and authenticated socket contract.
+  Linux uses an abstract socket, Windows a named pipe, and other platforms a deterministic loopback TCP port based
+  on the OS user and canonical service home; a collision fails closed without trying another port. Editor-owned
+  mode uses service-owned profile storage; nonconflicting legacy VS Code credentials migrate on connection.
 - Advanced Claude/Codex rotation diagnostics show every saved account's score, order, exclusions and current-account
   explanation in the status tooltip. `ai-usage rotation-weights` exposes the same diagnostics; `ai-usage usage` reads
   current native-login quota. All four rotation strategies reuse the existing scoring implementation.
@@ -24,7 +32,13 @@
   as integers; conflicts are reported, and only the owner changes native routing.
 - Native status reads and account checks share credential locks; independent manual operations serialize while
   nested sweep checks reuse their parent lock. New tests cover polling, account/source changes, backoff, rotation,
-  both client modes, settings parity, credential migration and proxy lifetime across processes.
+  both deployment modes, settings parity, credential migration and proxy lifetime across processes.
+- MCP works from the bundled extension without background installation and exposes native-login usage, including
+  unsaved accounts, with explicit freshness, unknown state and model-scoped limits. Account switching does not change
+  the selected model. Workspace context is scoped to the requesting connection; bridge restarts wait for child exit.
+- The root test command includes extension, service and bridge suites with temporary account homes and mocked
+  provider requests, covering both socket deployments and runtime ownership/configuration races. Its Node test
+  descendants deny external HTTP/HTTPS and `fetch` requests while allowing loopback fixtures.
 - Documented service ownership and the optional Docker deployment proposal, including host mounts, transport,
   authentication, singleton coordination and platform limitations.
 

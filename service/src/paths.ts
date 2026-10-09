@@ -63,7 +63,10 @@ export function readOrCreateToken(home = serviceHome()): string {
   } catch { /* Not created yet. */ }
   ensureServiceHome(home);
   const token = randomBytes(32).toString('hex');
-  fs.writeFileSync(file, token, { mode: 0o600 });
+  // Written aside and renamed, so a client never reads a half-written token.
+  const temporary = `${file}.${process.pid}-${randomBytes(4).toString('hex')}.tmp`;
+  fs.writeFileSync(temporary, token, { mode: 0o600, flag: 'wx' });
+  fs.renameSync(temporary, file);
   return token;
 }
 
@@ -74,8 +77,12 @@ export function readToken(home = serviceHome()): string | undefined {
   } catch { return undefined; }
 }
 
-/** `embedded`: hosted inside a VS Code window rather than as its own background process. */
-export type ServiceInfoFile = { pid: number; version: string; startedAt: string; socket: string; node: string; home: string; embedded?: boolean };
+/**
+ * `embedded`: hosted inside a VS Code window rather than as its own background process (kept for older clients;
+ * `mode` says the same). `instanceId` changes with every start, `lease` names how the home is owned (absent: a service from before the lease).
+ */
+export type ServiceInfoFile = { pid: number; version: string; startedAt: string; socket: string; node: string; home: string; embedded?: boolean;
+  mode?: 'background' | 'embedded'; instanceId?: string; protocol?: number; lease?: 'os' | 'tcp' };
 
 export function readServiceInfo(home = serviceHome()): ServiceInfoFile | undefined {
   try {

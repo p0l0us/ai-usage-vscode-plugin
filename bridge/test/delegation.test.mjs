@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { BridgeEngine } from '../src/engine.mjs';
 import { ClaudeAdapter } from '../src/claude.mjs';
 import { CodexAdapter } from '../src/codex.mjs';
@@ -15,7 +16,8 @@ for (const backend of ['codex', 'claude']) test(`${backend} tracks native childr
   const priorDirectory = process.env.BYOK_TEST_SESSION_DIRECTORY, priorAgents = process.env.BYOK_TEST_SUBAGENTS;
   process.env.BYOK_TEST_SESSION_DIRECTORY = directory; process.env.BYOK_TEST_SUBAGENTS = '1';
   const Adapter = backend === 'codex' ? CodexAdapter : ClaudeAdapter;
-  const engine = new BridgeEngine({ [backend]: new Adapter({ command: path.resolve(`test/fixtures/${backend}.mjs`) }) }, { sessionRecordsFile: path.join(directory, 'sessions.json') });
+  const fixtureCommand = fileURLToPath(new URL(`./fixtures/${backend}.mjs`, import.meta.url));
+  const engine = new BridgeEngine({ [backend]: new Adapter({ command: fixtureCommand }) }, { sessionRecordsFile: path.join(directory, 'sessions.json') });
   const token = 'test-token-at-least-24-characters';
   const server = createBridgeServer(engine, { token });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));

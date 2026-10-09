@@ -85,7 +85,7 @@ export class BridgeEngine {
     } else {
       if (this.sessions.size >= this.maxSessions) throw new BridgeError('Bridge session limit reached. Finish pending tool calls or retry later.', 429, 'bridge_busy');
       const settings = this.sessionSettings.value[backendName];
-      request = { ...request, saveSession: settings.persistSessions, sessionDirectory: settings.sessionDirectory, subagentsEnabled: settings.subagentsEnabled, toolTimeoutMs: settings.toolTimeoutMinutes * 60000 };
+      request = { ...request, saveSession: settings.persistSessions, sessionDirectory: request.workspaceDirectories?.[backendName] || settings.sessionDirectory, subagentsEnabled: settings.subagentsEnabled, toolTimeoutMs: settings.toolTimeoutMinutes * 60000 };
       const parent = request.forkSessionId && this.records.get(request.forkSessionId);
       if (request.forkSessionId && (!parent || !parent.persisted || !parent.released || !parent.native_session_id || parent.backend !== backendName)) throw new BridgeError('Forking requires a released saved session from the same backend.', 409, 'invalid_fork');
       const existing = request.conversationId && [...this.records.values()].find(r => r.conversation_id === request.conversationId && r.backend === backendName);
@@ -97,6 +97,10 @@ export class BridgeEngine {
       if (saved?.conversation_id && request.conversationId && saved.conversation_id !== request.conversationId) throw new BridgeError('The saved session belongs to another chat.', 409, 'continuation_mismatch');
       if (saved && (!saved.persisted || !saved.native_session_id)) throw new BridgeError('The previous chat session was not saved and cannot be resumed.', 409, 'continuation_expired');
       if (saved?.native_tools && backendName === 'codex' && saved.native_tools !== accountFingerprint(request.activeTools)) throw new BridgeError('The Codex tool list changed. Its saved session cannot replace dynamic tools during resume.', 409, 'continuation_mismatch');
+      const scopedDirectory = request.workspaceDirectories?.[backendName];
+      if (request.workspaceDirectories !== undefined && [saved, parent].some(record => record && (!scopedDirectory || record.cwd !== scopedDirectory))) {
+        throw new BridgeError('The saved session belongs to a different workspace.', 409, 'continuation_mismatch');
+      }
       if (saved) request = { ...request, saveSession: true, sessionDirectory: saved.cwd,
         resumeNativeId: saved.native_session_id, expectedAccount: saved.account_fingerprint };
       if (parent) request = { ...request, saveSession: true, sessionDirectory: parent.cwd,

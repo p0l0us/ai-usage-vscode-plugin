@@ -35,9 +35,13 @@ const codexView = () => ({ provider: 'codex', title: 'Codex', nativeUnsaved: tru
 function fakeClient(config = { enabled: true, switching: true }) {
   const calls = [];
   return {
-    calls, connected: true, config: { version: 1, claude: {}, codex: {}, mcp: config },
+    calls, connected: true, config: { version: 1, claude: { checkIntervalMinutes: 60 }, codex: { checkIntervalMinutes: 60 }, mcp: config },
     close() { this.connected = false; },
     async getConfig() { return this.config; },
+    async liveUsage(provider, force = false) {
+      calls.push(['liveUsage', provider, force]);
+      return { identity: 'opaque', profileId: provider === 'claude' ? 'p-a' : undefined, result: { kind: 'ok', usage: { provider, title: provider, fetchedAt: iso(0), windows: [{ label: '5h', usedPercent: 12, resetsAt: iso(4) }, { label: '7d Fable', usedPercent: 100, resetsAt: iso(20) }] } } };
+    },
     async list(provider) { calls.push(['list', provider]); return provider === 'claude' ? claudeView() : codexView(); },
     async activate(provider, target) {
       calls.push(['activate', provider, target]);
@@ -83,7 +87,7 @@ test('tools/list offers the four tools with schemas and annotations, without the
     assert.equal(typeof entry.annotations.readOnlyHint, 'boolean');
     assert.ok(!('switching' in entry), 'the internal flag is not sent');
   }
-  assert.deepEqual(response.result.tools[1].inputSchema.required, ['service', 'profile']);
+  assert.deepEqual(response.result.tools[1].inputSchema.required, ['service']);
   response = await call(server(fakeClient({ enabled: true, switching: false })), 1, 'tools/list');
   assert.deepEqual(response.result.tools.map((entry) => entry.name), ['list_accounts', 'refresh_usage']);
   assert.equal(TOOLS.filter((entry) => entry.switching).length, 2);
@@ -100,18 +104,18 @@ test('list_accounts answers with a readable text and structured content per serv
   assert.match(text, /#1 “Work” a@example.com \[active\]: 5h 23% \(resets in 2h\) · 7d 56% \(resets in 2d\) · 7d Fable 58% \(resets in 2d\) · checked 2026-09-30T21:30:00.000Z/);
   assert.match(text, /#2 “Backup” b@example.com \[at its limit\]: 5h 100% \(resets in 1h\)/);
   assert.match(text, /#3 “Spare” \[login problem: Login expired[^\]]*\]: no reading yet/);
-  assert.match(text, /Codex: active none \(the current login is not a saved profile\) · keep-alive off · rotation off \(5h ≥ 100%, 7d ≥ 99%\)\n {2}no saved profiles/);
+  assert.match(text, /Codex: active none \(the current login is not a saved profile\) · keep-alive off · rotation off \(5h ≥ 100%, 7d ≥ 99%\)\n {2}native active login \(unsaved\): .*\n {2}no saved profiles/);
   const [claude, codex] = result.structuredContent.services;
   assert.equal(claude.service, 'claude');
   assert.deepEqual(claude.activeProfile, { id: 'p-a', name: 'Work', number: 1 });
   assert.deepEqual(claude.profiles.map((entry) => [entry.number, entry.usable, entry.atLimit, Boolean(entry.loginProblem)]), [[1, true, false, false], [2, false, true, false], [3, false, false, true]]);
-  assert.deepEqual(claude.profiles[0].usage.windows[0], { label: '5h', usedPercent: 23, resetsAt: iso(2), resetsIn: '2h' });
+  assert.deepEqual(claude.profiles[0].usage.windows[0], { label: '5h', usedPercent: 23, resetsAt: iso(2), resetsIn: '2h', scope: 'account' });
   assert.equal(claude.profiles[2].usage, undefined);
   assert.deepEqual(codex.profiles, []);
   assert.ok(!JSON.stringify(result).includes('credential'), 'no login material leaves the service');
   client.calls.length = 0;
   const only = await tool(mcp, 'list_accounts', { service: 'codex' });
-  assert.deepEqual(client.calls, [['list', 'codex']]);
+  assert.deepEqual(client.calls, [['list', 'codex'], ['liveUsage', 'codex', false]]);
   assert.equal(only.structuredContent.services.length, 1);
   const bad = await call(mcp, 8, 'tools/call', { name: 'list_accounts', arguments: { service: 'copilot' } });
   assert.equal(bad.error.code, -32602);
@@ -258,7 +262,7 @@ test('end to end: an agent lists the saved profiles of a running service and swi
   response = await io.next();
   assert.equal(response.result.isError, undefined, response.result.content[0].text);
   const claude = response.result.structuredContent.services[0];
-  assert.deepEqual(claude.profiles.map((entry) => [entry.number, entry.name, entry.active, entry.usable]), [[1, 'Work', true, true], [2, 'Backup', false, true]]);
+  assert.deepEqual(claude.profiles.map((entry) => [entry.number, entry.name, entry.active, entry.usable]), [[1, 'Work', true, false], [2, 'Backup', false, false]]);
   io.send({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'switch_account', arguments: { service: 'claude', profile: '2' } } });
   response = await io.next();
   assert.equal(response.result.isError, undefined, response.result.content[0].text);
@@ -273,4 +277,85 @@ test('end to end: an agent lists the saved profiles of a running service and swi
   response = await io.next();
   assert.deepEqual(response.result.tools.map((entry) => entry.name), ['list_accounts', 'refresh_usage']);
   assert.equal(await io.end(), 0);
+});
+
+test('native unsaved usage exposes freshness/model limits and refreshes without selecting a profile or model', async () => {
+  const client = fakeClient(); const mcp = server(client);
+  const listed = await tool(mcp, 'list_accounts', { service: 'codex' });
+  const summary = listed.structuredContent.services[0];
+  assert.equal(summary.nativeUnsaved, true);
+  assert.equal(summary.activeUsage.saved, false);
+  assert.equal(summary.activeUsage.freshness.state, 'fresh');
+  assert.equal(summary.activeUsage.modelLimited, true);
+  assert.equal(summary.activeUsage.usage.windows[1].scope, 'model');
+  assert.equal(summary.activeUsage.usage.windows[1].model, 'Fable');
+  assert.equal(summary.profiles.length, 0);
+  const refreshed = await tool(mcp, 'refresh_usage', { service: 'codex' });
+  assert.equal(refreshed.isError, undefined);
+  assert.ok(client.calls.some(c => c[0] === 'liveUsage' && c[2] === true));
+  assert.ok(!client.calls.some(c => ['activate', 'readUsage', 'rotate'].includes(c[0])));
+  assert.match(TOOLS.find(t => t.name === 'switch_account').description, /does not select or change a model/);
+});
+
+test('missing and failed last-good readings are unknown/stale rather than spare capacity', async () => {
+  const client = fakeClient();
+  client.liveUsage = async () => ({ identity: 'opaque', result: { kind: 'unavailable', provider: 'codex', reason: 'No native login.' } });
+  let result = await tool(server(client), 'refresh_usage', { service: 'codex' });
+  assert.equal(result.isError, true);
+  assert.equal(result.structuredContent.activeUsage.freshness.state, 'unknown');
+  assert.equal(result.structuredContent.activeUsage.usage, undefined);
+  client.liveUsage = async () => ({ identity: 'opaque', result: { kind: 'error', provider: 'codex', title: 'Codex', message: 'offline' },
+    lastGood: { provider: 'codex', title: 'Codex', fetchedAt: iso(-2), windows: [{ label: '5h', usedPercent: 0 }] } });
+  result = await tool(server(client), 'refresh_usage', { service: 'codex' });
+  assert.equal(result.structuredContent.activeUsage.freshness.state, 'stale');
+  assert.equal(result.structuredContent.activeUsage.status, 'error');
+});
+
+test('unavailable or disabled engines offer no tools, and cancellation reaches an active request', async () => {
+  const unavailable = new McpServer({ version: 'test', connect: async () => { throw new Error('offline'); } });
+  assert.deepEqual((await call(unavailable, 1, 'tools/list')).result.tools, []);
+  assert.deepEqual((await call(server(fakeClient({ enabled: false, switching: true })), 1, 'tools/list')).result.tools, []);
+  const client = fakeClient(); let started;
+  const pending = new Promise(resolve => { started = resolve; });
+  client.activate = async (provider, target, options) => {
+    started();
+    return new Promise((resolve, reject) => options.signal.addEventListener('abort', () => reject(new Error('cancelled; outcome may be unknown')), { once: true }));
+  };
+  const mcp = server(client);
+  const request = call(mcp, 42, 'tools/call', { name: 'switch_account', arguments: { service: 'codex', profile: 'Work' } });
+  await pending;
+  await mcp.handle({ jsonrpc: '2.0', method: 'notifications/cancelled', params: { requestId: 42 } });
+  assert.equal((await request).result.isError, true);
+});
+
+test('expired resets and absent saved readings cannot advertise spare capacity', () => {
+  const { profileSummary, activeUsageSummary } = require('../out/mcp');
+  const usage = { provider: 'claude', title: 'Claude', fetchedAt: iso(0), windows: [{ label: '5h', usedPercent: 0, resetsAt: iso(-0.001) }] };
+  const saved = profileSummary(profile({ usage }), NOW);
+  assert.equal(saved.freshness.state, 'stale');
+  assert.equal(saved.usable, false);
+  assert.equal(profileSummary(profile({ usage: undefined }), NOW).usable, false);
+  const native = activeUsageSummary({ identity: 'opaque', result: { kind: 'ok', usage } }, true, NOW, 60_000);
+  assert.equal(native.freshness.state, 'stale');
+});
+
+test('each tool uses one live configuration snapshot without retaining it for later calls', async () => {
+  const client = fakeClient(); let reads = 0;
+  client.getConfig = async () => { reads++; return client.config; };
+  const mcp = server(client);
+  await tool(mcp, 'list_accounts', { service: 'codex' });
+  assert.equal(reads, 1);
+  await tool(mcp, 'refresh_usage', { service: 'codex' });
+  assert.equal(reads, 2);
+  client.config.mcp.enabled = false;
+  assert.equal((await tool(mcp, 'list_accounts', {})).isError, true);
+  assert.equal(reads, 3);
+});
+
+test('MCP rejects malformed envelopes and extra tool arguments before engine actions', async () => {
+  const client = fakeClient(); const mcp = server(client);
+  assert.equal((await mcp.handle({ jsonrpc: '1.0', id: 1, method: 'ping' })).error.code, -32600);
+  assert.equal((await call(mcp, 2, 'tools/call', { name: 'switch_account', arguments: { service: 'codex', profile: 'Work', model: 'gpt-test' } })).error.code, -32602);
+  assert.equal((await call(mcp, 3, 'tools/call', { name: 'list_accounts', arguments: [] })).error.code, -32602);
+  assert.deepEqual(client.calls, []);
 });

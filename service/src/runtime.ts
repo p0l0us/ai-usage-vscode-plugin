@@ -12,14 +12,18 @@ export class ServiceRuntime {
   readonly bridge: BridgeRuntime;
   private started = false;
   private disposed = false;
+  /** The home's ownership lease; native settings, the proxy and the bridge are touched only while it is held. */
+  ownership?: { held(): boolean };
   constructor(home: string, private readonly config: () => ServiceConfig, version: string,
     private readonly log: (message: string) => void, notice: (message: string) => void, folders: () => string[], refreshLogin?: () => Promise<unknown>) {
     this.proxy = new CodexProxyRuntime(home, config, notice, log, codexHomeDir, refreshLogin ?? (() => refreshCodexNativeLogin(config().codex.cliPath)), version);
     this.bridge = new BridgeRuntime(config, folders);
   }
-  start(): void { this.started = true; void this.sync(); }
+  /** Starts reconciling native settings, the proxy and the bridge; only an owned engine does (see AccountService.start). */
+  start(): Promise<void> { this.started = true; return this.sync(); }
   async sync(): Promise<void> {
     if (!this.started || this.disposed) return;
+    if (this.ownership && !this.ownership.held()) return;
     const get = (key: string) => getConfigValue(this.config(), key.replace(/^aiUsage\./, ''));
     try {
       applyCodexSettingsToFile(codexConfigPath(codexHomeDir()), readCodexSettingAssignments(get));
@@ -31,5 +35,10 @@ export class ServiceRuntime {
       try { await this.bridge.ensure(); } catch (error) { this.log(`bridge: ${error instanceof Error ? error.message : String(error)}`); }
     }
   }
-  dispose(): void { this.disposed = true; this.proxy.dispose(); this.bridge.dispose(); }
+  /** Restores native routing, stops the proxy, and resolves once the bridge process has exited. */
+  async dispose(): Promise<void> {
+    this.disposed = true;
+    this.proxy.dispose();
+    await this.bridge.dispose();
+  }
 }

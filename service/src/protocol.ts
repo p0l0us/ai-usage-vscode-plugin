@@ -4,6 +4,35 @@ import type { ServiceConfig } from './configStore';
 import type { ExportedProfile, ImportKind } from './profileTransfer';
 import type { KeepAliveNowResult } from './accountAutomation';
 import type { ProviderId } from './live';
+import type { UsageContext, UsageStateView } from './usageMonitor';
+
+/** The wire contract is independent of the package version. Additive v1 changes accept older clients. */
+export const SERVICE_PROTOCOL_VERSION = 1;
+export const SERVICE_CAPABILITIES = ['engine', 'config-revision', 'request-cancellation', 'usage-live', 'session-context', 'lifecycle', 'reset-confirmation'] as const;
+export type ServiceCapability = typeof SERVICE_CAPABILITIES[number];
+export type ConfigState = { revision: number; config: ServiceConfig; revisions?: Record<string, number>; scopes?: Record<string, 'engine' | 'presentation' | 'local' | 'workspace'>; changed?: string[] };
+export type ConfigPatch = { values: Record<string, unknown>; baseRevision: number };
+export type LifecycleState = 'starting' | 'running' | 'stopping' | 'stopped';
+export type RequestOptions = { timeoutMs?: number; signal?: AbortSignal };
+
+/** Core contract names and results, shared by every socket client. */
+export type ServiceCommands = {
+  'reset.confirmations': { params: undefined; result: ResetConfirmation[] };
+  'reset.claim': { params: { id: string }; result: ResetConfirmation | null };
+  'reset.resolve': { params: { id: string; approve: boolean }; result: ResetResolution };
+  'service.info': { params: undefined; result: ServiceInfo };
+  snapshot: { params: undefined; result: Snapshot };
+  'config.get': { params: undefined; result: ServiceConfig };
+  'config.read': { params: undefined; result: ConfigState };
+  'config.patch': { params: ConfigPatch; result: ConfigState };
+  'config.set': { params: { values: Record<string, unknown> }; result: ServiceConfig };
+  'usage.live': { params: { provider: ProviderId; force?: boolean }; result: UsageStateView };
+  'usage.context': { params: UsageContext; result: unknown };
+  'session.folders': { params: { folders: string[] }; result: unknown };
+  'profiles.list': { params: { provider: AuthProvider }; result: ProviderView };
+  'log.tail': { params: { lines: number }; result: string[] };
+  'service.shutdown': { params: undefined; result: unknown };
+};
 
 /**
  * What travels between the service and its clients (the VS Code extension and the `ai-usage` command): plain JSON
@@ -77,12 +106,20 @@ export type ServiceInfo = {
   clients: number;
   /** Where the private profiles are: `service` (profiles.json in the home) or `vscode` (a VS Code window's storage). */
   profileStore?: 'service' | 'vscode';
+  lifecycle?: LifecycleState;
+  host?: 'embedded' | 'daemon';
+  mode?: 'embedded' | 'background';
+  instanceId?: string;
+  protocol?: number;
+  capabilities?: readonly string[];
+  configRevision?: number;
 };
 
 export type Snapshot = {
   service: ServiceInfo;
   providers: Record<AuthProvider, ProviderView>;
   config: ServiceConfig;
+  configRevision?: number;
 };
 
 export type ActivationResult = {
@@ -131,14 +168,19 @@ export type SignInResult =
   /** The sign-in belongs to another account than the profile holds; call again with `allowOtherAccount`. */
   | { status: 'otherAccount'; identity: { email?: string; accountId?: string }; message: string };
 
+export type ResetConfirmation = { id: string; accountId: string; accountName: string; availableCredits: number; plannedCredits: number; windows: SerializedWindow[]; reason: string; expiresAt: number };
+export type ResetResolution = { status: 'cancelled' | 'stale' | 'completed'; reason?: string };
+
 export type ServiceEvent =
+  | { event: 'resetConfirmation'; decision: ResetConfirmation }
   | { event: 'activated'; provider: AuthProvider; id: string; name: string; email?: string; automatic: boolean; accountChanged: boolean; level: 'info' | 'warning' | 'error'; message: string }
   | { event: 'accountProblem'; provider: AuthProvider; id: string; name: string; email?: string; reason: string; readable: string; revoked: boolean }
   | { event: 'noCandidate'; provider: AuthProvider; detail: string }
   | { event: 'notice'; level: 'info' | 'warning' | 'error'; message: string; provider?: AuthProvider }
   | { event: 'usageChanged'; provider: ProviderId }
   | { event: 'stateChanged'; provider?: AuthProvider }
-  | { event: 'configChanged'; config: ServiceConfig }
+  | { event: 'configChanged'; config: ServiceConfig; revision?: number; changed?: string[]; source?: string }
+  | { event: 'lifecycle'; state: LifecycleState; reason?: string }
   /** A check requested with `token` waits for a running sweep of the service to finish. */
   | { event: 'waiting'; provider: AuthProvider; token?: string }
   /** A keep-alive sweep requested with `token` is about to check account `index` of `total`. */
@@ -147,10 +189,10 @@ export type ServiceEvent =
 
 export type EventName = ServiceEvent['event'];
 
-export type HelloParams = { token: string; client: string; version?: string; subscribe?: EventName[] | 'all';
+export type HelloParams = { token: string; client: string; version?: string; protocolVersion?: number; requiredCapabilities?: string[]; subscribe?: EventName[] | 'all';
   /** Project folders open at the client, whose profile files the service lists while the client is connected. */
   folders?: string[] };
-export type HelloResult = { ok: true; service: ServiceInfo };
+export type HelloResult = { ok: true; service: ServiceInfo; protocolVersion?: number; capabilities?: string[] };
 
 export type KeepAliveResult = { usage?: SerializedUsage; keepAliveError?: string; usageError?: string };
 

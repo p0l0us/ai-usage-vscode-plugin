@@ -29,10 +29,11 @@ import {
 import { AccountsMenu } from './accountsMenu';
 import { signInWithTerminal } from './accountLogin';
 import { registerMcpProvider } from './mcpProvider';
-import { MCP_SERVER_NAME, McpRegistration, RegistrationOutcome } from './mcpRegistration';
+import { MCP_SERVER_NAME, McpCommand, McpRegistration, RegistrationOutcome } from './mcpRegistration';
 import { ServiceManager } from './serviceManager';
 import { openAiUsageSettings } from './settingsLink';
 import { compactTokenCount, SessionTokenUsage } from './sessionTokens';
+import { formatUsagePercent } from './usageFormatting';
 
 type BillingPeriod = 'daily' | 'weekly' | 'monthly';
 
@@ -114,9 +115,9 @@ type LiveProvider = {
 };
 
 /** Data source per provider, selected with `aiUsage.<provider>.source`. */
-type SourceId = 'api' | 'cli' | 'sessionLog' | 'accountFile' | 'both';
+type SourceId = 'auto' | 'api' | 'cli' | 'sessionLog' | 'accountFile' | 'both';
 const SOURCE_LABELS: Record<SourceId, string> = {
-  api: 'service API', cli: 'local CLI', sessionLog: 'local session log', accountFile: 'local account file',
+  auto: 'automatic source selection', api: 'service API', cli: 'local CLI', sessionLog: 'local session log', accountFile: 'local account file',
   both: 'local file, service API when stale'
 };
 function settingsFor(provider: ProviderId) { return usageSettings(configFromSettings(), provider); }
@@ -142,6 +143,7 @@ type CodexSwitchRecord = { switchedAt: number; profileName: string };
 const GITHUB_CONNECT_SCOPES = ['user:email'];
 
 let output: vscode.OutputChannel | undefined;
+let activeServices: ServiceManager | undefined;
 function log(message: string): void {
   output?.appendLine(`[${new Date().toISOString()}] ${message}`);
 }
@@ -152,6 +154,7 @@ export function activate(context: vscode.ExtensionContext): void {
   // Saved profiles, keep-alives and rotation live in the account service, a background process this extension
   // installs and manages; see serviceManager.ts. The Accounts menus and the status bar are its clients.
   const services = new ServiceManager(context, log);
+  activeServices = services;
   context.subscriptions.push(services);
   configureBridgeService(async () => { const client = await services.ensure(); if (!client) throw new Error('The AI Usage service is unavailable.'); return client; });
   registerBridgeIntegration(context);
@@ -355,6 +358,23 @@ export function activate(context: vscode.ExtensionContext): void {
         void afterProfileActivated(event.provider, { kind: 'activated', accountChanged: event.accountChanged });
         break;
       }
+      case 'resetConfirmation': {
+        const client = services.connected;
+        if (!client?.supports('reset-confirmation')) break;
+        void (async () => {
+          const decision = await client.claimReset(event.decision.id);
+          if (!decision || !client.connected || services.connected !== client) return;
+          const windows = decision.windows.map(window => `${window.label}: ${window.usedPercent}% used`).join(', ');
+          const choice = await vscode.window.showWarningMessage(
+            `AI Usage: use earned Codex resets for “${decision.accountName}”?`,
+            { modal: true, detail: `The engine plans to use ${decision.plannedCredits} reset credit(s). Current quota: ${windows}. ${decision.availableCredits} credit(s) are available. Reason: ${decision.reason}. This decision expires at ${new Date(decision.expiresAt).toLocaleTimeString()}.` },
+            'Use earned resets');
+          if (!client.connected || services.connected !== client) return;
+          const result = await client.resolveReset(decision.id, choice === 'Use earned resets');
+          if (result.status === 'stale') void vscode.window.showInformationMessage('AI Usage: the reset decision changed or expired. No reset was approved.');
+        })().catch(error => log(`reset confirmation: ${String(error)}`));
+        break;
+      }
       case 'accountProblem': void reportAccountProblem(event); break;
       case 'noCandidate': {
         const title = event.provider === 'claude' ? 'Claude' : 'Codex';
@@ -387,16 +407,18 @@ export function activate(context: vscode.ExtensionContext): void {
   const registerMcpWithCli = async (provider: AuthProvider): Promise<void> => {
     const title = provider === 'claude' ? 'Claude' : 'Codex';
     const client = services.require();
-    const { launcher, cli, reason, registration: before } = await client.call<{ launcher: string; cli?: string; reason?: string; registration: McpRegistration }>('mcp.registration', { provider });
-    if (!services.isInstalled() || !fs.existsSync(launcher)) {
-      void vscode.window.showWarningMessage(`AI Usage: the account service is not installed, so there is no ai-usage command to register with the ${title} CLI. Install it from Account service… first.`);
+    const { launcher, command, cli, reason, registration: before } = await client.call<{ launcher: string; command?: McpCommand; cli?: string; reason?: string; registration: McpRegistration }>('mcp.registration', { provider });
+    const displayedCommand = [command?.command ?? launcher, ...(command?.args ?? ['mcp'])]
+      .map((part) => /[\s"]/.test(part) ? JSON.stringify(part) : part).join(' ');
+    if (!fs.existsSync(launcher)) {
+      void vscode.window.showWarningMessage(`AI Usage: the MCP command is unavailable: ${displayedCommand}. Check Account service… before registering it with the ${title} CLI.`);
       return;
     }
     if (!cli) { void vscode.window.showErrorMessage(`AI Usage: ${reason}`); return; }
     const where = provider === 'claude' ? 'in its user scope, for every project' : 'in its config.toml';
     if (before.current) {
       const choice = await vscode.window.showInformationMessage(
-        `AI Usage: the ${title} CLI already runs the “${MCP_SERVER_NAME}” MCP server from ${launcher} ${where}.`, 'Register again', 'Remove');
+        `AI Usage: the ${title} CLI already runs the “${MCP_SERVER_NAME}” MCP server from ${displayedCommand} ${where}.`, 'Register again', 'Remove');
       if (!choice) { return; }
       if (choice === 'Remove') {
         const removed = await client.call<{ ok: boolean; detail: string }>('mcp.unregister', { provider });
@@ -408,7 +430,7 @@ export function activate(context: vscode.ExtensionContext): void {
     } else if (before.registered) {
       const current = [before.command, ...(before.args ?? [])].filter(Boolean).join(' ') || 'another command';
       const choice = await vscode.window.showWarningMessage(
-        `The ${title} CLI already has an MCP server named “${MCP_SERVER_NAME}” that runs ${current}. Replace it with ${launcher} mcp?`, { modal: true }, 'Replace');
+        `The ${title} CLI already has an MCP server named “${MCP_SERVER_NAME}” that runs ${current}. Replace it with ${displayedCommand}?`, { modal: true }, 'Replace');
       if (choice !== 'Replace') { return; }
     }
     const result = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: `AI Usage: registering the MCP server with the ${title} CLI…` },
@@ -424,14 +446,11 @@ export function activate(context: vscode.ExtensionContext): void {
   };
   context.subscriptions.push(vscode.commands.registerCommand('aiUsage.setupMcp', async () => {
     while (true) {
-      const installed = services.isInstalled();
       const client = services.connected;
       const enabled = services.config?.mcp.enabled ?? false;
-      const items: Array<vscode.QuickPickItem & { action: 'install' | 'connect' | 'enable' | 'claude' | 'codex' | 'settings' }> = [];
-      if (!installed) {
-        items.push({ label: '$(cloud-download) Install the account service…', detail: 'Installs the ai-usage command that serves the MCP tools.', action: 'install' });
-      } else if (!client) {
-        items.push({ label: '$(debug-start) Connect to the account service…', detail: 'Starts the installed service and reads its MCP settings.', action: 'connect' });
+      const items: Array<vscode.QuickPickItem & { action: 'connect' | 'enable' | 'claude' | 'codex' | 'settings' }> = [];
+      if (!client) {
+        items.push({ label: '$(debug-start) Connect to the account service…', detail: 'Connects to the shared engine and reads its MCP settings.', action: 'connect' });
       } else if (!enabled) {
         items.push({ label: '$(plug) Enable the MCP server…', detail: 'Makes account tools available to agents in this VS Code window and allows CLI registration.', action: 'enable' });
       } else {
@@ -448,15 +467,14 @@ export function activate(context: vscode.ExtensionContext): void {
       items.push({ label: '$(gear) MCP settings…', description: enabled ? 'Enabled' : 'Disabled', action: 'settings' });
       const picked = await vscode.window.showQuickPick(items, { title: 'AI Usage · MCP server setup', matchOnDetail: true });
       if (!picked) { return; }
-      if (picked.action === 'install') {
-        if (!await services.install()) { return; }
-      } else if (picked.action === 'connect') {
+      if (picked.action === 'connect') {
         if (!await services.ensure()) { await services.showMenu(); return; }
       } else if (picked.action === 'enable') {
         try {
-          const config = await client!.setConfig({ 'mcp.enabled': true });
-          services.config = config;
-          await services.configSync.pull(config);
+          const current = await client!.getConfigState();
+          const result = await client!.patchConfig({ 'mcp.enabled': true }, current.revision);
+          services.config = result.config;
+          await services.configSync.pull(result.config);
         } catch (error) {
           void vscode.window.showErrorMessage(`AI Usage: could not enable the MCP server: ${error instanceof Error ? error.message : String(error)}`);
           return;
@@ -1155,7 +1173,7 @@ function worstPercent(usage: LiveUsage): number {
 
 function usagePart(window: LiveUsage['windows'][number], now: Date): string {
   const reset = formatResetRemaining(window.resetsAt, now);
-  return `${window.usedPercent}%${reset ? ` (${reset})` : ''}`;
+  return `${formatUsagePercent(window.usedPercent)}${reset ? ` (${reset})` : ''}`;
 }
 
 /**
@@ -1226,7 +1244,7 @@ function buildTooltip(usage: LiveUsage, refreshError?: string, activeProfile?: s
   for (const window of usage.windows) {
     const reset = formatResetIn(window.resetsAt);
     const at = reset && window.resetsAt ? ` (${window.resetsAt.toLocaleString()})` : '';
-    md.appendMarkdown(`- **${windowName(window.label)}**: ${window.usedPercent}% used${reset ? ` · ${reset}${at}` : ''}\n`);
+    md.appendMarkdown(`- **${windowName(window.label)}**: ${formatUsagePercent(window.usedPercent)} used${reset ? ` · ${reset}${at}` : ''}\n`);
   }
   if (usage.provider === 'codex') {
     const observed = profileUsage?.resetCredits?.totalCount;
@@ -1506,6 +1524,7 @@ function summarize(accounts: AccountUsage[]): { remainingPercent: number; lines:
   return { remainingPercent, lines };
 }
 
-export function deactivate(): void {
-  // noop
+export async function deactivate(): Promise<void> {
+  await activeServices?.stop();
+  activeServices = undefined;
 }

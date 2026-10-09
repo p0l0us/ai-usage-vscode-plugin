@@ -88,3 +88,40 @@ test("registering removes an existing entry first, reports the CLI's refusal, an
   assert.deepEqual(removed, { ok: true, detail: 'File modified: x' });
   assert.deepEqual(readMcpRegistration('claude', launcher), { registered: false, current: false });
 });
+
+test('a bundled adapter descriptor registers and verifies without an installed service', t => {
+  const home = homes(t);
+  const { mcpCommand } = require('../out/mcpRegistration');
+  const command = mcpCommand(path.join(home, 'service-home'));
+  assert.equal(command.command, process.execPath);
+  assert.deepEqual(command.args.slice(-3), ['mcp', '--home', path.join(home, 'service-home')]);
+  assert.ok(fs.existsSync(command.args[0]));
+  const args = mcpRegisterArgs('codex', command);
+  assert.deepEqual(args.slice(args.indexOf('--') + 1), [command.command, ...command.args]);
+  fs.writeFileSync(mcpConfigFile('claude'), JSON.stringify({ mcpServers: { 'ai-usage': command } }));
+  assert.equal(readMcpRegistration('claude', command).current, true);
+  const electron = { ...command, env: { ELECTRON_RUN_AS_NODE: '1' } };
+  assert.equal(readMcpRegistration('claude', electron).current, false, 'missing Electron environment is incompatible');
+  fs.writeFileSync(mcpConfigFile('codex'), `[mcp_servers.ai-usage]\ncommand = ${JSON.stringify(electron.command)}\nargs = ${JSON.stringify(electron.args)}\n[mcp_servers.ai-usage.env]\nELECTRON_RUN_AS_NODE = "1"\n`);
+  assert.equal(readMcpRegistration('codex', electron).current, true);
+  assert.ok(mcpRegisterArgs('claude', electron).includes('ELECTRON_RUN_AS_NODE=1'));
+});
+
+test('an installed package stays independent of the editor even when its launcher is missing', t => {
+  const root = homes(t);
+  const home = path.join(root, 'service-home');
+  const installedDir = path.join(home, 'service', 'fixture');
+  const script = path.join(installedDir, 'bin', 'ai-usage.js');
+  fs.mkdirSync(path.dirname(script), { recursive: true }); fs.writeFileSync(script, '// Temporary descriptor fixture.');
+  const node = { command: process.execPath, args: ['--no-warnings'], env: { FIXTURE_RUNTIME: 'installed' } };
+  fs.writeFileSync(path.join(home, 'service', 'current.json'), JSON.stringify({ version: 'fixture', dir: installedDir, node, installedAt: new Date().toISOString() }));
+  const { mcpCommand, mcpLauncher } = require('../out/mcpRegistration');
+  const options = { bundledPackageDir: '/missing/editor/service', runtime: { command: '/missing/editor/runtime', args: [] } };
+  assert.deepEqual(mcpCommand(home, options), { command: node.command, args: ['--no-warnings', script, 'mcp', '--home', home], env: node.env });
+  fs.mkdirSync(path.dirname(mcpLauncher(home)), { recursive: true }); fs.writeFileSync(mcpLauncher(home), '// Temporary launcher fixture.');
+  assert.deepEqual(mcpCommand(home, options), { command: mcpLauncher(home), args: ['mcp'] });
+  for (const provider of ['claude', 'codex']) {
+    const args = mcpRegisterArgs(provider, mcpCommand(home, options));
+    assert.deepEqual(args.slice(args.indexOf('--') + 1), [mcpLauncher(home), 'mcp']);
+  }
+});

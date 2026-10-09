@@ -2,7 +2,7 @@
   "name": "ai-usage-vscode-plugin",
   "displayName": "AI subscription management and usage",
   "description": "Manage your Claude Code, Codex and GitHub Copilot subscriptions and see what is left of them: switch between saved accounts without signing in again, keep them warm, rotate on exhaustion, and read live 5h/7d windows, premium requests and org billing in the status bar and chat input. Open source, contributions welcome.",
-  "version": "1.0.10",
+  "version": "1.0.11",
   "publisher": "p0l0us",
   "license": "GPL-3.0-only",
   "repository": {
@@ -7075,8 +7075,9 @@
           },
           "aiUsage.claude.source": {
             "type": "string",
-            "default": "both",
+            "default": "auto",
             "enum": [
+              "auto",
               "both",
               "cli",
               "api",
@@ -7084,19 +7085,20 @@
             ],
             "order": 2,
             "markdownEnumDescriptions": [
+              "Automatically use the cheapest fresh usable reading: shared account cache, local account file, direct usage API, then the CLI. Stops at the first success; endpoint budgets and backoff still apply. Freshness uses `#aiUsage.claude.checkIntervalMinutes#` (minutes).",
               "Both of the below: the account file is read every `#aiUsage.claude.accountFile.checkIntervalSeconds#`, and whenever its reading falls behind `#aiUsage.claude.checkIntervalMinutes#` — Claude Code has been idle, or has never written one — the usage endpoint fills the gap. The endpoint is then called no more often than with `api`, so this follows an active session within seconds without spending more of Anthropic's rate limit.",
               "Local Claude CLI: runs Claude Code’s own `/usage` and reads the reading it caches. `/usage` is answered by Claude Code itself, so no model is called and nothing is billed, but it does make Claude Code fetch the usage endpoint — so this is spaced like `api`, not like `accountFile`. Unlike `accountFile` it never has to wait for Claude Code to ask for usage on its own, which is what leaves that source empty right after an account switch. Set the command with `#aiUsage.claude.cliPath#`.",
               "Anthropic OAuth usage endpoint using the Claude Code login in `~/.claude/.credentials.json` (the same data as `/usage` in Claude Code).",
               "**Experimental.** Claude Code's own last fetch from that same endpoint, cached in its account file (`~/.claude.json` or `$CLAUDE_CONFIG_DIR/.claude.json`, key `cachedUsageUtilization`). A plain local read — no network call, so it is not subject to Anthropic's throttling and can be polled every few seconds via `#aiUsage.claude.accountFile.checkIntervalSeconds#`. Only reflects the account Claude Code itself is currently signed into, and only as fresh as Claude Code's own last request on it; undocumented, reverse-engineered state that may change without notice."
             ],
-            "markdownDescription": "Where Claude usage is read from. `both` prefers the file Claude Code caches on disk and calls the usage endpoint only when that reading goes stale; `cli` asks Claude Code for a fresh reading instead, which costs no model tokens but does reach the endpoint."
+            "markdownDescription": "Where Claude usage is read from. `auto` chooses the cheapest fresh usable source and falls back to more costly available sources; explicit source modes remain available."
           },
           "aiUsage.claude.checkIntervalMinutes": {
             "type": "number",
-            "default": 10,
+            "default": 30,
             "minimum": 0.25,
             "order": 3,
-            "markdownDescription": "How often (minutes) Anthropic's usage endpoint is called and the result stored in the shared cache, when `#aiUsage.claude.source#` is `api` or `both`. One call serves all open windows. With `both` it is also the age at which the account file's reading counts as stale and the endpoint is called instead. Fractional minutes down to 0.25 (15 seconds) are accepted; every call is still spaced by `#aiUsage.claude.api.minIntervalSeconds#` and by any limit the endpoint advertises. Anthropic's usage endpoint rate-limits aggressively; 5 or more is the safe range."
+            "markdownDescription": "How often (minutes) Claude usage is checked; defaults to 30 minutes. In `auto` this is also the maximum age of a usable cached or local reading. Existing explicit intervals are preserved. Claude accepts fractional minutes down to 0.25; endpoint calls still respect the shared API budget and backoff. The separate account-file interval in seconds applies only to `accountFile` and `both`."
           },
           "aiUsage.claude.accountFile.checkIntervalSeconds": {
             "type": "number",
@@ -7280,8 +7282,9 @@
           },
           "aiUsage.codex.source": {
             "type": "string",
-            "default": "both",
+            "default": "auto",
             "enum": [
+              "auto",
               "both",
               "cli",
               "api",
@@ -7289,12 +7292,13 @@
             ],
             "order": 2,
             "markdownEnumDescriptions": [
+              "Automatically use the cheapest fresh usable reading: shared account cache, local session log, direct usage API, then the CLI. Stops at the first success; endpoint budgets and backoff still apply. Freshness uses `#aiUsage.codex.checkIntervalMinutes#` (minutes).",
               "Session logs, with the usage endpoint filling the gap: the newest log record is used while it is no older than `#aiUsage.codex.checkIntervalMinutes#`, and once it falls behind — Codex has been idle, or has written no record yet — the endpoint is called instead. An app-server check also reads earned-reset availability; select `sessionLog` for an offline status-bar source.",
               "Local Codex CLI: runs `codex app-server` and calls `account/rateLimits/read`. Uses the CLI's own login and token refresh; documented integration surface.",
               "ChatGPT usage endpoint using the token in `~/.codex/auth.json`. Undocumented; may change without notice.",
               "Newest `rate_limits` record in `~/.codex/sessions` logs. The status-bar source makes no network request, but is only as fresh as your last Codex turn; the account service can still check saved profiles for earned resets."
             ],
-            "markdownDescription": "Where Codex usage is read from."
+            "markdownDescription": "Where Codex usage is read from. `auto` chooses the cheapest fresh usable source and falls back to more costly available sources; explicit source modes remain available."
           },
           "aiUsage.codex.cliPath": {
             "type": "string",
@@ -7304,10 +7308,10 @@
           },
           "aiUsage.codex.checkIntervalMinutes": {
             "type": "number",
-            "default": 5,
+            "default": 30,
             "minimum": 1,
             "order": 4,
-            "markdownDescription": "How often (minutes) the Codex source is called and the result stored in the shared cache. With `#aiUsage.codex.source#` set to `both` it is also the age at which a session-log record counts as stale and the usage endpoint is called instead."
+            "markdownDescription": "How often (minutes) Codex usage is checked; defaults to 30 minutes. In `auto` this is also the maximum age of a usable cached or local reading. Existing explicit intervals are preserved. With `both` this is also the maximum age of a session-log record before the usage endpoint fills the gap."
           },
           "aiUsage.codex.keepAlive.enabled": {
             "type": "boolean",
@@ -7326,6 +7330,12 @@
             "default": true,
             "order": 6.05,
             "markdownDescription": "**Automatically use earned Codex rate-limit resets.** When Codex reports an available reset credit and the active saved account is at a quota limit, the account service can redeem one through Codex app-server. It waits for a natural reset within five minutes, considers other saved accounts and the rotation strategy, and avoids letting a reported credit expire unused. Only provider-reported credits are used; the setting can be turned off independently of account rotation."
+          },
+          "aiUsage.codex.autoReset.confirmationRequired": {
+            "type": "boolean",
+            "default": false,
+            "order": 6.06,
+            "markdownDescription": "Require confirmation before redeeming an earned Codex reset credit. The shared engine supplies and revalidates the proposed redemption; one connected editor may approve it. Without an approving editor, no credit is redeemed. Off preserves automatic redemption. This does not enable auto-reset by itself."
           },
           "aiUsage.codex.autoRotate.resetAware": {
             "type": "boolean",
@@ -7787,7 +7797,7 @@
             "tags": [
               "experimental"
             ],
-            "markdownDescription": "**Experimental.** Offer AI agents an MCP server whose tools list every saved Claude Code and Codex profile with its usage windows and, when `#aiUsage.mcp.switching#` allows, switch the active account. Agents of this VS Code window (Copilot agent mode and every other consumer of the editor's MCP servers) see it as **AI Usage accounts** as soon as this is on; the Claude and Codex Accounts menus register it with their CLIs (**Register the MCP server with the … CLI…**), and other command-line agents register `ai-usage mcp` themselves. Needs the account service. Mirrored to the service's `mcp.enabled` setting. See [MCP server for AI agents](https://github.com/p0l0us/ai-usage-vscode-plugin/blob/main/docs/MCP.md)."
+            "markdownDescription": "**Experimental.** Offer AI agents an MCP server whose tools list every saved Claude Code and Codex profile with its usage windows and, when `#aiUsage.mcp.switching#` allows, switch the active account. Agents of this VS Code window (Copilot agent mode and every other consumer of the editor's MCP servers) see it as **AI Usage accounts** as soon as this is on; the Claude and Codex Accounts menus register it with their CLIs (**Register the MCP server with the … CLI…**), and other command-line agents register `ai-usage mcp` themselves. Connects to the shared engine running in the background or in VS Code; the bundled MCP adapter needs no service installation. Includes native unsaved-login usage and explicit freshness. Mirrored to the service's `mcp.enabled` setting. See [MCP server for AI agents](https://github.com/p0l0us/ai-usage-vscode-plugin/blob/main/docs/MCP.md)."
           },
           "aiUsage.mcp.switching": {
             "type": "boolean",
@@ -20286,7 +20296,7 @@
   },
   "scripts": {
     "compile": "node scripts/generate-manifest.js && node scripts/generate-service-settings.js && node scripts/package-service-bridge.js && tsc -p service && tsc -p ./",
-    "test": "npm run compile && node --test test/*.test.js service/test/*.test.js",
+    "test": "node scripts/run-tests.js",
     "watch": "tsc -watch -p ./",
     "generate": "node scripts/generate-manifest.js && node scripts/generate-service-settings.js",
     "dev:install": "node scripts/dev-install.js",

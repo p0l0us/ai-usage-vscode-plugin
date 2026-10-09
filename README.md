@@ -21,12 +21,14 @@ accounts without signing in again, and shows live rate-limit and quota usage for
   repository, so org-billed seats show org data.
 - **Gentle on the services**: one shared cache for all open windows, per-service check intervals and
   `Retry-After` aware backoff. Codex's `sessionLog` source reads usage offline; earned-reset availability requires
-  an app-server check when another Codex source is selected.
+  an app-server check; `auto` does not add one after a successful cheaper reading.
 - **Honest when things fail**: a failed refresh keeps the previous reading and greys it out after 15 minutes.
 
 Nothing is shown for a tool that is not installed or signed in. Usage checks only read the tools' own login files.
 Account keep-alives and automatic profile rotation are optional and disabled by default. Earned Codex rate-limit
-reset redemption is enabled by default for a limited saved account when Codex reports available credits. Keep-alives
+reset redemption is enabled by default for a limited saved account when Codex reports available credits. Enable
+`aiUsage.codex.autoReset.confirmationRequired` to require editor approval before spending a credit; without an
+approving editor, confirmation mode leaves it untouched. Keep-alives
 and rotation can make background model calls and refresh tokens; rotation also changes the native login.
 
 With the default icon-only labels, the status bar stays compact while showing each live reset countdown:
@@ -114,8 +116,9 @@ background, the service keeps working when VS Code closes. Otherwise one editor 
 and other windows share it; both modes keep profiles in `~/.ai-usage/profiles.json`. Existing nonconflicting VS Code
 profiles are migrated there on connection.
 
-Every `aiUsage.*` setting is also available through `ai-usage config` without the prefix. Connecting VS Code applies
-its effective settings; CLI changes are reflected back to connected editors. Enable
+Engine settings are available through `ai-usage config` without the `aiUsage.` prefix. Persisted engine settings
+are authoritative when an editor connects; explicit editor and CLI edits update the shared configuration.
+Presentation settings stay local to each editor. Enable
 `aiUsage.claude.advanced.rotationDiagnostics` or `aiUsage.codex.advanced.rotationDiagnostics` to see every saved
 account's rotation score and the reason the active account is kept in its status tooltip.
 
@@ -130,16 +133,17 @@ your own PATH for other terminals). `ai-usage` alone opens a live view of both s
 send keep-alives, run a rotation sweep and toggle keep-alive or rotation; `ai-usage status`, `list`, `use`,
 `save`, `login`, `keepalive`, `rotate`, `export`, `import-profiles`, `config`, `service` and `log` do the same
 from arguments, with `--json` where it helps, and `--project` names a project folder whose profiles to list or
-save into. Settings changed with `ai-usage config` show up in VS Code's settings and the other way round.
+save into. Engine settings changed with `ai-usage config` are reflected in connected VS Code windows.
 Details: [Account service](docs/CONFIGURATION.md#account-service).
 
 ### AI agents: the MCP server (experimental)
 
 An AI agent can do the same through the Model Context Protocol: `ai-usage mcp` is a stdio MCP server whose tools
-list every saved profile with its usage windows, read a fresh reading for one of them and, when you allow it,
+list saved profiles and native-login usage, including unsaved accounts, with freshness and model-window limits,
+request a reading for a saved or native account and, when you allow it,
 switch the active account or run a rotation sweep. It is off by default (`aiUsage.mcp.enabled`); while it is on,
 agents in the VS Code window see it as **AI Usage accounts** without any configuration. Choose **Set up MCP
-server…** in the top-level AI Usage menu to install and enable it, then register it with the Claude or Codex CLI
+server…** in the top-level AI Usage menu to enable the bundled server, then register it with the Claude or Codex CLI
 for terminal sessions. The CLI registration also appears in that service's Accounts menu.
 `aiUsage.mcp.switching` decides whether agents may switch at all. Details:
 [MCP server for AI agents](docs/MCP.md).
@@ -160,7 +164,7 @@ the menu shows what each one is set to.
 - Codex sends the same small request every **6 hours** per saved account, using `gpt-5.6-luna` in `~/.codex-tmp`, then
   reads account limits through its CLI. Its model is configurable; an empty model setting uses the CLI default.
 - Both collect usage for inactive accounts. The authentication profile list shows each account's last usage,
-  check time and errors. Model calls consume subscription usage and run only while this extension host is running.
+  check time and errors. Model calls consume subscription usage and run while the shared runtime is running.
 - Automatic rotation switches as soon as the active account's usage reaches a threshold (usage ≥ threshold).
   Claude has two: **95%** for the 5-hour window and **99.5%** for the weekly windows (all models, and `7d Fable` when it
   counts). Codex's weekly threshold is **99%**; a reported Codex 5-hour window rotates only once used up. The
@@ -257,10 +261,13 @@ it is installed and runs on the remote machine, so:
 | `aiUsage.<claude\|codex>.statusBar.accountNumber` | `true` | Show the active saved profile's number (`#2`) between the icon and the figures, when several are saved. |
 | `aiUsage.chatChips.labels` / `.usage` | `name` / `rich` | The same two choices for the chat chips (no icon there). |
 | `aiUsage.chatTokens.enabled` | on | Show the local Claude/Codex chat's consumed-token chip. |
-| `aiUsage.<service>.source` | `both` | Local file first (Claude's account file, Codex's session logs), service endpoint when that reading goes stale. |
-| `aiUsage.<service>.checkIntervalMinutes` | 10 / 5 / 5 | How often Claude / Codex / Copilot are queried. Claude accepts fractions down to 0.25 (15 s). |
+| `aiUsage.<claude\|codex>.source` | `auto` | Fresh shared cache, local file, direct API, then CLI; stops at the first usable reading. |
+| `aiUsage.<service>.checkIntervalMinutes` | 30 / 30 / 5 | How often Claude / Codex / Copilot are queried. Claude accepts fractions down to 0.25 (15 s). |
 | `aiUsage.copilot.account` | (auto) | GitHub login to use when several are signed in. |
 | `aiUsage.<service>.enabled` | on | Hide a service you do not use. |
+
+Existing saved source modes and check intervals remain unchanged; new Claude and Codex configurations use
+`auto` and 30-minute checks.
 
 The full list is in [docs/CONFIGURATION.md](docs/CONFIGURATION.md). Where the numbers come from, how caching and
 backoff work and how the chat chip is built: [docs/INTERNALS.md](docs/INTERNALS.md).

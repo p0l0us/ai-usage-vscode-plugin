@@ -533,7 +533,8 @@ export async function main(argv: string[], io?: CliOutput): Promise<number> {
             out(json ? `${JSON.stringify(entry.value)}\n` : `${entry.key} = ${bold(typeof entry.value === 'object' ? JSON.stringify(entry.value) : String(entry.value))}\n`);
             return 0;
           }
-          const config = await client.setConfig({ [args[0]]: args.slice(1).join(' ') });
+          const state = await client.getConfigState();
+          const { config } = await client.patchConfig({ [args[0]]: args.slice(1).join(' ') }, state.revision);
           const entry = listConfig(config).find((candidate) => candidate.key === args[0]);
           out(json ? `${JSON.stringify(entry?.value)}\n` : `${green('✓')} ${args[0]} = ${bold(String(entry?.value))}\n`);
           return 0;
@@ -541,7 +542,7 @@ export async function main(argv: string[], io?: CliOutput): Promise<number> {
       }
       case 'mcp': {
         // Stdout carries the protocol; whatever else there is to say goes to stderr.
-        const connect = () => connectService({ home, client: 'mcp', version: serviceVersion(), subscribe: [], start: startInstalledOrLocal(home) });
+        const connect = () => ServiceClient.connect({ home, client: 'mcp', version: serviceVersion(), subscribe: [] });
         try {
           const probe = await connect();
           if (!probe.connected || !(await probe.getConfig()).mcp.enabled) {

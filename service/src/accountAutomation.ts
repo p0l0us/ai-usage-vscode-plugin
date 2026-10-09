@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from 'async_hooks';
+import type { ResetConfirmation, ResetResolution } from './protocol';
 import type { RotationDiagnostics } from './rotationDiagnostics';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -33,6 +34,7 @@ export type AutomationSettings = ProbeSettings & RotationLimits & {
   enabled: boolean;
   autoRotate: boolean;
   autoReset?: boolean;
+  resetConfirmationRequired?: boolean;
   strategy?: RotationStrategy;
   trigger?: RotationTrigger;
   /** Codex: avoid a short-lived switch immediately before a reported quota reset. */
@@ -219,6 +221,12 @@ export function nextAccounts(profiles: Profile[], activeId: string): Profile[] {
 /** Plain Node service: persistent per-account statistics, keep-alives and bounded rotation. */
 export class AccountAutomation {
   private pending?: Promise<void>;
+  private resetDecision?: { view: ResetConfirmation; digest: string; owner?: number; approved: boolean; valid: boolean };
+  private suppressedResetDigest?: string;
+  private readonly resetApprovalScope = new AsyncLocalStorage<string>();
+  onResetConfirmation?: (decision: ResetConfirmation) => void;
+  /** Binds decisions to engine config revisions, including changes outside automation settings. */
+  resetContext: () => unknown = () => undefined;
   private paused = 0;
   private disposed = false;
   private readonly checkingActive = new Set<AuthProvider>();
@@ -264,8 +272,15 @@ export class AccountAutomation {
   /** Providers whose checks wait for something interactive, such as a sign-in, with the reason a refused action reads. */
   private readonly holds = new Map<AuthProvider, { reason: string; timer: NodeJS.Timeout }>();
 
+  /**
+   * Called right before a queued operation runs, after it waited for a sweep or the account lock: throws when the
+   * operation may no longer run (its request was cancelled, the engine is stopping, or it lost its home's lease).
+   */
+  admit?: () => void;
+
   dispose(): void {
     this.disposed = true;
+    this.cancelResetDecision();
     this.abort.abort();
     for (const hold of this.holds.values()) { clearTimeout(hold.timer); }
     this.holds.clear();
@@ -364,7 +379,12 @@ export class AccountAutomation {
 
   async withPaused<T>(operation: () => Promise<T>): Promise<T> {
     this.paused++;
-    try { await this.pending; return await operation(); }
+    try {
+      await this.pending;
+      this.admit?.();
+      if (this.disposed) { throw new Error('Cancelled: the account service is stopping.'); }
+      return await operation();
+    }
     finally { this.paused--; }
   }
 
@@ -518,6 +538,8 @@ export class AccountAutomation {
       const lock = await this.acquireLock(provider, wait);
       this.locks.set(provider, lock);
       try {
+        this.admit?.();
+        if (this.disposed) throw new Error('Cancelled.');
         return await this.lockScope.run(new Set([...(this.lockScope.getStore() ?? []), provider]), operation);
       } finally { this.locks.delete(provider); lock.release(); }
     })();
@@ -741,18 +763,123 @@ export class AccountAutomation {
       }) };
   }
 
+  private cancelResetDecision(): void {
+    if (this.resetDecision) {
+      this.resetDecision.valid = false;
+      this.suppressedResetDigest = this.resetDecision.digest;
+      this.resetDecision = undefined;
+    }
+  }
+
+  forgetResetClient(clientId: number): void {
+    if (this.resetDecision?.owner === clientId) this.cancelResetDecision();
+  }
+
+  resetConfirmations(): ResetConfirmation[] {
+    const decision = this.resetDecision;
+    if (decision && (this.disposed || this.now() >= decision.view.expiresAt)) this.cancelResetDecision();
+    return this.resetDecision && !this.resetDecision.approved ? [this.resetDecision.view] : [];
+  }
+
+  claimReset(id: string, clientId: number): ResetConfirmation | null {
+    this.resetConfirmations();
+    const decision = this.resetDecision;
+    if (!decision || decision.view.id !== id || decision.approved || decision.owner !== undefined) return null;
+    decision.owner = clientId;
+    return decision.view;
+  }
+
+  /** One pure planner binds the facts the engine shows and later verifies. */
+  private resetPlan(active: string, settings: AutomationSettings, usage: LiveUsage, credential: StoredCredential, reason: string) {
+    const limiting = counted(usage, settings).filter(window => window.usedPercent >= windowThreshold(window.label, settings));
+    const windows = usage.windows.map(window => ({ label: window.label, usedPercent: window.usedPercent, resetsAt: window.resetsAt?.toISOString() }));
+    const fresh = this.now() - usage.fetchedAt.getTime() <= RECENT_READING_MS && usage.fetchedAt.getTime() <= this.now() &&
+      !usageHasExpiredReset(usage, this.now()) && usage.source !== 'sessionLog';
+    const eligible = settings.autoReset && fresh && limiting.length > 0 && limiting.every(window => window.usedPercent >= 100) &&
+      (usage.resetCredits?.availableCount ?? 0) >= limiting.length &&
+      (usage.resetCredits?.earliestExpiresAt === undefined || usage.resetCredits.earliestExpiresAt * 1000 > this.now()) &&
+      !imminentRecovery(usage, this.now(), settings);
+    const digest = createHash('sha256').update(JSON.stringify({ active, credential: fingerprint(credential), settings,
+      context: this.resetContext(), counted: counted(usage, settings).map(window => window.label), windows,
+      credits: usage.resetCredits, reason, plannedCredits: 1 })).digest('hex');
+    return { eligible, digest, windows, plannedCredits: 1 };
+  }
+
+  async resolveReset(id: string, approve: boolean, clientId: number | undefined, wait: LockWait = {}): Promise<ResetResolution> {
+    this.resetConfirmations();
+    const decision = this.resetDecision;
+    if (!decision || decision.view.id !== id) return { status: 'stale' };
+    if (!approve) { this.cancelResetDecision(); return { status: 'cancelled' }; }
+    if (decision.approved) return { status: 'stale' };
+    if (clientId === undefined || decision.owner !== clientId) return { status: 'stale' };
+    // Mark before any await: a duplicate approval cannot join a queued execution.
+    decision.approved = true;
+    try {
+      return await this.withAccountLock('codex', async () => {
+        const active = this.profiles.activeProfileId('codex');
+        const settings = this.settings('codex');
+        const usage = active ? this.usage('codex', active) : undefined;
+        const credential = active ? await this.profiles.credential('codex', active) : undefined;
+        if (!decision.valid || this.now() >= decision.view.expiresAt || active !== decision.view.accountId ||
+          !settings.resetConfirmationRequired || !usage || !credential) return { status: 'stale' };
+        if (!await this.profiles.matchesNative('codex', active) || !decision.valid) return { status: 'stale' };
+        const plan = this.resetPlan(active, settings, usage, credential, decision.view.reason);
+        if (!plan.eligible || plan.digest !== decision.digest) return { status: 'stale' };
+        const reason = await this.resetApprovalScope.run(decision.view.id, () => this.rotate('codex', settings));
+        return { status: 'completed', reason };
+      }, wait);
+    } finally {
+      if (this.resetDecision === decision) this.cancelResetDecision();
+      decision.valid = false;
+    }
+  }
+
   /** One provider-authorized earned reset, with a stable key across crashes and lost responses. */
   private async redeemReset(active: string, settings: AutomationSettings, before: LiveUsage, reason: string): Promise<string> {
     if (this.profiles.activeProfileId('codex') !== active || !await this.profiles.matchesNative('codex', active)) {
       return 'the active login changed before an earned reset could be used';
     }
+    const credential = await this.profiles.credential('codex', active);
+    if (!credential) return 'saved credential is missing';
+    const currentSettings = this.settings('codex');
+    // Re-read configuration after awaits so enabling confirmation cannot race a redemption.
+    if (currentSettings.resetConfirmationRequired || settings.resetConfirmationRequired) {
+      const usage = this.usage('codex', active);
+      if (!currentSettings.resetConfirmationRequired || !usage) return 'earned reset confirmation is stale';
+      const plan = this.resetPlan(active, currentSettings, usage, credential, reason);
+      if (!plan.eligible) return 'earned reset facts are stale or no longer eligible';
+      const decision = this.resetDecision;
+      if (!decision?.approved || this.resetApprovalScope.getStore() !== decision.view.id) {
+        if (decision?.digest !== plan.digest) this.cancelResetDecision();
+        if (!this.resetDecision && this.suppressedResetDigest !== plan.digest) {
+          const view: ResetConfirmation = { id: randomUUID(), accountId: active, accountName: this.account('codex', active).name,
+            availableCredits: usage.resetCredits!.availableCount, plannedCredits: plan.plannedCredits, windows: plan.windows,
+            reason, expiresAt: this.now() + 5 * 60_000 };
+          this.resetDecision = { view, digest: plan.digest, approved: false, valid: true };
+          this.onResetConfirmation?.(view);
+        }
+        return 'earned reset awaits confirmation';
+      }
+      if (!decision.valid || decision.digest !== plan.digest || this.now() >= decision.view.expiresAt) return 'earned reset confirmation is stale';
+      // Native identity and credentials can change during asynchronous reads. Admission and the
+      // same planner are checked at the final leaf, while the account lock is still held.
+      const finalCredential = await this.profiles.credential('codex', active);
+      if (!await this.profiles.matchesNative('codex', active)) return 'the active login changed before redemption';
+      const finalUsage = this.usage('codex', active);
+      if (!finalCredential || !finalUsage || this.profiles.activeProfileId('codex') !== active ||
+        !decision.valid || this.resetApprovalScope.getStore() !== decision.view.id ||
+        this.now() >= decision.view.expiresAt || this.heldFor('codex')) return 'earned reset confirmation is stale';
+      const finalSettings = this.settings('codex');
+      const finalPlan = this.resetPlan(active, finalSettings, finalUsage, finalCredential, reason);
+      if (!finalSettings.resetConfirmationRequired || !finalPlan.eligible || finalPlan.digest !== decision.digest) return 'earned reset confirmation is stale';
+    }
+    this.admit?.();
+    if (this.disposed || this.abort.signal.aborted) return 'the service is stopping';
     const previous = this.read('codex', active);
     const key = previous.resetAttemptKey ?? randomUUID();
     this.write('codex', active, { ...previous, resetAttemptKey: key });
     this.locks.get('codex')?.touch();
     try {
-      const credential = await this.profiles.credential('codex', active);
-      if (!credential) { throw new Error('Saved credential is missing.'); }
       const redeemed = await this.reset(credential, settings, key, this.abort.signal);
       await this.profiles.refreshedCredential('codex', active, credential, redeemed.credential);
       const state = this.read('codex', active);
@@ -824,7 +951,7 @@ export class AccountAutomation {
     const rotationId = 'rotation-sweep';
     const sweep = this.read(provider, rotationId);
     const retryAt = sweep.nextAllowedAt ?? (sweep.checkedAt !== undefined ? sweep.checkedAt + settings.checkIntervalMs : undefined);
-    if (!forced && retryAt !== undefined && this.now() < retryAt) { return `the last sweep was less than ${Math.round(settings.checkIntervalMs / 60_000)} minutes ago`; }
+    if (!forced && !(this.resetDecision?.approved && this.resetApprovalScope.getStore() === this.resetDecision.view.id) && retryAt !== undefined && this.now() < retryAt) { return `the last sweep was less than ${Math.round(settings.checkIntervalMs / 60_000)} minutes ago`; }
     const sweepStart = this.now();
     this.write(provider, rotationId, { checkedAt: sweepStart, nextAllowedAt: sweepStart + settings.checkIntervalMs });
     this.limitHint.delete(provider);
@@ -833,7 +960,7 @@ export class AccountAutomation {
     const snapshot = this.rotationSnapshot(settings);
     // Never rotate based on a stale cache, offline log, expired reset or a failed refresh. A reading taken moments
     // ago (the status bar's) is as good as a new one and spares the rate-limited endpoint, unless a reset has passed.
-    const recent = !hinted && usage !== undefined && this.now() - usage.fetchedAt.getTime() <= RECENT_READING_MS &&
+    const recent = !hinted && !(provider === 'codex' && settings.autoReset && !usage?.resetCredits) && usage !== undefined && this.now() - usage.fetchedAt.getTime() <= RECENT_READING_MS &&
       usage.windows.every((window) => !window.resetsAt || window.resetsAt.getTime() > this.now());
     let activeCheck: KeepAliveNowResult = { usage };
     if (!recent) {

@@ -37,7 +37,7 @@ function json(response, status, body) {
   response.end(JSON.stringify(body));
 }
 
-export function createBridgeServer(engine, { token, maxBodyBytes, log = () => {} } = {}) {
+export function createBridgeServer(engine, { token, maxBodyBytes, owner, log = () => {} } = {}) {
   if (typeof token !== 'string' || token.length < 24) throw new Error('A local token of at least 24 characters is required.');
   const server = http.createServer(async (request, response) => {
     const requestId = randomUUID(); const controller = new AbortController();
@@ -70,7 +70,7 @@ export function createBridgeServer(engine, { token, maxBodyBytes, log = () => {}
         else throw new BridgeError('Unknown endpoint.', 404, 'not_found');
         return;
       }
-      if (request.method === 'GET' && request.url === '/health') { json(response, 200, { status: 'ok', active_sessions: engine.sessions.size }); return; }
+      if (request.method === 'GET' && request.url === '/health') { json(response, 200, { status: 'ok', active_sessions: engine.sessions.size, ...(owner ? { owner } : {}) }); return; }
       if (request.method === 'GET' && url.pathname === '/v1/models') { json(response, 200, { object: 'list', data: await engine.models(url.searchParams.get('backend') || undefined) }); return; }
       const fork = /^\/v1\/sessions\/([a-f0-9-]{36})\/fork$/.exec(url.pathname);
       if (request.method !== 'POST' || request.url !== '/v1/chat/completions' && !fork) throw new BridgeError('Unknown endpoint.', 404, 'not_found');
@@ -81,7 +81,7 @@ export function createBridgeServer(engine, { token, maxBodyBytes, log = () => {}
         if (!parent) throw new BridgeError('Unknown parent session.', 404, 'not_found');
         input.bridge_fork_session_id = parent.id; input.model ||= parent.model;
       }
-      const body = normalizeRequest(input);
+      const body = normalizeRequest(input, token);
       if (body.ignoredParameters.length) response.setHeader('x-cli-bridge-ignored-parameters', body.ignoredParameters.join(', '));
       const id = `chatcmpl-${requestId}`; const created = Math.floor(Date.now() / 1000);
       let started = false;

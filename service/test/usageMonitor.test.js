@@ -10,6 +10,7 @@ function fixture(t, fetch) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'usage-monitor-'));
   let time = Date.now(), identity = 'a'; const calls = [], observations = [];
   const config = defaultConfig(); config.claude.source = 'api'; config.codex.source = 'api';
+  for (const provider of ['claude', 'codex', 'copilot']) config[provider].checkIntervalMinutes = 10;
   const reading = (provider, percent = 20, reset = time + 3600000) => ({ kind: 'ok', usage: { provider, title: provider, fetchedAt: new Date(time), windows: [{ label: '5h', usedPercent: percent, resetsAt: new Date(reset) }] } });
   const monitor = new UsageMonitor({ directory, config: () => config, now: () => time, identity: () => identity,
     budget: new ApiCallBudget(path.join(directory, 'budget'), () => 30000), log() {},

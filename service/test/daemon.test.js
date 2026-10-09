@@ -3,6 +3,14 @@ const test = require('node:test');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+
+// The hosts below would write native CLI settings: keep every home of this file temporary.
+const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-daemon-'));
+for (const [name, dir] of [['HOME', 'home'], ['AI_USAGE_HOME', 'aiu'], ['CODEX_HOME', 'codex'], ['CLAUDE_CONFIG_DIR', 'claude']]) {
+  process.env[name] = path.join(sandbox, dir);
+  fs.mkdirSync(process.env[name], { recursive: true });
+}
+process.on('exit', () => fs.rmSync(sandbox, { recursive: true, force: true }));
 const { startServiceHost } = require('../out/daemon');
 const { connectService } = require('../out/client');
 const { infoFile, readServiceInfo, socketPath } = require('../out/paths');

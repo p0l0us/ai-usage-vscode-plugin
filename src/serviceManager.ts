@@ -2,11 +2,11 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import {
-  defaultConfig, AccountService, AuthProvider, ProviderView, ServiceClient, ServiceConfig, ServiceEvent, ServiceHost, Snapshot, compareVersions, connectService, findNode,
+  defaultConfig, AuthProvider, ProviderView, ServiceClient, ServiceConfig, ServiceEvent, ServiceHost, Snapshot, compareVersions, connectService, findNode,
   installService, launcherDir, logFile, readCurrentInstall, readServiceInfo, restartService, serviceHome, serviceStatus, startService, startServiceHost,
   stopService, uninstallService
 } from '../service/out';
-import { ConfigSync, readSettings } from './configSync';
+import { ConfigSync, readSeedSettings } from './configSync';
 import { pickWithBack } from './quickPick';
 import { ProfileStoreKind, STORE_TITLES, clientAccess, directAccess, transferProfiles, vscodeProfileCount } from './vscodeProfiles';
 
@@ -34,7 +34,10 @@ export class ServiceManager implements vscode.Disposable {
   private client?: ServiceClient;
   /** The service hosted inside this window, when no background service is used. */
   private host?: ServiceHost;
-  private localMode = false;
+  private configRevision = 0;
+  private shutdown?: Promise<void>;
+  private takeoverTimer?: ReturnType<typeof setTimeout>;
+  private settingsQueue = Promise.resolve();
   runtimeStatus: { codexProxyActive: boolean } = { codexProxyActive: false };
   private connecting?: Promise<ServiceClient | undefined>;
   private readonly eventEmitter = new vscode.EventEmitter<ServiceEvent>();
@@ -59,13 +62,24 @@ export class ServiceManager implements vscode.Disposable {
     this.configSync = new ConfigSync(log);
   }
 
-  dispose(): void {
+  dispose(): void { void this.stop().catch(error => this.log(`service: shutdown failed: ${String(error)}`)); }
+
+  /** Awaited by extension deactivation so ownership is released only after engine children exit. */
+  stop(): Promise<void> {
+    if (this.shutdown) return this.shutdown;
     this.disposed = true;
+    clearTimeout(this.takeoverTimer);
     this.client?.close();
-    void this.host?.stop();
+    this.shutdown = (async () => {
+      await this.connecting;
+      this.client?.close();
+      await this.host?.stop();
+      this.host = undefined;
+    })();
     this.eventEmitter.dispose();
     this.stateEmitter.dispose();
     this.installEmitter.dispose();
+    return this.shutdown;
   }
 
   get enabled(): boolean {
@@ -84,7 +98,6 @@ export class ServiceManager implements vscode.Disposable {
 
   /** One line for the root menu: where the service runs, or why it does not. */
   summary(): string {
-    if (!this.enabled) { return 'Shared engine running inside VS Code (service connection off)'; }
     const client = this.connected;
     if (!client) { return 'not running'; }
     const where = this.host ? 'inside this VS Code window' : readServiceInfo(this.home)?.embedded ? 'inside a VS Code window' : 'background';
@@ -112,37 +125,19 @@ export class ServiceManager implements vscode.Disposable {
   require(): ServiceClient {
     const client = this.connected;
     if (client) { return client; }
-    if (!this.enabled) { throw new Error(`The account service is turned off (${ENABLED_SETTING}). Turn it on to manage accounts.`); }
     throw new Error('The account service is not answering yet; try again in a moment. AI Usage: Account Service… shows its state.');
   }
 
   /** Connects, installing or upgrading first as needed; `promptInstall` asks the user before a first install. */
   ensure(options: { promptInstall?: boolean } = {}): Promise<ServiceClient | undefined> {
     if (this.disposed) { return Promise.resolve(undefined); }
-    if (!this.enabled) {
-      if (this.localMode && this.connected) return Promise.resolve(this.connected);
-      if (this.connecting) return this.connecting;
-      this.client?.close();
-      this.connecting = (async () => {
-        await this.host?.stop(); this.host = undefined;
-        const engine = new AccountService({ home: this.home,
-          version: this.bundledVersion(), log: this.log });
-        engine.setConfig(readSettings(engine.config));
-        this.localMode = true;
-        const client = ServiceClient.local(engine);
-        await this.adopt(client);
-        return client;
-      })().finally(() => { this.connecting = undefined; });
-      return this.connecting;
-    }
-    if (this.localMode) { this.localMode = false; this.client?.close(); }
     if (this.connected) { return Promise.resolve(this.connected); }
     if (this.connecting) { return this.connecting; }
     this.lastAttemptAt = Date.now();
     this.connecting = (async () => {
       try {
         const installed = readCurrentInstall(this.home);
-        if (installed && this.background) {
+        if (installed && this.enabled && this.background) {
           if (compareVersions(this.bundledVersion(), installed.version) > 0) {
             await this.upgrade(installed.version);
           }
@@ -150,7 +145,7 @@ export class ServiceManager implements vscode.Disposable {
         }
         // No background service in use: offer it once (without waiting), then use whichever service answers (another
         // window's, or one started from a terminal), or host it in this window.
-        if (!installed && this.background && options.promptInstall) { void this.offerInstall(); }
+        if (!installed && this.enabled && this.background && options.promptInstall) { void this.offerInstall(); }
         return await this.connectExisting() ?? await this.hostHere();
       } catch (error) {
         this.log(`service: ${error instanceof Error ? error.message : String(error)}`);
@@ -166,29 +161,29 @@ export class ServiceManager implements vscode.Disposable {
   private async connectExisting(): Promise<ServiceClient | undefined> {
     try {
       const client = await connectService({ home: this.home, client: 'vscode', version: this.extensionVersion(), subscribe: 'all' });
-      if (compareVersions(client.info.version, this.bundledVersion()) < 0) {
-        await client.shutdown(); client.close();
-        await new Promise(resolve => setTimeout(resolve, 150));
-        return undefined;
-      }
       await this.adopt(client);
+      if (this.disposed || !client.connected) { client.close(); return undefined; }
       return client;
     } catch { return undefined; }
   }
 
   /** Hosts the service in this window and connects to it; when another window won the race, connects to that one. */
   private async hostHere(): Promise<ServiceClient | undefined> {
+    if (this.disposed) return undefined;
     let host: ServiceHost;
     try {
-      host = await startServiceHost({ home: this.home, version: this.bundledVersion(), embedded: true, initialConfig: readSettings(defaultConfig()) });
+      host = await startServiceHost({ home: this.home, version: this.bundledVersion(), embedded: true, seedConfig: readSeedSettings(defaultConfig()), onLog: this.log });
     } catch (error) {
       this.log(`service: not hosted in this window: ${error instanceof Error ? error.message : String(error)}`);
       return this.connectExisting();
     }
+    if (this.disposed) { await host.stop(); return undefined; }
     this.host = host;
     this.log(`service: running inside this VS Code window with profiles owned by the service (home ${this.home}); it stops when the window closes`);
     void host.stopped.then(() => { if (this.host === host) { this.host = undefined; } });
-    return this.connectExisting();
+    const client = await this.connectExisting();
+    if (!client) { await host.stop(); if (this.host === host) this.host = undefined; }
+    return client;
   }
 
   private extensionVersion(): string {
@@ -197,8 +192,17 @@ export class ServiceManager implements vscode.Disposable {
 
   /** Called every minute: reconnects after a loss, without prompting. */
   tick(): void {
-    if (!this.enabled || this.connected || this.connecting || Date.now() - this.lastAttemptAt < RECONNECT_MS) { return; }
+    if (this.disposed || this.connected || this.connecting || Date.now() - this.lastAttemptAt < RECONNECT_MS) { return; }
     void this.ensure();
+  }
+
+  private scheduleReconnect(delay = 1_000): void {
+    clearTimeout(this.takeoverTimer);
+    if (this.disposed) return;
+    this.takeoverTimer = setTimeout(() => {
+      void this.ensure().then(client => { if (!client && !this.disposed) this.scheduleReconnect(); });
+    }, delay);
+    this.takeoverTimer.unref();
   }
 
   private async connect(): Promise<ServiceClient | undefined> {
@@ -212,6 +216,7 @@ export class ServiceManager implements vscode.Disposable {
         }
       });
       await this.adopt(client);
+      if (this.disposed || !client.connected) { client.close(); return undefined; }
       return client;
     } catch (error) {
       this.log(`service: connection failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -220,26 +225,35 @@ export class ServiceManager implements vscode.Disposable {
   }
 
   private async adopt(client: ServiceClient): Promise<void> {
+    if (this.disposed) { client.close(); return; }
     this.client = client;
     this.log(`service: connected to version ${client.info.version} (pid ${client.info.pid}, home ${client.info.home})`);
     client.on('event', (event: ServiceEvent) => {
       if (event.event === 'stateChanged') { void this.refreshViews(event.provider); }
-      if (event.event === 'configChanged') { this.config = event.config; void this.configSync.pull(event.config); }
+      if (this.client !== client || this.disposed) return;
+      if (event.event === 'configChanged' && (event.revision === undefined || event.revision >= this.configRevision)) {
+        this.config = event.config; this.configRevision = event.revision ?? this.configRevision;
+        void this.configSync.pull(event.config).catch(error => this.log(`settings: hydration failed: ${String(error)}`));
+      }
       if (event.event === 'log') { this.log(`[service] ${event.line.replace(/^\[[^\]]*\]\s*/, '')}`); }
       this.eventEmitter.fire(event);
     });
     client.on('close', () => {
-      if (this.client === client) { this.client = undefined; }
+      if (this.client !== client) return;
+      this.client = undefined;
       this.views = {};
       this.log('service: connection closed');
       this.stateEmitter.fire(undefined);
       // A service hosted by a window that closed is taken over by another window soon, not after the minute tick.
-      if (!this.disposed && this.enabled && !(this.background && this.isInstalled())) {
-        setTimeout(() => void this.ensure(), TAKEOVER_DELAY_MS + Math.random() * 1_500);
+      if (!this.disposed) {
+        this.scheduleReconnect(TAKEOVER_DELAY_MS + Math.random() * 1_500);
       }
     });
     // The window's local folders hold its project profiles; the service lists them while this window is connected.
     await this.declareFolders(client);
+    if (client.supports('reset-confirmation')) {
+      for (const decision of await client.resetConfirmations()) this.eventEmitter.fire({ event: 'resetConfirmation', decision });
+    }
     // The extension's terminals get the ai-usage command without any PATH editing by the user.
     if (this.isInstalled()) {
       this.context.environmentVariableCollection.description = 'Adds the ai-usage command of the AI Usage account service.';
@@ -260,11 +274,14 @@ export class ServiceManager implements vscode.Disposable {
     await this.refreshViews();
   }
 
-  /** Every connection applies the effective VS Code settings; CLI changes are reflected back while connected. */
+  /** Reconnect reads authoritative persisted settings and never replays an editor's old defaults. */
   private async syncConfig(client: ServiceClient): Promise<void> {
-    const current = await client.getConfig();
-    this.config = await client.setConfig(readSettings(current));
-    this.log('service: applied the effective VS Code settings');
+    const current = await client.getConfigState();
+    if (this.client !== client || this.disposed || current.revision < this.configRevision) return;
+    this.config = current.config;
+    this.configRevision = current.revision;
+    await this.configSync.pull(current.config);
+    this.log('service: adopted persisted engine settings');
   }
 
   /** Pushes the user-setting values a configuration change carried, if any. */
@@ -272,14 +289,23 @@ export class ServiceManager implements vscode.Disposable {
     const client = this.connected;
     if (!client || !this.config) { return; }
     const values = this.configSync.changedKeys(event, this.config);
+    const baseRevision = this.configRevision;
+    if (event.affectsConfiguration('aiUsage.bridge.codex.sessionDirectory') || event.affectsConfiguration('aiUsage.bridge.claude.sessionDirectory')) { await this.declareFolders(client); }
     if (!Object.keys(values).length) { return; }
-    try {
-      this.config = await client.setConfig(values);
-      this.log(`settings: pushed ${Object.keys(values).join(', ')} to the account service`);
-    } catch (error) {
-      void vscode.window.showWarningMessage(`AI Usage: the account service rejected the setting: ${error instanceof Error ? error.message : String(error)}`);
-      await this.configSync.pull(this.config);
-    }
+    this.settingsQueue = this.settingsQueue.catch(() => undefined).then(async () => {
+      if (this.client !== client || !client.connected || this.disposed) return;
+      try {
+        const result = await client.patchConfig(values, baseRevision);
+        if (this.client !== client || result.revision < this.configRevision) return;
+        this.config = result.config; this.configRevision = result.revision;
+        this.log(`settings: pushed ${Object.keys(values).join(', ')} to the account service`);
+      } catch (error) {
+        void vscode.window.showWarningMessage(`AI Usage: the account service rejected the setting: ${error instanceof Error ? error.message : String(error)}`);
+        // A disconnect may hide a committed mutation. Re-read after reconnect; never retry its payload.
+        if (client.connected && this.client === client) await this.syncConfig(client);
+      }
+    });
+    await this.settingsQueue;
   }
 
   /** The open local workspace folders, whose project profile files the service reads. */
@@ -290,7 +316,15 @@ export class ServiceManager implements vscode.Disposable {
   /** Tells the service which project folders this window has open; called on connect and when they change. */
   async declareFolders(client = this.connected): Promise<void> {
     if (!client) { return; }
-    try { await client.setFolders(ServiceManager.localFolders()); }
+    try {
+      const configuration = vscode.workspace.getConfiguration('aiUsage.bridge');
+      const sessionDirectory: Partial<Record<AuthProvider, string>> = {};
+      for (const provider of PROVIDERS) {
+        const directory = configuration.get<string>(`${provider}.sessionDirectory`, '');
+        if (directory) sessionDirectory[provider] = directory;
+      }
+      await client.call('workspace.context', { folders: ServiceManager.localFolders(), sessionDirectory });
+    }
     catch (error) { this.log(`service: could not declare the workspace folders: ${error instanceof Error ? error.message : String(error)}`); }
   }
 
@@ -299,7 +333,9 @@ export class ServiceManager implements vscode.Disposable {
     if (!client) { return; }
     try {
       for (const candidate of provider ? [provider] : PROVIDERS) {
-        this.views[candidate] = await client.list(candidate);
+        const view = await client.list(candidate);
+        if (this.client !== client || this.disposed) return;
+        this.views[candidate] = view;
       }
       this.stateEmitter.fire(provider);
     } catch (error) {
@@ -312,8 +348,11 @@ export class ServiceManager implements vscode.Disposable {
     if (!client) { return undefined; }
     try {
       const snapshot = await client.snapshot();
+      if (this.client !== client || this.disposed) return undefined;
       this.views = snapshot.providers;
-      this.config = snapshot.config;
+      if (snapshot.configRevision !== undefined && snapshot.configRevision >= this.configRevision) {
+        this.config = snapshot.config; this.configRevision = snapshot.configRevision;
+      }
       return snapshot;
     } catch { return undefined; }
   }

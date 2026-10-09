@@ -1,14 +1,14 @@
-import { AccountService } from './accountService';
 import { UsageContext, UsageStateView } from './usageMonitor';
 import { ProviderId } from './live';
 import { EventEmitter } from 'events';
+import { SERVICE_PROTOCOL_VERSION } from './protocol';
 import { RpcClient, RpcError } from './rpc';
 import { readServiceInfo, readToken, socketPath, processAlive } from './paths';
 import type { AuthProvider } from './authFiles';
 import type { ServiceConfig } from './configStore';
 import type { ProfileMetadata } from './profileStore';
 import type {
-  ActivationResult, EventName, ExportResult, HelloResult, ImportPlanView, ImportSummary, KeepAliveResult, ProviderView, SaveNativeResult,
+  ResetConfirmation, ResetResolution, ConfigState, RequestOptions, ActivationResult, EventName, ExportResult, HelloResult, ImportPlanView, ImportSummary, KeepAliveResult, ProviderView, SaveNativeResult,
   CheckWait, HistoryExportKind, HistoryInfo, HistorySummaryResult, KeepAliveAllResult, SerializedUsage, ServiceEvent, ServiceInfo, SignInPreparation,
   SignInResult, Snapshot, UsageReadResult
 } from './protocol';
@@ -29,6 +29,7 @@ export type ClientOptions = {
   /** Project folders open at the client, whose profile files the service lists while the client is connected. */
   folders?: string[];
   timeoutMs?: number;
+  requiredCapabilities?: readonly string[];
 };
 
 /**
@@ -36,7 +37,7 @@ export type ClientOptions = {
  * and `close` once the connection is gone. Shared by the VS Code extension and the `ai-usage` command.
  */
 export class ServiceClient extends EventEmitter {
-  private constructor(private readonly rpc: Pick<RpcClient, 'isClosed' | 'close' | 'call'> & Pick<EventEmitter, 'on'>, readonly info: ServiceInfo) {
+  private constructor(private readonly rpc: Pick<RpcClient, 'isClosed' | 'close' | 'call'> & Pick<EventEmitter, 'on'>, readonly info: ServiceInfo, readonly capabilities: readonly string[], readonly protocolVersion: number) {
     super();
     rpc.on('event', (event: ServiceEvent) => this.emit('event', event));
     rpc.on('close', () => this.emit('close'));
@@ -48,8 +49,9 @@ export class ServiceClient extends EventEmitter {
     if (!token) { throw new ServiceUnavailableError('The account service has never run here: no service token was found.', 'not-installed'); }
     try {
       const { client, hello } = await RpcClient.connect({ socketPath: socketPath(options.home), token, client: options.client, version: options.version,
-        subscribe: options.subscribe, folders: options.folders, timeoutMs: options.timeoutMs });
-      return new ServiceClient(client, (hello as HelloResult).service);
+        subscribe: options.subscribe, folders: options.folders, timeoutMs: options.timeoutMs, requiredCapabilities: options.requiredCapabilities ?? ['engine', 'config-revision', 'request-cancellation'] });
+      const result = hello as HelloResult;
+      return new ServiceClient(client, result.service, result.capabilities ?? [], result.protocolVersion ?? SERVICE_PROTOCOL_VERSION);
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
       if (code === 'ENOENT' || code === 'ECONNREFUSED') { throw new ServiceUnavailableError('The account service is not running.', 'not-running'); }
@@ -58,39 +60,28 @@ export class ServiceClient extends EventEmitter {
     }
   }
 
-  /** The same service engine, called directly when the extension's service connection is disabled. */
-  static local(service: AccountService): ServiceClient {
-    const transport = new EventEmitter() as EventEmitter & { isClosed: boolean; close(): void; call(method: string, params?: unknown): Promise<unknown> };
-    transport.isClosed = false;
-    const relay = (event: ServiceEvent) => transport.emit('event', event);
-    service.events.on('event', relay);
-    transport.call = async (method, params) => {
-      if (transport.isClosed) throw new Error('The local engine is closed.');
-      const result = await service.handle(method, params, -1);
-      return result === undefined ? undefined : JSON.parse(JSON.stringify(result));
-    };
-    transport.close = () => { if (transport.isClosed) return; transport.isClosed = true; service.events.off('event', relay); service.dispose(); transport.emit('close'); };
-    const client = new ServiceClient(transport, service.info());
-    service.start();
-    return client;
-  }
-
-  liveUsage(provider: ProviderId, force = false): Promise<UsageStateView> { return this.call('usage.live', { provider, force }); }
+  liveUsage(provider: ProviderId, force = false, options?: RequestOptions): Promise<UsageStateView> { return this.call('usage.live', { provider, force }, options); }
   usageContext(context: UsageContext): Promise<unknown> { return this.call('usage.context', context); }
   get connected(): boolean { return !this.rpc.isClosed; }
 
   close(): void { this.rpc.close(); }
 
-  call<T>(method: string, params?: unknown, timeoutMs?: number): Promise<T> {
-    return this.rpc.call(method, params, timeoutMs) as Promise<T>;
+  supports(capability: string): boolean { return this.capabilities.includes(capability); }
+
+  call<T>(method: string, params?: unknown, options?: number | RequestOptions): Promise<T> {
+    return this.rpc.call(method, params, options) as Promise<T>;
   }
+
+  resetConfirmations(): Promise<ResetConfirmation[]> { return this.call('reset.confirmations'); }
+  claimReset(id: string): Promise<ResetConfirmation | null> { return this.call('reset.claim', { id }); }
+  resolveReset(id: string, approve: boolean, options?: RequestOptions): Promise<ResetResolution> { return this.call('reset.resolve', { id, approve }, options); }
 
   serviceInfo(): Promise<ServiceInfo> { return this.call('service.info'); }
   snapshot(): Promise<Snapshot> { return this.call('snapshot'); }
-  list(provider: AuthProvider): Promise<ProviderView> { return this.call('profiles.list', { provider }); }
+  list(provider: AuthProvider, options?: RequestOptions): Promise<ProviderView> { return this.call('profiles.list', { provider }, options); }
   /** `target` is an id, or `{ ref }` with a name, 1-based number or id. */
-  activate(provider: AuthProvider, target: string | { ref: string }): Promise<ActivationResult> {
-    return this.call('profiles.activate', { provider, ...(typeof target === 'string' ? { id: target } : target) });
+  activate(provider: AuthProvider, target: string | { ref: string }, options?: RequestOptions): Promise<ActivationResult> {
+    return this.call('profiles.activate', { provider, ...(typeof target === 'string' ? { id: target } : target) }, options);
   }
   /** `folder`: keep the new profile in that declared project folder's file instead of privately. */
   saveNative(provider: AuthProvider, options: { name?: string; id?: string; allowDuplicate?: boolean; folder?: string }): Promise<SaveNativeResult> {
@@ -136,17 +127,21 @@ export class ServiceClient extends EventEmitter {
   }
   /** Stops the wait, or the sweep, that was requested with `token`. */
   cancel(token: string): Promise<unknown> { return this.call('automation.cancel', { token }, 5_000); }
-  rotateNow(provider: AuthProvider, wait: CheckWait = {}): Promise<{ switched: boolean; reason?: string; activeProfileId?: string; activeProfileName?: string }> {
-    return this.call('automation.rotateNow', { provider, ...wait });
+  rotateNow(provider: AuthProvider, wait: CheckWait = {}, options?: RequestOptions): Promise<{ switched: boolean; reason?: string; activeProfileId?: string; activeProfileName?: string }> {
+    return this.call('automation.rotateNow', { provider, ...wait }, options);
   }
   tick(): Promise<unknown> { return this.call('automation.tick'); }
   /** Reads a profile's usage from the vendor now, without a keep-alive prompt. */
-  readUsage(provider: AuthProvider, target: string | { ref: string }): Promise<UsageReadResult> {
-    return this.call('usage.read', { provider, ...(typeof target === 'string' ? { id: target } : target) });
+  readUsage(provider: AuthProvider, target: string | { ref: string }, options?: RequestOptions): Promise<UsageReadResult> {
+    return this.call('usage.read', { provider, ...(typeof target === 'string' ? { id: target } : target) }, options);
   }
   observe(provider: AuthProvider, id: string, usage: SerializedUsage): Promise<unknown> { return this.call('usage.observe', { provider, id, usage }); }
   hintLimit(provider: AuthProvider, usage: SerializedUsage): Promise<unknown> { return this.call('usage.hintLimit', { provider, usage }); }
-  getConfig(): Promise<ServiceConfig> { return this.call('config.get'); }
+  getConfigState(): Promise<ConfigState> { return this.call('config.read'); }
+  patchConfig(values: Record<string, unknown>, expectedRevision: number): Promise<ConfigState> {
+    return this.call('config.patch', { values, baseRevision: expectedRevision });
+  }
+  getConfig(options?: RequestOptions): Promise<ServiceConfig> { return this.call('config.get', undefined, options); }
   setConfig(values: Record<string, unknown>): Promise<ServiceConfig> { return this.call('config.set', { values }); }
   tailLog(lines: number): Promise<string[]> { return this.call('log.tail', { lines }); }
   historyInfo(): Promise<HistoryInfo> { return this.call('history.info'); }

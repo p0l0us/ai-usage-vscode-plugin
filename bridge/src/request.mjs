@@ -1,8 +1,10 @@
+import { createHmac, timingSafeEqual } from 'node:crypto';
+import path from 'node:path';
 import { BridgeError, canonical } from './common.mjs';
 
 const invalid = message => { throw new BridgeError(message, 400, 'invalid_request_error'); };
 const advisoryFields = ['max_tokens', 'max_completion_tokens', 'temperature', 'top_p', 'frequency_penalty', 'presence_penalty'];
-const allowedFields = new Set(['model', 'messages', 'stream', 'stream_options', 'tools', 'tool_choice', 'parallel_tool_calls', 'reasoning_effort', 'user', 'n', 'bridge_session_id', 'bridge_persist', 'bridge_conversation_id', 'bridge_resume_session_id', 'bridge_fork_session_id', ...advisoryFields]);
+const allowedFields = new Set(['model', 'messages', 'stream', 'stream_options', 'tools', 'tool_choice', 'parallel_tool_calls', 'reasoning_effort', 'user', 'n', 'bridge_session_id', 'bridge_persist', 'bridge_conversation_id', 'bridge_resume_session_id', 'bridge_fork_session_id', 'bridge_workspace_context', ...advisoryFields]);
 
 const maxImageBytes = 5 * 1024 * 1024;
 const maxImageCount = 20;
@@ -27,7 +29,21 @@ export function contentParts(content) {
   return typeof content === 'string' ? [{ type: 'text', text: content }] : content;
 }
 
-export function normalizeRequest(body) {
+export function normalizeRequest(body, workspaceToken) {
+  let workspaceDirectories;
+  const context = body?.bridge_workspace_context;
+  if (context != null) {
+    if (!workspaceToken || !context || typeof context !== 'object' || Array.isArray(context) ||
+      Object.keys(context).some(key => !['directories', 'expiresAt', 'signature'].includes(key)) ||
+      !context.directories || typeof context.directories !== 'object' || Array.isArray(context.directories) ||
+      Object.keys(context.directories).some(key => !['codex', 'claude'].includes(key)) ||
+      Object.values(context.directories).some(dir => typeof dir !== 'string' || dir.length > 4096 || dir.includes('\0') || !path.isAbsolute(dir)) ||
+      !Number.isSafeInteger(context.expiresAt) || context.expiresAt < Date.now() || context.expiresAt > Date.now() + 120_000 ||
+      typeof context.signature !== 'string' || !/^[a-f0-9]{64}$/.test(context.signature)) invalid('Invalid or expired workspace context.');
+    const expected = createHmac('sha256', workspaceToken).update(JSON.stringify({ directories: context.directories, expiresAt: context.expiresAt })).digest();
+    if (!timingSafeEqual(expected, Buffer.from(context.signature, 'hex'))) invalid('Invalid workspace context signature.');
+    workspaceDirectories = context.directories;
+  }
   if (!body || typeof body !== 'object' || Array.isArray(body)) invalid('Expected a JSON object.');
   for (const key of Object.keys(body)) if (!allowedFields.has(key) && body[key] != null) invalid(`Unsupported parameter: ${key}. This CLI bridge cannot enforce model sampling or output-token limits.`);
   if (typeof body.model !== 'string' || !/^(codex|claude)\/[a-zA-Z0-9._-]+(?:\[1m\])?$/.test(body.model)) invalid('Use a model ID from /v1/models, such as codex/<model> or claude/sonnet.');
@@ -119,10 +135,10 @@ export function normalizeRequest(body) {
     model: body.model, messages, tools, activeTools, choice,
     sessionId: body.bridge_session_id, persist: body.bridge_persist === true,
     conversationId: body.bridge_conversation_id, resumeSessionId: body.bridge_resume_session_id,
-    forkSessionId: body.bridge_fork_session_id,
+    forkSessionId: body.bridge_fork_session_id, workspaceDirectories,
     reasoning: body.reasoning_effort, stream: body.stream === true, ignoredParameters,
     includeUsage: body.stream_options?.include_usage === true,
-    signature: canonical({ model: body.model, tools, reasoning: body.reasoning_effort ?? null, choice })
+    signature: canonical({ model: body.model, tools, reasoning: body.reasoning_effort ?? null, choice, workspaceDirectories: workspaceDirectories ?? null })
   };
 }
 

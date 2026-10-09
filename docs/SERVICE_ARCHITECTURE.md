@@ -1,6 +1,6 @@
 # Service ownership and shared behavior
 
-When `aiUsage.accountService.enabled` is on, the service is the source of usage readings, account state,
+The shared runtime is the source of usage readings, account state,
 rotation decisions and runtime status. The extension displays those values and forwards configuration and user
 actions. A lost connection produces an unavailable/stale display; it never starts a second provider-reading path.
 
@@ -24,32 +24,48 @@ The extension relays bridge requests to the service-managed bridge without readi
 | Mode | Engine runs in | State and credentials | After all editor windows close |
 |---|---|---|---|
 | Background service | Its own OS process | Service home | Polling, rotation and enabled proxies continue |
-| Service enabled, background installation declined | One VS Code host, shared over the service socket | Same service home | Stops; another open window can take over |
-| Service connection disabled | The extension, using the same service engine through an in-process client | Same service home | Stops with that window |
+| Editor-owned runtime | One VS Code host, shared over the service socket | Same service home | Stops; another open window can take over |
 
-The last mode computes readings, weights and decisions in the plugin process. It shares the implementation,
-schema, account locks and file formats with the service. Disabling the connection does not uninstall an existing
-background service; stop that process before using an exclusively local deployment. Normal multiwindow use should
-keep the service connection enabled so all windows share one scheduler.
+Both deployments acquire the same runtime ownership lease per canonical service home before initializing the engine. Linux uses an abstract Unix socket and Windows a named pipe; other platforms bind one deterministic loopback TCP port derived from the OS user and canonical service home. The OS releases each lease on process exit. A TCP port collision fails closed; the service never tries another port. Every editor, CLI and
+MCP client uses the authenticated socket and the same request contract. An editor connects to an existing owner
+before attempting to host one. Turning `aiUsage.accountService.enabled` off selects editor-owned hosting; it does
+not create an independent engine or stop an existing background owner. Background installation remains optional.
+A disconnected client shows unavailable or stale state until it reconnects.
 
 Both service modes use `~/.ai-usage/profiles.json` (mode 0600) and project profile files. Existing VS Code profiles
 are migrated into the service on connection when they are new, restore a missing login, or match an existing
 entry. A source entry is removed only after the target contains it. Conflicting legacy entries are retained for
 explicit resolution through profile import/transfer; they are not used for service automation.
 
+## Automatic sources and reset approval
+
+Claude and Codex default to `source: auto` and `checkIntervalMinutes: 30`; saved explicit modes and intervals
+remain authoritative. The engine tries fresh identity-keyed cache, local file, direct API and CLI in order, stopping
+at the first usable reading. It retains source timestamps, rejects future/stale readings and expired quota windows,
+and shares endpoint budgets and backoff. Codex session logs remain unattributable to saved accounts. Auto does
+not fetch reset-credit metadata separately after a cheaper source succeeds. Usage source polling sends no model
+prompt; separately enabled keep-alives and rotation checks retain their existing model actions and schedules.
+
+`codex.autoReset.confirmationRequired` is opt-in and false by default. The engine's existing reset policy creates a
+read-only pending decision; the editor renders engine facts and claims the dialog through the shared socket. Only
+one client claims a decision. Approval is single use and revalidates account identity, credentials, settings, quotas,
+credits and policy under the account lock before provider redemption. Cancellation, claim-owner disconnect,
+five-minute expiry, stale facts and shutdown prevent spend. A runtime with no approving editor leaves the credit
+untouched. The same policy handles preview and execution; the UI implements no redemption rules.
+
 ## Settings and standalone CLI
 
-Every setting in VS Code's `aiUsage.*` catalog is accepted by `ai-usage config` with the prefix removed. The build
-generates the service catalog from the extension manifest, and tests check every default and key. This includes
-usage sources, polling intervals, proxy/bridge settings, native CLI configuration, diagnostics and presentation
-preferences. Presentation preferences are stored for clients; they do not create a GUI in a headless service.
-Connection/background preferences govern VS Code integration; setting them does not install or stop an OS service.
-Use `ai-usage service …` for deployment lifecycle.
+The build generates a shared setting catalog from the extension manifest. Engine settings such as usage sources,
+polling intervals, proxy/bridge settings, native CLI configuration and automation are persisted in `config.json`.
+Presentation and editor connection preferences remain local to each editor. The CLI catalog retains presentation
+fields for compatibility, but editors neither push nor hydrate those values. Use `ai-usage service …` for deployment lifecycle.
 
-On every VS Code connection, its effective settings are applied to the service. Later editor changes are pushed;
-CLI configuration changes are sent back to connected editors. With multiple windows, the most recent configuration
-write wins; use consistent host settings. Reconnecting an editor reapplies that editor's effective values.
-Without VS Code, the service uses its persisted `config.json` and accepts CLI changes independently.
+The runtime's persisted engine configuration is authoritative. A connecting or reconnecting editor reads it rather
+than replacing it with its effective settings. Explicit editor engine-setting changes use the last observed configuration
+revision; edits to keys changed since that revision are rejected so clients can reload before retrying.
+An explicit CLI write may update the requested key without a revision guard. CLI changes are announced to connected
+editors. Workspace folders and GitHub sign-in context belong to the requesting connection and are removed when it
+disconnects.
 
 ```sh
 ai-usage config                         # complete catalog, values and explanations
@@ -70,6 +86,23 @@ lock, so a native status check cannot refresh credentials concurrently with a sa
 source changes during a read discard its result. Codex session logs remain unattributable to saved accounts: a
 reported limit triggers a verified account check, rather than assigning that log to a profile.
 
+## Client contract and lifecycle
+
+The socket handshake authenticates the service token and negotiates a protocol version and required capabilities
+before accepting client context. Package versions and wire versions are separate. Incompatible clients receive an
+error instead of being treated as another deployment mode. `service.status`, `service.info` and `log.tail` expose
+the same owner and diagnostics in both deployments.
+
+Requests can carry a deadline and a cancellation signal. Disconnects and owner shutdown abort pending requests.
+Cancellation can stop queued work; once a mutation starts, a timeout or disconnect can leave its result unknown.
+Clients reload authoritative state before deciding what to do next rather than replaying the mutation automatically.
+
+An owner whose lease is held but whose service socket does not answer is unavailable; clients retry without replacing its
+socket or starting another engine. On shutdown, the host closes request admission, drains admitted work, waits for
+the managed bridge child to finish native-session cleanup and exit, tears down the service socket, then releases
+the lease. If cleanup cannot be confirmed, it keeps ownership and can retry disposal. After a crash, the OS releases
+the ownership endpoint, allowing another process to take over.
+
 ## Advanced rotation tooltip
 
 Enable `aiUsage.claude.advanced.rotationDiagnostics` or `aiUsage.codex.advanced.rotationDiagnostics` (both off by
@@ -86,8 +119,7 @@ rotation does not select the chat's model.
 
 Scores use the exact ranking functions used by rotation. A score alone never authorizes a switch: errors,
 thresholds, reset timing, minimum stay and fresh account verification still apply. Expired or missing readings are
-identified in the explanation. With the service enabled, it returns the diagnostics directly; with the connection
-disabled, the same engine computes them inside the extension. Opening a tooltip spends no provider calls.
+identified in the explanation. The runtime returns the same diagnostics in either deployment. Opening a tooltip spends no provider calls.
 See [rotation and earned resets](ROTATION.md) for the complete policy.
 
 ## Codex proxy ownership and ports
@@ -111,7 +143,6 @@ container namespaces require explicit deployment coordination; see the [Docker p
 `src/usageClient.ts` converts wire dates and formats the service's diagnostics. Small extension re-export modules
 preserve the shared helpers' existing imports without maintaining another implementation.
 
-Tests cover both socket and in-process clients, source changes and account switches during reads, concurrent
-clients, reset deadlines, backoff, Copilot context isolation, all four rotation strategies for both providers,
-manual check serialization, settings catalog parity, profile migration and proxy ownership/port changes/crash
-recovery. Provider and model calls in tests use fixtures rather than real subscription requests.
+The root `npm test` command covers extension, service and bridge tests. Runtime scenarios exercise background and
+editor-owned hosts through the socket contract, with fixture provider/model calls and temporary account homes.
+See [contributing](../CONTRIBUTING.md) for validation and isolation requirements.

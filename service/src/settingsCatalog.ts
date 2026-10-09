@@ -130,20 +130,21 @@ export const SETTINGS_CATALOG = [
     "key": "claude.source",
     "type": "enum",
     "values": [
+      "auto",
       "both",
       "cli",
       "api",
       "accountFile"
     ],
-    "default": "both",
-    "description": "Where Claude usage is read from. `both` prefers the file Claude Code caches on disk and calls the usage endpoint only when that reading goes stale; `cli` asks Claude Code for a fresh reading instead, which costs no model tokens but does reach the endpoint."
+    "default": "auto",
+    "description": "Where Claude usage is read from. `auto` chooses the cheapest fresh usable source and falls back to more costly available sources; explicit source modes remain available."
   },
   {
     "key": "claude.checkIntervalMinutes",
     "type": "number",
     "min": 0.25,
-    "default": 10,
-    "description": "How often (minutes) Anthropic's usage endpoint is called and the result stored in the shared cache, when `#aiUsage.claude.source#` is `api` or `both`. One call serves all open windows. With `both` it is also the age at which the account file's reading counts as stale and the endpoint is called instead. Fractional minutes down to 0.25 (15 seconds) are accepted; every call is still spaced by `#aiUsage.claude.api.minIntervalSeconds#` and by any limit the endpoint advertises. Anthropic's usage endpoint rate-limits aggressively; 5 or more is the safe range."
+    "default": 30,
+    "description": "How often (minutes) Claude usage is checked; defaults to 30 minutes. In `auto` this is also the maximum age of a usable cached or local reading. Existing explicit intervals are preserved. Claude accepts fractional minutes down to 0.25; endpoint calls still respect the shared API budget and backoff. The separate account-file interval in seconds applies only to `accountFile` and `both`."
   },
   {
     "key": "claude.accountFile.checkIntervalSeconds",
@@ -292,13 +293,14 @@ export const SETTINGS_CATALOG = [
     "key": "codex.source",
     "type": "enum",
     "values": [
+      "auto",
       "both",
       "cli",
       "api",
       "sessionLog"
     ],
-    "default": "both",
-    "description": "Where Codex usage is read from."
+    "default": "auto",
+    "description": "Where Codex usage is read from. `auto` chooses the cheapest fresh usable source and falls back to more costly available sources; explicit source modes remain available."
   },
   {
     "key": "codex.cliPath",
@@ -310,8 +312,8 @@ export const SETTINGS_CATALOG = [
     "key": "codex.checkIntervalMinutes",
     "type": "number",
     "min": 1,
-    "default": 5,
-    "description": "How often (minutes) the Codex source is called and the result stored in the shared cache. With `#aiUsage.codex.source#` set to `both` it is also the age at which a session-log record counts as stale and the usage endpoint is called instead."
+    "default": 30,
+    "description": "How often (minutes) Codex usage is checked; defaults to 30 minutes. In `auto` this is also the maximum age of a usable cached or local reading. Existing explicit intervals are preserved. With `both` this is also the maximum age of a session-log record before the usage endpoint fills the gap."
   },
   {
     "key": "codex.keepAlive.enabled",
@@ -330,6 +332,12 @@ export const SETTINGS_CATALOG = [
     "type": "boolean",
     "default": true,
     "description": "**Automatically use earned Codex rate-limit resets.** When Codex reports an available reset credit and the active saved account is at a quota limit, the account service can redeem one through Codex app-server. It waits for a natural reset within five minutes, considers other saved accounts and the rotation strategy, and avoids letting a reported credit expire unused. Only provider-reported credits are used; the setting can be turned off independently of account rotation."
+  },
+  {
+    "key": "codex.autoReset.confirmationRequired",
+    "type": "boolean",
+    "default": false,
+    "description": "Require confirmation before redeeming an earned Codex reset credit. The shared engine supplies and revalidates the proposed redemption; one connected editor may approve it. Without an approving editor, no credit is redeemed. Off preserves automatic redemption. This does not enable auto-reset by itself."
   },
   {
     "key": "codex.autoRotate.resetAware",
@@ -630,7 +638,7 @@ export const SETTINGS_CATALOG = [
     "key": "mcp.enabled",
     "type": "boolean",
     "default": false,
-    "description": "**Experimental.** Offer AI agents an MCP server whose tools list every saved Claude Code and Codex profile with its usage windows and, when `#aiUsage.mcp.switching#` allows, switch the active account. Agents of this VS Code window (Copilot agent mode and every other consumer of the editor's MCP servers) see it as **AI Usage accounts** as soon as this is on; the Claude and Codex Accounts menus register it with their CLIs (**Register the MCP server with the … CLI…**), and other command-line agents register `ai-usage mcp` themselves. Needs the account service. Mirrored to the service's `mcp.enabled` setting. See [MCP server for AI agents](https://github.com/p0l0us/ai-usage-vscode-plugin/blob/main/docs/MCP.md)."
+    "description": "**Experimental.** Offer AI agents an MCP server whose tools list every saved Claude Code and Codex profile with its usage windows and, when `#aiUsage.mcp.switching#` allows, switch the active account. Agents of this VS Code window (Copilot agent mode and every other consumer of the editor's MCP servers) see it as **AI Usage accounts** as soon as this is on; the Claude and Codex Accounts menus register it with their CLIs (**Register the MCP server with the … CLI…**), and other command-line agents register `ai-usage mcp` themselves. Connects to the shared engine running in the background or in VS Code; the bundled MCP adapter needs no service installation. Includes native unsaved-login usage and explicit freshness. Mirrored to the service's `mcp.enabled` setting. See [MCP server for AI agents](https://github.com/p0l0us/ai-usage-vscode-plugin/blob/main/docs/MCP.md)."
   },
   {
     "key": "mcp.switching",

@@ -1,9 +1,10 @@
-import { mcpCli, mcpLauncher, readMcpRegistration, registerMcpServer, unregisterMcpServer } from './mcpRegistration';
+import { mcpCli, mcpCommand, readMcpRegistration, registerMcpServer, unregisterMcpServer } from './mcpRegistration';
 import { findStaleCodexProcesses } from './codexProcesses';
 import { UsageMonitor, UsageContext, UsageStateView, nativeUsageIdentity, serializeUsageState } from './usageMonitor';
 import { ServiceRuntime } from './runtime';
 import { readCurrentSessionTokens } from './sessionTokens';
 import { EventEmitter } from 'events';
+import { AsyncLocalStorage } from 'async_hooks';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -12,10 +13,10 @@ import { AuthProvider, StoredCredential, parseCredentialJson, readNativeCredenti
 import { activateClaudeAccountMetadata, claudeAccountFileConfirms, CredentialIdentity } from './accountIdentity';
 import { AccountAutomation, AutomationProfiles, KeepAliveNowResult, LockWait } from './accountAutomation';
 import {
-  acquireAccountLock, explainAccountProblem, isolatedEnvironment, loginArgs, loginHome, probeAccount, readableProblem, stagedCredentialPath
+  resetCodexAccount, acquireAccountLock, explainAccountProblem, isolatedEnvironment, loginArgs, loginHome, probeAccount, readableProblem, stagedCredentialPath
 } from './accountProbe';
 import { deserializeUsage } from './cache';
-import { ServiceConfig, automationSettings, configFileOf, loadConfig, saveConfig, setConfigValue, strategySummary } from './configStore';
+import { ConfigAuthority, ConfigPatchResult, ConfigView, ServiceConfig, automationSettings, configFileOf, strategySummary } from './configStore';
 import { LiveUsage, LiveResult, ProviderId, newestValidUsage, refreshCodexNativeLogin, resolveCli, verifyCodexNativeAccount } from './live';
 import { ExportedProfile, ImportPlan, parseProfileExport, serializeProfileExport } from './profileTransfer';
 import { ActivationOutcome, PrivateProfileBackend, ProfileMetadata, ProfileStore, PROVIDERS, TITLES, importOutcome } from './profileStore';
@@ -24,6 +25,8 @@ import {
   SerializedUsage, SignInPreparation, SignInResult, Snapshot, UsageReadResult, serializeKeepAlive
 } from './protocol';
 import { profilesFile, stateDir } from './paths';
+import { RpcError } from './rpc';
+import type { BridgeWorkspaceContext } from './bridgeRuntime';
 import { HistoryExportKind, HistoryInfo, HistorySummaryResult } from './protocol';
 import { UsageHistory, eventsCsv, historyFileStart, readingsCsv, usageSnapshot } from './usageHistory';
 import { Thresholds, renderHistoryReport, summarizeHistory } from './usageHistoryReport';
@@ -41,11 +44,11 @@ export const KEEP_ALIVE_ALL_SPACING_MS = 3_000;
 
 export type AccountServiceOptions = {
   home: string;
-  initialConfig?: Record<string, unknown>;
   version: string;
   log: (message: string) => void;
   /** Injected by tests. */
   probe?: typeof probeAccount;
+  reset?: typeof resetCodexAccount;
   fetchUsage?: (provider: ProviderId, context: UsageContext, known?: LiveUsage) => Promise<LiveResult>;
   usageIdentity?: (provider: AuthProvider) => string;
   identityOf?: (provider: AuthProvider, credential: StoredCredential) => Promise<CredentialIdentity>;
@@ -54,17 +57,53 @@ export type AccountServiceOptions = {
   now?: () => number;
   /** Where the private profiles are kept; profiles.json in the home by default. */
   privateProfiles?: PrivateProfileBackend;
+  /** How long `dispose` waits for admitted requests and background work to finish; it rejects after that. */
+  drainTimeoutMs?: number;
+  /**
+   * The home's ownership lease (see runtimeLease). The host passes it; without it the engine can answer reads and
+   * be driven by tests, but `start` refuses to run the background work, so no second engine runs beside an owner.
+   */
+  ownership?: EngineOwnership;
+  /** First values for settings the persisted config.json does not have yet; never replaces existing settings. */
+  seedConfig?: Record<string, unknown>;
+  /** @deprecated Same seed-only meaning as `seedConfig`; kept for older callers. */
+  initialConfig?: Record<string, unknown>;
 };
+
+/** What the socket layer tells about a request: cancelled when the client gives up or disconnects, and its deadline. */
+export type RequestContext = { signal?: AbortSignal; deadlineAt?: number; requestId?: number };
+
+/** What the engine needs of its ownership lease. */
+export type EngineOwnership = { held(): boolean; assertHeld(): void };
+
+/** Facts the host adds to `service.info`: how it runs and which configuration revision is current. */
+export type HostIdentity = { mode: 'background' | 'embedded'; instanceId: string; protocol: number; capabilities: string[]; lease: 'os' | 'tcp' };
+
+/**
+ * One connection's workspace: the project folders whose profile files are listed, its GitHub sign-ins for Copilot,
+ * and session directories for the bridge. Each connection has its own; nothing is shared or merged across windows
+ * except the folder union the profile list needs.
+ */
+export type WorkspaceContext = {
+  folders: string[];
+  github?: UsageContext;
+  sessionDirectory?: Partial<Record<AuthProvider, string>>;
+};
+
+/** Methods that change nothing the owner keeps, so they may be answered without checking the lease. */
+const READ_ONLY_METHODS = new Set(['reset.confirmations', 'service.info', 'snapshot', 'profiles.list', 'config.get', 'config.read', 'rotation.diagnostics', 'history.info',
+  'history.summary', 'history.export', 'profiles.export', 'profiles.planImport', 'runtime.status', 'mcp.registration', 'runtime.staleCodex',
+  'usage.sessionTokens', 'automation.cancel']);
 
 function providerParam(params: Record<string, unknown>): AuthProvider {
   const provider = params.provider;
-  if (provider !== 'claude' && provider !== 'codex') { throw new Error('Choose a service: claude or codex.'); }
+  if (provider !== 'claude' && provider !== 'codex') { throw new RpcError('Choose a service: claude or codex.', 'invalid_params'); }
   return provider;
 }
 
 function stringParam(params: Record<string, unknown>, key: string): string {
   const value = params[key];
-  if (typeof value !== 'string' || !value) { throw new Error(`Missing ${key}.`); }
+  if (typeof value !== 'string' || !value) { throw new RpcError(`Missing ${key}.`, 'invalid_params'); }
   return value;
 }
 
@@ -91,33 +130,42 @@ export class AccountService {
   /** Readings, switches and rotation sweeps, appended to month files for later analysis (`history.*`). */
   readonly history: UsageHistory;
   readonly events = new EventEmitter();
-  config: ServiceConfig;
+  /** The persisted configuration and its revisions; only the lease owner writes it. */
+  readonly configAuthority: ConfigAuthority;
+  get config(): ServiceConfig { return this.configAuthority.config; }
+  /** Set by the host. */
+  hostIdentity?: HostIdentity;
   readonly startedAt = new Date();
   /** Set by the daemon: how many clients are connected right now. */
   clientCount: () => number = () => 0;
 
-  private readonly configFile: string;
-  private configStamp?: string;
   private readonly claudeBudget: ApiCallBudget;
   private readonly log: (message: string) => void;
   private readonly now: () => number;
   private timer?: NodeJS.Timeout;
   private disposed = false;
+  private disposing?: Promise<void>;
+  /** Requests and background work admitted and not finished yet; `dispose` waits for them before stopping the runtime. */
+  private readonly inflight = new Set<Promise<unknown>>();
+  /** The request a piece of work runs for, so queued operations can be refused once that request was cancelled. */
+  private readonly requestScope = new AsyncLocalStorage<{ method: string; signal?: AbortSignal }>();
   /** Set while a switched Claude login still has to be confirmed against the OAuth profile endpoint. */
   private claudeMetadataRetry?: { nextAttemptAt: number; attempts: number };
   /** The project folders each connected client declared; their union is what the store reads. */
   private readonly foldersByClient = new Map<number, string[]>();
+  /** Bridge session directories each connection chose for its workspace. */
+  private readonly sessionDirectories = new Map<number, Partial<Record<AuthProvider, string>>>();
   /** Checks requested by hand that may be cancelled, by the token the client chose. */
   private readonly cancels = new Map<string, AbortController>();
 
   constructor(private readonly options: AccountServiceOptions) {
     this.log = options.log;
     this.now = options.now ?? Date.now;
-    this.configFile = configFileOf(options.home);
-    this.config = loadConfig(this.configFile);
-    for (const [key, value] of Object.entries(options.initialConfig ?? {})) this.config = setConfigValue(this.config, key, value);
-    if (options.initialConfig && Object.keys(options.initialConfig).length) saveConfig(this.configFile, this.config);
-    this.configStamp = this.stampOfConfigFile();
+    this.configAuthority = new ConfigAuthority(configFileOf(options.home), { log: this.log,
+      seed: { ...(options.initialConfig ?? {}), ...(options.seedConfig ?? {}) },
+      // Only the owner persists; an engine without the lease keeps a seed in memory.
+      persist: Boolean(options.ownership?.held()),
+      assertWritable: () => options.ownership?.assertHeld() });
     this.store = new ProfileStore(profilesFile(options.home), this.log, options.identityOf, {
       projectFileName: () => this.config.projectProfiles.file,
       projectProfilesEnabled: () => this.config.projectProfiles.enabled,
@@ -144,7 +192,10 @@ export class AccountService {
     this.automation = new AccountAutomation(path.join(states, 'account-usage'), profiles, (provider) => automationSettings(this.config, provider),
       async () => { /* The switch itself already announced the activation. */ }, this.log,
       (provider, credential, settings, keepAlive, signal) => probe(provider, credential, settings, keepAlive, signal, provider === 'claude' ? this.claudeBudget : undefined),
-      this.now);
+      this.now, options.reset);
+    this.automation.resetContext = () => this.configAuthority.revision;
+    this.automation.onResetConfirmation = decision => this.emit({ event: 'resetConfirmation', decision });
+    this.automation.admit = () => this.admit();
     this.automation.onAccountProblem = (provider, id, reason, revoked) => {
       const profile = this.store.profile(provider, id);
       if (!profile) { return; }
@@ -179,15 +230,19 @@ export class AccountService {
       message => this.emit({ event: 'notice', level: 'warning', message }),
       () => [...new Set([...this.foldersByClient.values()].flat())],
       () => this.automation.withAccountLock('codex', () => refreshCodexNativeLogin(this.config.codex.cliPath), { waitMs: MANUAL_CHECK_WAIT_MS }));
+    this.runtime.ownership = options.ownership;
     this.history = new UsageHistory(this.historyDirectory(), this.historyOptions(), this.log, this.now);
     this.automation.history = this.history;
-    this.history.prune();
     this.log(`usage history: ${this.history.enabled ? this.history.location : 'off'}`);
   }
 
   /** Keep the active native login fresh even without a saved profile or a connected editor. */
-  private async pollUsage(): Promise<void> {
-    if (this.disposed) return;
+  private pollUsage(): Promise<void> {
+    if (this.disposed) return Promise.resolve();
+    return this.track(this.pollUsageNow());
+  }
+
+  private async pollUsageNow(): Promise<void> {
     const work: Promise<unknown>[] = PROVIDERS.map(provider => this.liveUsage(provider));
     for (const clientId of this.usageContexts.keys()) work.push(this.liveUsage('copilot', false, clientId));
     if (!this.usageContexts.size) work.push(this.liveUsage('copilot'));
@@ -292,23 +347,80 @@ export class AccountService {
   /** Starts the periodic work; `tick` runs at once and then every minute. */
   start(): void {
     if (this.timer) { return; }
-    this.timer = setInterval(() => void this.tick(), TICK_MS);
+    // Background work writes credentials, native settings and state: only the owner of the home may run it.
+    if (!this.options.ownership) { throw new Error('The account service engine needs the ownership of its home to start; start it through startServiceHost.'); }
+    this.options.ownership.assertHeld();
+    this.history.prune();
+    this.timer = setInterval(() => void this.tick().catch(() => undefined), TICK_MS);
     this.timer.unref?.();
-    this.runtime.start();
+    this.background(() => this.runtime.start());
     this.usageTimer = setInterval(() => void this.pollUsage(), 5_000);
     this.usageTimer.unref?.();
     void this.pollUsage();
     void this.tick();
   }
 
-  dispose(): void {
+  /**
+   * Stops admitting work, waits for every admitted request and background job to finish (queued ones are refused when
+   * they reach the front), then stops the proxy and the bridge. Resolves once all of that is over; rejects when it
+   * could not be proven within the drain timeout or the bridge did not exit, and may then be called again.
+   */
+  dispose(): Promise<void> {
+    if (this.disposing) { return this.disposing; }
     this.disposed = true;
     if (this.timer) { clearInterval(this.timer); this.timer = undefined; }
     this.automation.dispose();
     this.usageMonitor.dispose();
     if (this.usageTimer) clearInterval(this.usageTimer);
     this.usageContexts.clear();
-    this.runtime.dispose();
+    for (const controller of this.cancels.values()) { controller.abort(); }
+    const attempt = (async () => {
+      await this.drain(this.options.drainTimeoutMs ?? 30_000);
+      await this.runtime.dispose();
+    })();
+    this.disposing = attempt;
+    attempt.catch(() => { if (this.disposing === attempt) { this.disposing = undefined; } });
+    return attempt;
+  }
+
+  /** Waits until no admitted work is left, or throws after `timeoutMs`. */
+  private async drain(timeoutMs: number): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    while (this.inflight.size) {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) { throw new Error(`${this.inflight.size} operation(s) of the account service did not finish within ${Math.round(timeoutMs / 1000)} s`); }
+      let timer: NodeJS.Timeout | undefined;
+      await Promise.race([Promise.allSettled([...this.inflight]), new Promise((resolve) => { timer = setTimeout(resolve, remaining); })]);
+      clearTimeout(timer);
+    }
+  }
+
+  /**
+   * Starts work that belongs to the engine rather than to the request that triggered it: outside that request's scope
+   * (its cancellation does not stop a sweep), and tracked so `dispose` waits for it.
+   */
+  private background(work: () => Promise<unknown>): void {
+    if (this.disposed) { return; }
+    this.requestScope.exit(() => { void this.track(work()).catch((error: unknown) => this.log(`background: ${error instanceof Error ? error.message : String(error)}`)); });
+  }
+
+  /** Counts `work` as admitted until it settles. */
+  private track<T>(work: Promise<T>): Promise<T> {
+    this.inflight.add(work);
+    const done = () => { this.inflight.delete(work); };
+    work.then(done, done);
+    return work;
+  }
+
+  /**
+   * Whether queued work may still run: not when the engine is stopping, when the request it runs for was cancelled,
+   * or (for a change) when this engine no longer owns its home.
+   */
+  private admit(): void {
+    if (this.disposed) { throw new RpcError('the account service is stopping', 'closed'); }
+    const scope = this.requestScope.getStore();
+    if (scope?.signal?.aborted) { throw new RpcError(`${scope.method} was cancelled`, 'cancelled'); }
+    if (this.options.ownership && (!scope || !READ_ONLY_METHODS.has(scope.method))) { this.options.ownership.assertHeld(); }
   }
 
   emit(event: ServiceEvent): void {
@@ -327,8 +439,42 @@ export class AccountService {
   }
 
   forgetFolders(clientId: number): void {
+    this.automation.forgetResetClient(clientId);
     this.usageContexts.delete(clientId);
+    this.sessionDirectories.delete(clientId);
     if (this.foldersByClient.delete(clientId)) { this.applyFolders(); }
+  }
+
+  /** The workspace a connection declared, or undefined for none (the command line, background work). */
+  workspaceContext(clientId: number | undefined): WorkspaceContext | undefined {
+    if (clientId === undefined) { return undefined; }
+    const folders = this.foldersByClient.get(clientId);
+    const github = this.usageContexts.get(clientId);
+    const sessionDirectory = this.sessionDirectories.get(clientId);
+    if (!folders && !github && !sessionDirectory) { return undefined; }
+    return { folders: [...(folders ?? [])], ...(github ? { github } : {}), ...(sessionDirectory ? { sessionDirectory: { ...sessionDirectory } } : {}) };
+  }
+
+  /** `workspace.context`: replaces the parts given; the rest of the connection's context stays. */
+  private setWorkspaceContext(clientId: number, params: Record<string, unknown>): WorkspaceContext {
+    if (Array.isArray(params.folders)) { this.declareFolders(clientId, params.folders.filter((folder): folder is string => typeof folder === 'string').slice(0, 100)); }
+    if (params.github !== undefined) { this.usageContexts.set(clientId, githubContext(objectParams(params.github))); }
+    if (params.sessionDirectory !== undefined) {
+      const raw = objectParams(params.sessionDirectory);
+      const directories: Partial<Record<AuthProvider, string>> = {};
+      for (const provider of PROVIDERS) {
+        const value = raw[provider];
+        if (typeof value === 'string' && value.trim()) { directories[provider] = value; }
+      }
+      if (Object.keys(directories).length) { this.sessionDirectories.set(clientId, directories); } else { this.sessionDirectories.delete(clientId); }
+    }
+    return this.workspaceContext(clientId) ?? { folders: [] };
+  }
+
+  /** The bridge context of a request: the calling connection's workspace, or none for background work. */
+  private bridgeContext(clientId: number | undefined): BridgeWorkspaceContext | undefined {
+    const context = this.workspaceContext(clientId);
+    return context ? { folders: context.folders, ...(context.sessionDirectory ? { sessionDirectory: context.sessionDirectory } : {}) } : undefined;
   }
 
   private applyFolders(): void {
@@ -342,9 +488,14 @@ export class AccountService {
   // --- checks requested by hand -------------------------------------------------------------------------------------
 
   /** The lock wait a request asked for; a request with a token can be cancelled through `automation.cancel`. */
-  private waitFor(provider: AuthProvider, params: Record<string, unknown>): LockWait & { token?: string } {
+  private waitFor(provider: AuthProvider, params: Record<string, unknown>, request?: RequestContext): LockWait & { token?: string } {
     const token = typeof params.token === 'string' && params.token ? params.token : undefined;
     const controller = new AbortController();
+    // Cancelling the request, or the connection closing, ends the wait like `automation.cancel` does.
+    if (request?.signal) {
+      if (request.signal.aborted) { controller.abort(); }
+      else { request.signal.addEventListener('abort', () => controller.abort(), { once: true }); }
+    }
     if (token) { this.cancels.get(token)?.abort(); this.cancels.set(token, controller); }
     const waitMs = typeof params.waitMs === 'number' && Number.isFinite(params.waitMs) ? Math.max(0, params.waitMs) : MANUAL_CHECK_WAIT_MS;
     return { token, waitMs, signal: controller.signal, onWait: () => this.emit({ event: 'waiting', provider, token }) };
@@ -388,8 +539,13 @@ export class AccountService {
   }
 
   /** One round of the periodic work: follow outside switches, sweep, retry the Claude identity sync. */
-  async tick(): Promise<void> {
-    if (this.disposed) { return; }
+  tick(): Promise<void> {
+    if (this.disposed) { return Promise.resolve(); }
+    if (this.options.ownership && !this.options.ownership.held()) { return Promise.resolve(); }
+    return this.track(this.tickNow());
+  }
+
+  private async tickNow(): Promise<void> {
     this.reloadConfigIfChanged();
     for (const provider of PROVIDERS) {
       try {
@@ -402,9 +558,10 @@ export class AccountService {
     await this.runtime.sync();
   }
 
-  info(): ServiceInfo {
+  info(): ServiceInfo & Partial<HostIdentity> & { configRevision: number } {
     return { version: this.options.version, pid: process.pid, startedAt: this.startedAt.toISOString(), home: this.options.home,
-      node: process.execPath, socket: '', clients: this.clientCount(), profileStore: this.store.privateBackend.kind };
+      node: process.execPath, socket: '', clients: this.clientCount(), profileStore: this.store.privateBackend.kind,
+      ...(this.hostIdentity ?? {}), configRevision: this.configAuthority.revision };
   }
 
   async snapshot(): Promise<Snapshot> {
@@ -522,42 +679,41 @@ export class AccountService {
 
   // --- configuration ----------------------------------------------------------------------------------------
 
-  private stampOfConfigFile(): string | undefined {
-    try { const stat = fs.statSync(this.configFile); return `${stat.mtimeMs}:${stat.size}`; } catch { return undefined; }
-  }
-
-  /** A hand-edited config.json is picked up on the next tick. */
+  /** A hand-edited config.json is picked up on the next tick; an unreadable one keeps the current settings. */
   private reloadConfigIfChanged(): void {
-    const stamp = this.stampOfConfigFile();
-    if (stamp === this.configStamp) { return; }
-    this.configStamp = stamp;
-    const next = loadConfig(this.configFile);
-    if (JSON.stringify(next) === JSON.stringify(this.config)) { return; }
-    this.config = next;
-    this.log('config: reloaded config.json after it changed on disk');
-    this.applyHistoryConfig();
-    void this.runtime.sync();
-    this.emit({ event: 'configChanged', config: this.config });
+    const changed = this.configAuthority.reloadIfChanged();
+    if (!changed?.length) { return; }
+    this.log(`config: reloaded config.json after it changed on disk (${changed.join(', ')})`);
+    this.afterConfigChange(changed, 'file');
   }
 
-  /** Applies `values` (dotted keys such as `claude.autoRotate.enabled`) and saves; unchanged values emit nothing. */
-  setConfig(values: Record<string, unknown>): ServiceConfig {
-    let next = this.config;
-    for (const [key, value] of Object.entries(values)) { next = setConfigValue(next, key, value); }
-    if (JSON.stringify(next) === JSON.stringify(this.config)) { return this.config; }
-    saveConfig(this.configFile, next);
-    this.configStamp = this.stampOfConfigFile();
-    const changed = Object.keys(values).filter((key) => JSON.stringify(getValue(this.config, key)) !== JSON.stringify(getValue(next, key)));
-    this.config = next;
-    this.log(`config: changed ${changed.map((key) => `${key} = ${JSON.stringify(getValue(next, key))}`).join(', ')}`);
+  private afterConfigChange(changed: string[], source: string): void {
     if (changed.some((key) => key.startsWith('history.'))) { this.applyHistoryConfig(); }
-    this.emit({ event: 'configChanged', config: this.config });
-    void this.runtime.sync();
-    if (this.timer) void this.pollUsage();
+    this.emit({ event: 'configChanged', config: this.config, revision: this.configAuthority.revision, changed, source } as ServiceEvent);
+    this.background(() => this.runtime.sync());
+    if (this.timer) this.background(() => this.pollUsage());
     // A switch that was just turned on should act now, not in a minute.
-    void this.automation.tick();
-    return this.config;
+    if (this.timer) this.background(() => this.automation.tick());
   }
+
+  /**
+   * Applies `values` (dotted keys such as `claude.autoRotate.enabled`) and saves. With `baseRevision`, keys someone
+   * else changed after it are refused (`config-conflict`) and nothing is applied. Unchanged values emit nothing.
+   */
+  patchConfig(values: Record<string, unknown>, options: { baseRevision?: number; source?: string; refuseLocal?: boolean } = {}): ConfigPatchResult {
+    const result = this.configAuthority.patch(values, options);
+    if (!result.changed.length) { return result; }
+    this.log(`config: changed ${result.changed.map((key) => `${key} = ${JSON.stringify(getValue(result.config, key))}`).join(', ')}${options.source ? ` (${options.source})` : ''} → revision ${result.revision}`);
+    this.afterConfigChange(result.changed, options.source ?? 'client');
+    return result;
+  }
+
+  /** Unconditional change, as `ai-usage config` and older clients make it. */
+  setConfig(values: Record<string, unknown>): ServiceConfig {
+    return this.patchConfig(values, { source: 'set' }).config;
+  }
+
+  configView(): ConfigView { return this.configAuthority.view(); }
 
   // --- sign-in with the vendor CLI ------------------------------------------------------------------------------
 
@@ -633,37 +789,64 @@ export class AccountService {
 
   // --- the method dispatcher -----------------------------------------------------------------------------------
 
-  async handle(method: string, rawParams: unknown, clientId?: number): Promise<unknown> {
-    const params = objectParams(rawParams);
+  /**
+   * Runs one request. It is admitted only while the engine runs and owns its home (for a change) and the request is
+   * neither cancelled nor past its deadline; once admitted, `dispose` waits for it, and operations it queues behind a
+   * sweep or the account lock check again before they run.
+   */
+  handle(method: string, rawParams: unknown, clientId?: number, request?: RequestContext): Promise<unknown> {
+    if (request?.signal?.aborted) { return Promise.reject(new RpcError(`${method} was cancelled before it started`, 'cancelled')); }
+    if (request?.deadlineAt !== undefined && Date.now() > request.deadlineAt) { return Promise.reject(new RpcError(`${method} arrived after its deadline`, 'timeout')); }
+    if (this.disposed) { return Promise.reject(new RpcError('the account service is stopping', 'closed')); }
+    // Every change goes through the owner of the home; an engine that lost its lease only answers reads.
+    if (this.options.ownership && !READ_ONLY_METHODS.has(method)) {
+      try { this.options.ownership.assertHeld(); } catch (error) { return Promise.reject(error); }
+    }
+    return this.track(this.requestScope.run({ method, signal: request?.signal }, () => this.dispatch(method, objectParams(rawParams), clientId, request)));
+  }
+
+  private async dispatch(method: string, params: Record<string, unknown>, clientId: number | undefined, request: RequestContext | undefined): Promise<unknown> {
     const paused = <T>(operation: () => Promise<T>) => this.automation.withPaused(operation);
     switch (method) {
+      case 'reset.confirmations': return this.automation.resetConfirmations();
+      case 'reset.claim': {
+        if (clientId === undefined) throw new RpcError('Confirmation needs a connected client.', 'invalid_params');
+        return this.automation.claimReset(stringParam(params, 'id'), clientId);
+      }
+      case 'reset.resolve': {
+        if (typeof params.approve !== 'boolean') throw new RpcError('Choose approve or cancel.', 'invalid_params');
+        return this.automation.resolveReset(stringParam(params, 'id'), params.approve, clientId, { waitMs: MANUAL_CHECK_WAIT_MS, signal: request?.signal });
+      }
       case 'service.info': return this.info();
       case 'runtime.staleCodex': return findStaleCodexProcesses(Number(params.switchedAt), Number(params.parentPid));
       case 'mcp.registration': {
-        const provider = providerParam(params), launcher = mcpLauncher(this.options.home);
-        return { launcher, ...mcpCli(provider, this.config[provider].cliPath), registration: readMcpRegistration(provider, launcher) };
+        // The installed launcher, or the bundled adapter when nothing is installed; either only connects to the engine.
+        const provider = providerParam(params), command = mcpCommand(this.options.home);
+        return { launcher: command.command, command, ...mcpCli(provider, this.config[provider].cliPath), registration: readMcpRegistration(provider, command) };
       }
       case 'mcp.register':
       case 'mcp.unregister': {
         const provider = providerParam(params), resolved = mcpCli(provider, this.config[provider].cliPath);
         if (!resolved.cli) throw new Error(resolved.reason);
-        return method === 'mcp.register' ? registerMcpServer(provider, resolved.cli, mcpLauncher(this.options.home)) : unregisterMcpServer(provider, resolved.cli);
+        return method === 'mcp.register' ? registerMcpServer(provider, resolved.cli, mcpCommand(this.options.home)) : unregisterMcpServer(provider, resolved.cli);
       }
       case 'runtime.status': return { codexProxyActive: this.runtime.proxy.active };
-      case 'bridge.ensure': return this.runtime.bridge.ensure();
-      case 'bridge.connection': return this.runtime.bridge.connection();
-      case 'bridge.sync': await this.runtime.bridge.syncSettings(); return { ok: true };
+      // The calling connection's workspace goes with the request, never another window's or a union of them.
+      case 'bridge.ensure': return this.runtime.bridge.ensure(this.bridgeContext(clientId));
+      case 'bridge.connection': return this.runtime.bridge.connection(this.bridgeContext(clientId));
+      case 'bridge.sync': await this.runtime.bridge.syncSettings(this.bridgeContext(clientId)); return { ok: true };
+      case 'workspace.context': {
+        if (clientId === undefined) throw new Error('A workspace context needs a connected client.');
+        return this.setWorkspaceContext(clientId, params);
+      }
       case 'usage.context': {
         if (clientId === undefined) throw new Error('Usage context needs a connected client.');
-        const accounts = Array.isArray(params.accounts) ? params.accounts.filter((a): a is { login: string; token: string } =>
-          !!a && typeof a.login === 'string' && typeof a.token === 'string').slice(0, 20) : [];
-        const workspaceOwners = Array.isArray(params.workspaceOwners) ? params.workspaceOwners.filter((o): o is string => typeof o === 'string').slice(0, 100) : [];
-        this.usageContexts.set(clientId, { accounts, workspaceOwners });
+        this.usageContexts.set(clientId, githubContext(params));
         return { ok: true };
       }
       case 'usage.live': {
         const provider = params.provider;
-        if (provider !== 'claude' && provider !== 'codex' && provider !== 'copilot') throw new Error('Unknown usage provider.');
+        if (provider !== 'claude' && provider !== 'codex' && provider !== 'copilot') throw new RpcError('Unknown usage provider.', 'invalid_params');
         return this.liveUsage(provider, params.force === true, clientId);
       }
       case 'usage.sessionTokens': {
@@ -684,7 +867,7 @@ export class AccountService {
         const outcome = await paused(() => this.automation.withAccountLock(provider, () => this.activate(provider, profile.id, false), { waitMs: MANUAL_CHECK_WAIT_MS }));
         const result: ActivationResult = { profile: { id: outcome.profile.id, name: outcome.profile.name, email: outcome.profile.email },
           verification: outcome.verification, level: outcome.level, message: outcome.message, accountChanged: outcome.accountChanged };
-        void this.automation.tick();
+        this.background(() => this.automation.tick());
         return result;
       }
       case 'profiles.saveNative': {
@@ -695,14 +878,14 @@ export class AccountService {
           allowDuplicate: params.allowDuplicate === true,
           folder: typeof params.folder === 'string' && params.folder ? params.folder : undefined
         }));
-        if (outcome.status !== 'duplicate') { this.emit({ event: 'stateChanged', provider }); void this.automation.tick(); }
+        if (outcome.status !== 'duplicate') { this.emit({ event: 'stateChanged', provider }); this.background(() => this.automation.tick()); }
         return outcome as SaveNativeResult;
       }
       case 'profiles.importCredential': {
         const provider = providerParam(params);
         const outcome = await paused(() => this.store.importCredential(provider, stringParam(params, 'name'), params.credential, params.allowDuplicate === true,
           typeof params.folder === 'string' && params.folder ? params.folder : undefined));
-        if (outcome.status !== 'duplicate') { this.emit({ event: 'stateChanged', provider }); void this.automation.tick(); }
+        if (outcome.status !== 'duplicate') { this.emit({ event: 'stateChanged', provider }); this.background(() => this.automation.tick()); }
         return outcome as SaveNativeResult;
       }
       case 'profiles.rename': {
@@ -747,7 +930,7 @@ export class AccountService {
         if (!chosen.length) { return { imported: 0, counts: { new: 0, restore: 0, replace: 0, same: 0 }, summary: 'nothing to import' } satisfies ImportSummary; }
         const outcome = await paused(() => this.store.applyImport(chosen));
         for (const provider of PROVIDERS) { this.emit({ event: 'stateChanged', provider }); }
-        void this.automation.tick();
+        this.background(() => this.automation.tick());
         return outcome satisfies ImportSummary;
       }
       case 'profiles.signIn.prepare': return this.prepareSignIn(providerParam(params));
@@ -759,7 +942,7 @@ export class AccountService {
       case 'automation.keepAliveNow': {
         const provider = providerParam(params);
         const profile = this.resolveParam(provider, params);
-        const wait = this.waitFor(provider, params);
+        const wait = this.waitFor(provider, params, request);
         try {
           const result = await this.automation.sendKeepAliveNow(provider, profile.id, { callerReports: params.callerReports === true, wait });
           this.emit({ event: 'stateChanged', provider });
@@ -772,7 +955,7 @@ export class AccountService {
         const profiles = Array.isArray(params.ids)
           ? (params.ids as unknown[]).flatMap((id) => { const profile = saved.find((candidate) => candidate.id === id); return profile ? [profile] : []; })
           : saved;
-        const wait = this.waitFor(provider, params);
+        const wait = this.waitFor(provider, params, request);
         try {
           const result = await this.keepAliveAll(provider, profiles, wait);
           this.emit({ event: 'stateChanged', provider });
@@ -786,7 +969,7 @@ export class AccountService {
       }
       case 'automation.rotateNow': {
         const provider = providerParam(params);
-        const wait = this.waitFor(provider, params);
+        const wait = this.waitFor(provider, params, request);
         try {
           const outcome = await this.automation.rotateNow(provider, wait);
           this.emit({ event: 'stateChanged', provider });
@@ -811,8 +994,15 @@ export class AccountService {
         return this.historyExport(kind);
       }
       case 'config.get': return this.config;
+      case 'config.read': return this.configView();
       case 'config.set': return this.setConfig(objectParams(params.values));
-      default: throw new Error(`Unknown method ${method}.`);
+      case 'config.patch': {
+        const base = params.baseRevision;
+        if (base !== undefined && (typeof base !== 'number' || !Number.isInteger(base) || base < 0)) { throw new RpcError('baseRevision must be a revision number.', 'invalid_params'); }
+        return this.patchConfig(objectParams(params.values), { baseRevision: base as number | undefined, refuseLocal: true,
+          source: typeof params.source === 'string' && params.source ? params.source.slice(0, 80) : `client #${clientId ?? '?'}` });
+      }
+      default: throw new RpcError(`Unknown method ${method}.`, 'unknown_method');
     }
   }
 
@@ -828,6 +1018,14 @@ export class AccountService {
     if (!profile) { throw new Error(`No ${TITLES[provider]} profile matches "${reference}". Run "ai-usage list ${provider}" to see them.`); }
     return profile;
   }
+}
+
+/** GitHub sign-ins a connection supplies for Copilot, bounded. */
+function githubContext(params: Record<string, unknown>): UsageContext {
+  const accounts = Array.isArray(params.accounts) ? params.accounts.filter((a): a is { login: string; token: string } =>
+    !!a && typeof a.login === 'string' && typeof a.token === 'string').slice(0, 20) : [];
+  const workspaceOwners = Array.isArray(params.workspaceOwners) ? params.workspaceOwners.filter((o): o is string => typeof o === 'string').slice(0, 100) : [];
+  return { accounts, workspaceOwners };
 }
 
 function getValue(config: ServiceConfig, dotted: string): unknown {

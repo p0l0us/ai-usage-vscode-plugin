@@ -31,6 +31,8 @@ export type LiveUsage = {
   /** Extra tooltip lines. */
   details?: string[];
   fetchedAt: Date;
+  /** Engine provenance; session logs cannot be attributed to the active account. */
+  source?: 'accountFile' | 'sessionLog' | 'api' | 'cli';
 };
 
 export type LiveResult =
@@ -112,6 +114,49 @@ export async function fetchLocalThenApi(options: {
   }
   options.fallback.reserve(now);
   return options.api();
+}
+
+/** Auto accepts only a current, valid reading; its timestamp is never refreshed by selection. */
+export function isFreshUsage(usage: LiveUsage, provider: ProviderId, intervalMs: number, now = Date.now()): boolean {
+  const timestamp = usage.fetchedAt.getTime();
+  return usage.provider === provider && Number.isFinite(timestamp) && timestamp <= now && now - timestamp < intervalMs &&
+    usage.windows.length > 0 && usage.windows.every(window => Number.isFinite(window.usedPercent) &&
+      window.usedPercent >= 0 && window.usedPercent <= 100 && (!window.resetsAt ||
+        (Number.isFinite(window.resetsAt.getTime()) && window.resetsAt.getTime() > now)));
+}
+
+/** Local/cache first, then direct endpoint, then the CLI transport; no model prompts are sent. */
+export async function fetchAutoUsage(options: {
+  provider: 'claude' | 'codex'; known?: LiveUsage; intervalMs: number; now?: () => number;
+  local: () => Promise<LiveResult>; api: () => Promise<LiveResult>; cli: () => Promise<LiveResult>;
+  apiSpacing: CallSpacing; cliSpacing: CallSpacing; budget?: CallSpacing;
+}): Promise<LiveResult> {
+  const now = (options.now ?? Date.now)();
+  if (options.known && isFreshUsage(options.known, options.provider, options.intervalMs, now)) {
+    return { kind: 'ok', usage: options.known };
+  }
+  let last: LiveResult = { kind: 'unavailable', provider: options.provider, reason: 'No fresh usage source is available.' };
+  for (const source of ['local', 'api', 'cli'] as const) {
+    if (source !== 'local') {
+      const spacing = source === 'api' ? options.apiSpacing : options.cliSpacing;
+      if (spacing.nextAllowedAt(now) > now || (options.budget && options.budget.nextAllowedAt(now) > now)) continue;
+      if (options.budget && !options.budget.reserve(now)) continue;
+      if (!spacing.reserve(now)) continue;
+    }
+    try { last = await options[source](); }
+    catch (error) { last = { kind: 'error', provider: options.provider, title: options.provider,
+      message: error instanceof Error ? error.message : String(error), transient: true }; }
+    if (last.kind === 'ok') {
+      if (isFreshUsage(last.usage, options.provider, options.intervalMs, (options.now ?? Date.now)())) {
+        return { kind: 'ok', usage: { ...last.usage, source: source === 'local'
+          ? options.provider === 'claude' ? 'accountFile' : 'sessionLog' : source } };
+      }
+      last = { kind: 'unavailable', provider: options.provider, reason: 'The usage source returned a stale or invalid reading.' };
+    }
+    // Another transport must not bypass an endpoint's explicit retry instruction.
+    if (source !== 'local' && last.kind === 'error' && (last.status === 429 || last.retryAfterMs !== undefined)) return last;
+  }
+  return last;
 }
 
 export function parseRetryAfterHeader(value: string | null, now = Date.now()): number | undefined {

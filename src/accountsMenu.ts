@@ -10,6 +10,7 @@ import { MCP_SERVER_NAME, McpRegistration } from './mcpRegistration';
 import { pickWithBack } from './quickPick';
 import { ServiceManager } from './serviceManager';
 import { openAiUsageSettings } from './settingsLink';
+import { formatUsagePercent } from './usageFormatting';
 
 /**
  * The Accounts menus of both services, as before, but every action goes to the account service. The service
@@ -96,7 +97,7 @@ export function usageDetail(profile: ProfileView, displayedUsage?: LiveUsage): s
     const now = new Date();
     parts.push(usage.windows.map((window) => {
       const reset = formatResetRemaining(window.resetsAt, now);
-      return `${window.label}: ${window.usedPercent}%${reset ? ` (${reset})` : ''}`;
+      return `${window.label}: ${formatUsagePercent(window.usedPercent)}${reset ? ` (${reset})` : ''}`;
     }).join(' · '));
     if (usage.provider === 'codex') {
       const credits = usage.resetCredits ?? stored?.resetCredits;

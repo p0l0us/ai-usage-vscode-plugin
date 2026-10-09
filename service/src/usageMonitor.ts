@@ -6,7 +6,7 @@ import { SharedCache, deserializeUsage } from './cache';
 import { ServiceConfig, UsageSource } from './configStore';
 import { GitHubAccount, LiveResult, LiveUsage, ProviderId, fetchClaudeUsage, fetchClaudeUsageCli,
   fetchClaudeUsageFromAccountFile, fetchCodexUsage, fetchCodexUsageCli, fetchCodexResetCreditsCli,
-  fetchCodexUsageFromSessionLog, fetchCopilotUsage, fetchLocalThenApi, newestValidUsage } from './live';
+  fetchCodexUsageFromSessionLog, fetchCopilotUsage, fetchLocalThenApi, fetchAutoUsage, isFreshUsage, newestValidUsage } from './live';
 import { SerializedUsage } from './protocol';
 
 export type UsageContext = { accounts?: GitHubAccount[]; workspaceOwners?: string[] };
@@ -42,6 +42,7 @@ export class UsageMonitor {
   private readonly states = new Map<string, UsageState>();
   private readonly nextCheck = new Map<string, number>();
   private readonly fallbacks: Record<AuthProvider, ApiCallBudget>;
+  private readonly cliFallbacks: Record<AuthProvider, ApiCallBudget>;
   private disposed = false;
   constructor(private readonly options: {
     directory: string; config: () => ServiceConfig; budget: ApiCallBudget; log: (message: string) => void;
@@ -54,7 +55,10 @@ export class UsageMonitor {
   }) {
     this.cache = new SharedCache(path.join(options.directory, 'live-usage.json'));
     this.fallbacks = Object.fromEntries((['claude', 'codex'] as const).map(provider => [provider,
-      new ApiCallBudget(path.join(options.directory, `${provider}-fallback-budget.json`), () => usageSettings(options.config(), provider).apiCheckIntervalMs)
+      new ApiCallBudget(path.join(options.directory, `${provider}-fallback-budget.json`), () => usageSettings(options.config(), provider).apiCheckIntervalMs, options.now)
+    ])) as Record<AuthProvider, ApiCallBudget>;
+    this.cliFallbacks = Object.fromEntries((['claude', 'codex'] as const).map(provider => [provider,
+      new ApiCallBudget(path.join(options.directory, `${provider}-cli-fallback-budget.json`), () => usageSettings(options.config(), provider).apiCheckIntervalMs, options.now)
     ])) as Record<AuthProvider, ApiCallBudget>;
   }
   dispose(): void { this.disposed = true; }
@@ -75,10 +79,13 @@ export class UsageMonitor {
     const entry = this.cache.read(key);
     const lastGood = newestValidUsage(this.states.get(key)?.lastGood, deserializeUsage(entry), now);
     const previous = this.states.get(key);
-    const current = previous ? { ...previous, lastGood, result: previous.result.kind === 'ok' && !lastGood ? unavailable.result : previous.result } :
+    let current = previous ? { ...previous, lastGood, result: previous.result.kind === 'ok' && !lastGood ? unavailable.result : previous.result } :
       { ...unavailable, ...(lastGood ? { result: { kind: 'ok' as const, usage: lastGood }, lastGood } : {}) };
-    if (!force && (this.nextCheck.get(key) ?? (lastGood ? lastGood.fetchedAt.getTime() + settings.checkIntervalMs : 0)) > now) return current;
-    if (entry?.nextAllowedAt && entry.nextAllowedAt > now) return { ...current, result: { kind: 'error', provider, title: provider,
+    const staleAuto = settings.source === 'auto' && current.result.kind === 'ok' &&
+      !isFreshUsage(current.result.usage, provider, settings.apiCheckIntervalMs, now);
+    if (staleAuto) current = { ...current, result: unavailable.result };
+    if (!force && !staleAuto && (this.nextCheck.get(key) ?? (lastGood ? lastGood.fetchedAt.getTime() + settings.checkIntervalMs : 0)) > now) return current;
+    if (settings.source !== 'auto' && entry?.nextAllowedAt && entry.nextAllowedAt > now) return { ...current, result: { kind: 'error', provider, title: provider,
       message: `${entry.lastError ?? 'Usage check failed'} — retrying after ${new Date(entry.nextAllowedAt).toISOString()}`, transient: true } };
     const task = (async (): Promise<UsageState> => {
       if (!this.cache.tryLock(key, now)) return current;
@@ -91,6 +98,9 @@ export class UsageMonitor {
         const value = await (this.options.runFetch ? this.options.runFetch(provider, collect) : collect());
         if (!value) { this.cache.release(key); return current; }
         result = value;
+        if (settings.source === 'auto' && result.kind === 'ok' && !isFreshUsage(result.usage, provider, settings.apiCheckIntervalMs, (this.options.now ?? Date.now)())) {
+          result = { kind: 'unavailable', provider, reason: 'No fresh valid usage reading is available.' };
+        }
       }
       catch (error) { result = { kind: 'error', provider, title: provider, message: error instanceof Error ? error.message : String(error), transient: true }; }
       this.nextCheck.set(key, now + settings.checkIntervalMs);
@@ -100,10 +110,13 @@ export class UsageMonitor {
       }
       if (result.kind === 'ok') {
         this.cache.recordSuccess(key, result.usage);
+        if (settings.source === 'auto') this.nextCheck.set(key, Math.min(
+          (this.options.now ?? Date.now)() + settings.checkIntervalMs, result.usage.fetchedAt.getTime() + settings.apiCheckIntervalMs));
         const reset = result.usage.windows.map(w => w.resetsAt?.getTime()).filter((time): time is number => time !== undefined && time > now).sort((a,b) => a-b)[0];
-        if (reset) this.nextCheck.set(key, Math.min(now + settings.checkIntervalMs, reset + 1000));
+        if (reset) this.nextCheck.set(key, Math.min(this.nextCheck.get(key) ?? now + settings.checkIntervalMs, reset + 1000));
         if (provider !== 'copilot') await this.options.observe?.(provider, result.usage,
-          !(provider === 'codex' && ['both', 'sessionLog'].includes(settings.source)), identity);
+          !(provider === 'codex' && (['both', 'sessionLog'].includes(settings.source) ||
+            (settings.source === 'auto' && (!result.usage.source || result.usage.source === 'sessionLog')))), identity);
       } else if (result.kind === 'error') {
         if (result.transient && !['both', 'accountFile'].includes(settings.source)) this.cache.recordBackoff(key, result.message, result.retryAfterMs, now);
         else this.cache.recordFailure(key, result.message);
@@ -121,6 +134,21 @@ export class UsageMonitor {
     const { source, apiCheckIntervalMs } = usageSettings(config, provider);
     if (provider === 'copilot') return fetchCopilotUsage(async () => context.accounts ?? [], {
       workspaceOwners: context.workspaceOwners ?? [], preferredLogin: config.copilot.account || undefined, log: this.options.log });
+    if (source === 'auto') {
+      const result = await fetchAutoUsage({ provider, known, intervalMs: apiCheckIntervalMs, now: this.options.now,
+        local: () => provider === 'claude' ? fetchClaudeUsageFromAccountFile() : fetchCodexUsageFromSessionLog(),
+        api: () => provider === 'claude' ? fetchClaudeUsage(undefined, this.options.budget) : fetchCodexUsage(),
+        cli: () => provider === 'claude' ? fetchClaudeUsageCli(config.claude.cliPath) : fetchCodexUsageCli(config.codex.cliPath),
+        apiSpacing: this.fallbacks[provider], cliSpacing: this.cliFallbacks[provider],
+        budget: provider === 'claude' ? this.options.budget : undefined });
+      if (result.kind === 'error' && result.transient) {
+        const retryAfterMs = result.retryAfterMs ?? Math.max(60_000, apiCheckIntervalMs);
+        this.fallbacks[provider].observe({ retryAfterMs }, (this.options.now ?? Date.now)());
+        this.cliFallbacks[provider].observe({ retryAfterMs }, (this.options.now ?? Date.now)());
+        if (provider === 'claude') this.options.budget.observe({ retryAfterMs }, (this.options.now ?? Date.now)());
+      }
+      return result;
+    }
     if (provider === 'claude') {
       if (source === 'accountFile') return fetchClaudeUsageFromAccountFile();
       if (source === 'cli') return fetchClaudeUsageCli(config.claude.cliPath);

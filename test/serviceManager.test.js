@@ -77,8 +77,8 @@ test('without the background service one window hosts the service, the others us
   for (const key of ['claude.enabled', 'codex.enabled', 'copilot.enabled', 'codex.autoReset.enabled', 'bridge.autoStart']) settings.set(`aiUsage.${key}`, false);
   settings.set('aiUsage.accountService.background', false);
   const managers = [];
-  t.after(() => {
-    for (const manager of managers) { manager.dispose(); }
+  t.after(async () => {
+    for (const manager of managers) { await manager.stop(); }
     if (previous === undefined) delete process.env.AI_USAGE_HOME; else process.env.AI_USAGE_HOME = previous;
     fs.rmSync(root, { recursive: true, force: true });
   });
@@ -120,8 +120,8 @@ test('declining the background service offers it once and still gives the window
   for (const key of ['claude.enabled', 'codex.enabled', 'copilot.enabled', 'codex.autoReset.enabled', 'bridge.autoStart']) settings.set(`aiUsage.${key}`, false);
   informationMessages.length = 0;
   const manager = new ServiceManager(windowContext(path.join(root, 'window')), () => {});
-  t.after(() => {
-    manager.dispose();
+  t.after(async () => {
+    await manager.stop();
     if (previous === undefined) delete process.env.AI_USAGE_HOME; else process.env.AI_USAGE_HOME = previous;
     fs.rmSync(root, { recursive: true, force: true });
   });
@@ -139,8 +139,8 @@ test('the Account service menu ends with Back, to the AI Usage menu or to the me
   settings.clear();
   for (const key of ['claude.enabled', 'codex.enabled', 'copilot.enabled', 'codex.autoReset.enabled', 'bridge.autoStart']) settings.set(`aiUsage.${key}`, false);
   const manager = new ServiceManager(windowContext(path.join(root, 'window')), () => {});
-  t.after(() => {
-    manager.dispose();
+  t.after(async () => {
+    await manager.stop();
     if (previous === undefined) delete process.env.AI_USAGE_HOME; else process.env.AI_USAGE_HOME = previous;
     fs.rmSync(root, { recursive: true, force: true });
   });
@@ -165,30 +165,81 @@ test('the Account service menu ends with Back, to the AI Usage menu or to the me
   assert.equal(returnedWhileOpen, true);
 });
 
-test('VS Code settings override persisted service values on connection, then CLI edits propagate back', async t => {
+test('explicit first-run engine settings seed once, persisted values win on reconnect and presentation stays local', async t => {
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'ai-usage-config-ui-'));
   const previous=process.env.AI_USAGE_HOME;process.env.AI_USAGE_HOME=path.join(root,'home');
   settings.clear();for(const key of ['claude.enabled','codex.enabled','copilot.enabled','codex.autoReset.enabled','bridge.autoStart','accountService.background'])settings.set(`aiUsage.${key}`,false);
   settings.set('aiUsage.codex.source','cli');settings.set('aiUsage.codex.advanced.rotationDiagnostics',true);
   const manager=new ServiceManager(windowContext(path.join(root,'window')),()=>{});
-  t.after(()=>{manager.dispose();if(previous===undefined)delete process.env.AI_USAGE_HOME;else process.env.AI_USAGE_HOME=previous;fs.rmSync(root,{recursive:true,force:true});});
+  t.after(async()=>{await manager.stop();if(previous===undefined)delete process.env.AI_USAGE_HOME;else process.env.AI_USAGE_HOME=previous;fs.rmSync(root,{recursive:true,force:true});});
   const client=await manager.ensure();assert.equal((await client.getConfig()).codex.source,'cli');
-  assert.equal((await client.getConfig()).codex.advanced.rotationDiagnostics,true);
+  assert.equal((await client.getConfig()).codex.advanced.rotationDiagnostics,false);assert.equal(settings.get('aiUsage.codex.advanced.rotationDiagnostics'),true);
   assert.equal(JSON.parse(fs.readFileSync(path.join(root,'home','config.json'),'utf8')).codex.source,'cli','initial editor settings persist for standalone restarts');
   await client.setConfig({'codex.source':'sessionLog'});
   await until(()=>settings.get('aiUsage.codex.source')==='sessionLog');
+  settings.set('aiUsage.codex.source','cli');
+  const before=await client.getConfigState();
+  client.close();
+  const reconnected=await manager.ensure();
+  assert.equal((await reconnected.getConfig()).codex.source,'sessionLog');
+  assert.equal((await reconnected.getConfigState()).revision,before.revision,'reconnect does not mutate engine config');
+  assert.equal(settings.get('aiUsage.codex.source'),'sessionLog');
 });
 
-test('disabling the service connection uses the shared engine locally with the same persisted profiles and settings', async t => {
+test('disabling background integration still uses one authenticated socket engine across windows', async t => {
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'ai-usage-local-ui-'));
   const previous=process.env.AI_USAGE_HOME;process.env.AI_USAGE_HOME=path.join(root,'home');
   settings.clear();for(const key of ['claude.enabled','codex.enabled','copilot.enabled','codex.autoReset.enabled','bridge.autoStart','accountService.enabled'])settings.set(`aiUsage.${key}`,false);
   settings.set('aiUsage.codex.autoRotate.strategy','leastWaste');
   const manager=new ServiceManager(windowContext(path.join(root,'window')),()=>{});
-  t.after(()=>{manager.dispose();if(previous===undefined)delete process.env.AI_USAGE_HOME;else process.env.AI_USAGE_HOME=previous;fs.rmSync(root,{recursive:true,force:true});});
-  const client=await manager.ensure();assert.ok(client);assert.equal(manager.hosting,false);
-  assert.equal(client.info.profileStore,'service');assert.match(manager.summary(),/inside VS Code/);
+  t.after(async()=>{await manager.stop();if(previous===undefined)delete process.env.AI_USAGE_HOME;else process.env.AI_USAGE_HOME=previous;fs.rmSync(root,{recursive:true,force:true});});
+  const client=await manager.ensure();assert.ok(client);assert.equal(manager.hosting,true);
+  assert.equal(client.info.profileStore,'service');assert.match(manager.summary(),/inside this VS Code window/);
   assert.equal((await client.call('rotation.diagnostics',{provider:'codex'})).strategy,'leastWaste');
   assert.equal((await client.getConfig()).codex.autoRotate.strategy,'leastWaste');
-  assert.equal(fs.existsSync(path.join(root,'home','service.sock')),false,'local mode serves no service socket');
+  assert.equal(fs.existsSync(path.join(root,'home','service.sock')),true,'embedded engine serves the shared socket');
+  const second=new ServiceManager(windowContext(path.join(root,'second')),()=>{});
+  try {
+    const peer=await second.ensure();assert.ok(peer);assert.equal(second.hosting,false);
+    assert.equal(peer.info.pid,client.info.pid);
+    await manager.stop();await until(()=>second.hosting&&second.connected);
+    assert.equal((await second.connected.getConfig()).codex.autoRotate.strategy,'leastWaste');
+  } finally { await second.stop(); }
+});
+
+
+test('a queued editor edit keeps its original revision and cannot overwrite a competing same-key change', async t => {
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'ai-usage-revision-ui-'));
+  const previous=process.env.AI_USAGE_HOME;process.env.AI_USAGE_HOME=path.join(root,'home');
+  const { defaultConfig }=require('../service/out');
+  const persisted=defaultConfig();
+  const manager=new ServiceManager(windowContext(path.join(root,'window')),()=>{});
+  t.after(async()=>{await manager.stop();if(previous===undefined)delete process.env.AI_USAGE_HOME;else process.env.AI_USAGE_HOME=previous;fs.rmSync(root,{recursive:true,force:true});});
+  const calls=[];
+  const client={connected:true,close(){this.connected=false;},async getConfigState(){return {config:persisted,revision:8};},
+    async patchConfig(values,baseRevision){calls.push({values,baseRevision});assert.equal(baseRevision,7);throw new Error('config-conflict');}};
+  manager.client=client;manager.config=persisted;manager.configRevision=7;
+  settings.clear();settings.set('aiUsage.claude.autoRotate.enabled',true);
+  let release;manager.settingsQueue=new Promise(resolve=>{release=resolve;});
+  const edited=manager.pushSettings({affectsConfiguration:key=>key==='aiUsage.claude.autoRotate.enabled'});
+  manager.configRevision=8; // A competing configChanged arrives while the edit is queued.
+  release();await edited;
+  assert.deepEqual(calls,[{values:{'claude.autoRotate.enabled':true},baseRevision:7}]);
+  assert.equal(persisted.claude.autoRotate.enabled,false);
+  assert.equal(settings.get('aiUsage.claude.autoRotate.enabled'),false,'conflict reads and hydrates the winning value');
+});
+
+
+test('closing a window during initial connection cannot leave an embedded host or client', async t => {
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'ai-usage-dispose-ui-'));
+  const previous=process.env.AI_USAGE_HOME;process.env.AI_USAGE_HOME=path.join(root,'home');
+  settings.clear();settings.set('aiUsage.accountService.background',false);
+  const manager=new ServiceManager(windowContext(path.join(root,'window')),()=>{});
+  t.after(async()=>{await manager.stop();if(previous===undefined)delete process.env.AI_USAGE_HOME;else process.env.AI_USAGE_HOME=previous;fs.rmSync(root,{recursive:true,force:true});});
+  const connecting=manager.ensure();
+  await manager.stop();
+  assert.equal(await connecting,undefined);
+  assert.equal(manager.connected,undefined);
+  assert.equal(manager.hosting,false);
+  assert.equal(fs.existsSync(path.join(root,'home','service.sock')),false);
 });

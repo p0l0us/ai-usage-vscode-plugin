@@ -30,16 +30,22 @@ export async function bridgeGet<T>(route: string, cancellation?: vscode.Cancella
   return bridgeRequest<T>(route, 'GET', undefined, cancellation);
 }
 
-export async function bridgeConnection(): Promise<{ endpoint: URL; token: string }> {
-  const connection = await bridgeServiceCall<{ endpoint: string; token: string }>('bridge.connection');
-  return { endpoint: new URL(connection.endpoint), token: connection.token };
+export async function bridgeConnection(): Promise<{ endpoint: URL; token: string; workspaceContext?: unknown }> {
+  const connection = await bridgeServiceCall<{ endpoint: string; token: string; workspaceContext?: unknown }>('bridge.connection');
+  const endpoint = new URL(connection.endpoint);
+  if (endpoint.protocol !== 'http:' || !['127.0.0.1', 'localhost', '[::1]'].includes(endpoint.hostname) || endpoint.username || endpoint.password) {
+    throw new Error('The CLI bridge URL must be a loopback HTTP address.');
+  }
+  return { endpoint, token: connection.token, workspaceContext: connection.workspaceContext };
 }
 
 async function bridgeRequest<T>(route: string, method: 'GET' | 'PUT', body?: unknown, cancellation?: vscode.CancellationToken): Promise<T> {
   const { endpoint, token } = await bridgeConnection();
   if (cancellation?.isCancellationRequested) throw new vscode.CancellationError();
+  const target = new URL(route, endpoint);
+  if (target.origin !== endpoint.origin) throw new Error('Bridge routes must stay on the local endpoint.');
   return new Promise<T>((resolve, reject) => {
-    const request = http.request(new URL(route, endpoint), { method, headers: { authorization: `Bearer ${token}`, ...(body === undefined ? {} : { 'content-type': 'application/json' }) } }, response => {
+    const request = http.request(target, { method, headers: { authorization: `Bearer ${token}`, ...(body === undefined ? {} : { 'content-type': 'application/json' }) } }, response => {
       let data = '';
       response.setEncoding('utf8');
       response.on('data', chunk => {

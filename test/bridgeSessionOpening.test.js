@@ -81,7 +81,7 @@ for (const provider of ['codex', 'claude']) {
     await integration.openSession(session.id, 'cli');
     assert.deepEqual(terminals[0], { name: `${provider} session`, shellPath: '/custom/cli executable', shellArgs: session.launch.cli.args, cwd: session.cwd });
     assert.equal(updates.at(-1)[provider].persistSessions, true);
-    assert.equal(updates.at(-1)[provider].sessionDirectory, session.cwd);
+    assert.equal(updates.at(-1)[provider].sessionDirectory, '', 'workspace cwd is request scoped, never global policy');
     assert.equal(updates.at(-1)[provider === 'codex' ? 'claude' : 'codex'].persistSessions, false);
     settings.set(`aiUsage.bridge.${provider}.openInExtension`, false);
     await assert.rejects(integration.openSession(session.id, 'extension'), /cannot be opened/);
@@ -106,11 +106,13 @@ test('explicit session directory overrides workspace defaults, with no arbitrary
   const { updates } = await setup(t, 'claude');
   settings.set('aiUsage.bridge.claude.sessionDirectory', '/explicit/saved-workspace');
   await integration.syncSessionSettings();
-  assert.equal(updates.at(-1).claude.sessionDirectory, '/explicit/saved-workspace');
+  assert.equal(updates.at(-1).claude.sessionDirectory, '');
+  assert.equal((await integration.bridgeConnection()).workspaceContext.directories.claude, '/explicit/saved-workspace');
   settings.delete('aiUsage.bridge.claude.sessionDirectory');
   vscode.workspace.workspaceFolders.push({ uri: { fsPath: '/second/workspace' } });
   await integration.syncSessionSettings();
   assert.equal(updates.at(-1).claude.sessionDirectory, '');
+  assert.equal((await integration.bridgeConnection()).workspaceContext.directories.claude, undefined);
 });
 
 test('chat header honors switches and identity, routes to this host, and renders before worker release without markers', async t => {

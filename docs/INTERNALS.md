@@ -2,10 +2,9 @@
 
 ## How live usage is read
 
-`service/src/usageMonitor.ts` owns these reads. It runs inside the background/embedded service when enabled, or
-inside the plugin through `ServiceClient.local` when the service connection is disabled. Both paths use the same
-engine. `src/usageClient.ts` only decodes the returned values and renders rotation diagnostics. See
-[SERVICE_ARCHITECTURE.md](SERVICE_ARCHITECTURE.md) for configuration precedence and deployment modes.
+`service/src/usageMonitor.ts` owns these reads in the shared runtime. Background and editor-owned deployments
+use the authenticated socket contract. `src/usageClient.ts` only decodes returned values and renders rotation
+diagnostics. See [SERVICE_ARCHITECTURE.md](SERVICE_ARCHITECTURE.md) for configuration authority and deployment modes.
 
 - **Claude Code**: reads the OAuth token from `~/.claude/.credentials.json` (or `$CLAUDE_CONFIG_DIR`) and calls
   Anthropic's `/api/oauth/usage` endpoint, the same data shown by `/usage` inside Claude Code. The `accountFile`
@@ -31,7 +30,17 @@ engine. `src/usageClient.ts` only decodes the returned values and renders rotati
 
 ## Multiple windows and rate limits
 
-All clients read the service's `state/live-usage.json` cache through `usage.live`. A five-second service timer
+All clients read the service's `state/live-usage.json` cache through `config.read` includes the configuration revision and per-key revisions; `config.patch` accepts a `baseRevision`
+and rejects keys changed after it. Legacy `config.set` remains an explicit unconditional write. Presentation fields
+remain catalog-compatible but do not hydrate editor UI. `workspace.context` stores folders, GitHub context and
+per-provider session directories for the connection. Bridge requests carry signed request-scoped workspace context;
+the bridge validates it before deriving its working directory. On shutdown, the host stops admission and drains
+admitted work, then the managed bridge closes admission, cancels and drains native sessions, and exits before the
+host releases the runtime lease. A persistent managed-child record lets a successor verify the old child is gone;
+unknown child state fails closed. The host keeps its lease if disposal cannot confirm cleanup, so another engine
+cannot start alongside an uncertain child.
+
+`usage.live`. A five-second service timer
 checks source deadlines; it does not make a provider call on every tick. Source, polling policy and an opaque
 native-credential fingerprint identify cache entries, including unsaved logins. In-flight requests are shared;
 results are discarded after an account or source change. Provider backoff and the Claude endpoint budget remain
@@ -62,12 +71,13 @@ Nothing is derived from the endpoint's undocumented limit itself: absent headers
 
 Everything about saved accounts runs in `service/`, a Node package without `vscode` imports that the extension
 bundles and installs under `~/.ai-usage/service/<version>` (`service/src/installer.ts`; `current.json` and
-`launch.js` point the autostart and the `ai-usage` launcher at the current version). `daemon.ts` runs one
-`AccountService` (`accountService.ts`) per home, with the profile store, the automation, activation verification
+`launch.js` point the autostart and the `ai-usage` launcher at the current version). `daemon.ts` and the editor delegate to `engineHost.ts`, which acquires `runtimeLease.ts` ownership before
+constructing one `AccountService` (`accountService.ts`) per home, with the profile store, the automation, activation verification
 and the Claude metadata retry that `src/extension.ts` used to hold, and serves it over newline-delimited JSON on
 a Unix socket or Windows named pipe (`rpc.ts`; a home whose path is too long for a socket gets one in
-`XDG_RUNTIME_DIR` or the temp directory). Every client sends `hello` with the token from `service.token` first;
-requests are `{ id, method, params }`, answers `{ id, result | error }`, and subscribed clients receive
+`XDG_RUNTIME_DIR` or the temp directory). Every client sends `hello` with the token from `service.token` first and negotiates the wire version and
+required capabilities;
+requests are `{ id, method, params, deadlineAt? }`, answers `{ id, result | error }`, and subscribed clients receive
 `{ event, … }` messages: `activated`, `accountProblem`, `noCandidate`, `notice`, `stateChanged`,
 `usageChanged`, `configChanged` and `log`. `client.ts` is the typed client both `cli.ts` and the extension use; `protocol.ts`
 the wire types. The service ticks every minute: it follows a native login switched outside it, runs the
@@ -75,8 +85,9 @@ automation, retries the Claude identity sync and reloads a hand-edited `config.j
 
 The extension's `src/serviceManager.ts` installs, upgrades, starts and connects, and turns service events into UI
 updates. `src/accountsMenu.ts` forwards account actions. Both service deployment modes use profiles.json; legacy
-VS Code credentials migrate on connection when there is no conflict. `src/configSync.ts` applies effective editor
-settings on every connection and pushes later edits; service config events update the editor. Every manifest key
+VS Code credentials migrate on connection when there is no conflict. `src/configSync.ts` reads authoritative engine
+settings on connection and sends explicit edits with revision checks; service config events update the editor.
+Presentation and connection preferences stay local. Every manifest key
 is represented in the generated `service/src/settingsCatalog.ts`, including nullable native settings and UI options.
 The CLI and service validate them through the same config module.
 
@@ -89,8 +100,9 @@ state. Copilot contexts remain in memory per connected client and are forgotten 
 Project profiles live in the profile file of a project folder (`projectProfiles.file`, the format of a profile
 export). Each client declares its folders in its `hello` and with `session.folders` (the extension sends its local
 workspace folders and follows changes; `ai-usage` sends `--project` or the current directory when it holds a
-profile file); the service keeps the union of the connected clients' folders and `ProfileStore` reads every
-folder's file (cached by mtime) into the merged list, marking those profiles with their `folder`. Writes go back to
+profile file); the service keeps the union of connected clients' project folders, and `ProfileStore` reads each
+folder's file (cached by mtime) into the shared list, marking project profiles with their `folder`.
+This shared profile visibility is separate from per-connection session and bridge workspace context. Writes go back to
 the folder's file, and the first write into a Git repository adds the path to its `.gitignore` and emits a
 `notice` event. `profiles.saveNative` and `profiles.importCredential` take a `folder` for a new project
 profile; the import of an export always makes private profiles.
@@ -103,13 +115,14 @@ reports each account as a `keepAliveProgress` event, so the extension's and the 
 from the service rather than from a client-side loop.
 
 `service/src/mcp.ts` is the MCP server behind `ai-usage mcp` (experimental): JSON-RPC 2.0 over stdio, one message
-per line, written without an SDK, with `list_accounts`, `refresh_usage` (the `usage.read` method, a probe without
+per line, written without an SDK, with `list_accounts`, `refresh_usage` (`usage.read` for a saved profile or `usage.live` for the native login, without
 the keep-alive prompt), `switch_account` and `rotate_account` as thin tools over the service client. The `mcp`
 block of `config.json` (`mcp.enabled`, `mcp.switching`; `GLOBAL_SETTINGS` in `configStore.ts`, synced to
 `aiUsage.mcp.*` like the provider settings) is read on every tool call, so a switch takes effect for a running
-server. `src/mcpProvider.ts` registers a `McpServerDefinitionProvider` that offers the installed service's command
-to the agents of the VS Code window while the setting is on, and re-announces it after an install or upgrade.
-`src/mcpRegistration.ts` registers the same launcher with the Claude Code and Codex CLIs for the Accounts menu item,
+server. `src/mcpProvider.ts` registers a `McpServerDefinitionProvider` that offers a bundled or installed command
+to the agents of the VS Code window while the setting is on. It works without background installation.
+`src/mcpRegistration.ts` re-exports service registration helpers, which select an installed launcher or bundled
+command with explicit home and runtime environment for the Accounts menu registration item,
 through their own `mcp add` and `mcp remove` (an existing entry is removed first, since Claude Code refuses a
 duplicate), and reads the CLI's current entry from `.claude.json` or Codex's `config.toml` for the item's description.
 

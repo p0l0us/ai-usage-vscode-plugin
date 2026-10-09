@@ -87,6 +87,24 @@ test('the usage detail line shows every window, the check time and known problem
   assert.match(usageDetail(codex), /Earned resets: 1 of 2 observed available \(next expires in 2h\)/);
 });
 
+test('usage displays round percentages while stored and live readings retain their precision', () => {
+  const now = new Date();
+  const saved = profile({ usage: { provider: 'claude', title: 'Claude', fetchedAt: now.toISOString(), windows: [
+    { label: '5h', usedPercent: 0.0999999999999432 },
+    { label: '7d', usedPercent: 59.6 }
+  ] } });
+  const live = { provider: 'claude', title: 'Claude', fetchedAt: new Date(now.getTime() + 1000), windows: [
+    { label: '5h', usedPercent: 59.6 },
+    { label: '7d', usedPercent: 0.0999999999999432 }
+  ] };
+  const savedBefore = structuredClone(saved);
+  const liveBefore = structuredClone(live);
+  assert.match(usageDetail(saved), /^5h: 0% · 7d: 60% · Checked /);
+  assert.match(usageDetail(saved, live), /^5h: 60% · 7d: 0% · Checked /);
+  assert.deepEqual(saved, savedBefore);
+  assert.deepEqual(live, liveBefore);
+});
+
 test('profile actions live in Manage saved profiles and moving a profile updates its order', async () => {
   const views = { codex: { provider: 'codex', title: 'Codex', profiles: [profile({ active: true }), profile({ id: 'b', name: 'Backup', number: 2 })],
     activeProfileId: 'a', nativeUnsaved: false, checkingActive: false, keepAlive: false, autoRotate: false, strategySummary: '', scopes } };

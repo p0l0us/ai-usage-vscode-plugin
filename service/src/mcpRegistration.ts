@@ -4,15 +4,15 @@ import * as path from 'path';
 import { AuthProvider } from './authFiles';
 import { codexHomeDir, resolveCli } from './live';
 import { claudeAccountFile } from './accountIdentity';
-import { launcherPath } from './installer';
+import { launcherPath, readCurrentInstall } from './installer';
 import { codexConfigPath } from './codexConfig';
 
 /**
  * Registers the account service's MCP server (`ai-usage mcp`, service/src/mcp.ts) with the Claude Code and Codex
  * CLIs, so an agent running in a terminal gets the account tools without editing a configuration file by hand.
  * Each CLI is driven through its own `mcp add` and `mcp remove` commands, never by writing its files; the command
- * registered is the installed launcher, which sets the service home itself and keeps working across service
- * upgrades. A stdio server needs no credentials from the CLI: the server talks to the service over its local
+ * registered prefers the installed service and otherwise uses the bundled service adapter. The installed
+ * launcher sets the service home itself and keeps working across service upgrades. A stdio server needs no credentials from the CLI: the server talks to the service over its local
  * socket with the token kept in the service home.
  */
 
@@ -26,6 +26,7 @@ export type McpRegistration = {
   registered: boolean;
   command?: string;
   args?: string[];
+  env?: Record<string, string>;
   /** The configured command is this launcher with `mcp`, so the CLI runs the installed service. */
   current: boolean;
 };
@@ -38,6 +39,32 @@ export function mcpConfigFile(provider: AuthProvider): string {
 /** The launcher the CLI is told to run; it sets the service home itself, so no `--home` is needed. */
 export function mcpLauncher(home: string): string {
   return launcherPath(home);
+}
+
+/** The service selects its stdio adapter for both editor definitions and terminal registration. */
+export type McpCommand = { command: string; args: string[]; env?: Record<string, string> };
+export type McpCommandOptions = {
+  /** The editor supplies its bundled service package location; CLI/engine callers use this package. */
+  bundledPackageDir?: string;
+  runtime?: McpCommand;
+};
+export function mcpCommand(home: string, options: McpCommandOptions = {}): McpCommand {
+  const installed = readCurrentInstall(home);
+  const launcher = mcpLauncher(home);
+  if (installed) {
+    if (fs.existsSync(launcher)) return { command: launcher, args: ['mcp'] };
+    // A missing launcher never moves an installed registration back into the extension package.
+    return { command: installed.node.command,
+      args: [...installed.node.args, path.join(installed.dir, 'bin', 'ai-usage.js'), 'mcp', '--home', home], env: installed.node.env };
+  }
+  const runtime = options.runtime ?? { command: process.execPath, args: [],
+    ...(process.versions.electron ? { env: { ELECTRON_RUN_AS_NODE: '1' } } : {}) };
+  return { command: runtime.command,
+    args: [...runtime.args, path.join(options.bundledPackageDir ?? path.resolve(__dirname, '..'), 'bin', 'ai-usage.js'), 'mcp', '--home', home],
+    ...(runtime.env ? { env: runtime.env } : {}) };
+}
+function commandOf(value: string | McpCommand): McpCommand {
+  return typeof value === 'string' ? { command: value, args: ['mcp'] } : value;
 }
 
 /** The CLI to drive: the configured path resolved as the keep-alive resolves it, or why there is none. */
@@ -69,31 +96,46 @@ function readCodexEntry(text: string): { command?: string; args?: string[] } | u
 }
 
 /** What the provider's CLI has registered under the server's name, read from its configuration file. */
-export function readMcpRegistration(provider: AuthProvider, launcher: string): McpRegistration {
-  let entry: { command?: string; args?: string[] } | undefined;
+export function readMcpRegistration(provider: AuthProvider, launcher: string | McpCommand): McpRegistration {
+  const expected = commandOf(launcher);
+  let entry: { command?: string; args?: string[]; env?: Record<string, string> } | undefined;
   try {
     const text = fs.readFileSync(mcpConfigFile(provider), 'utf8');
     if (provider === 'claude') {
-      const parsed = JSON.parse(text) as { mcpServers?: Record<string, { command?: unknown; args?: unknown } | undefined> };
+      const parsed = JSON.parse(text) as { mcpServers?: Record<string, { command?: unknown; args?: unknown; env?: Record<string, unknown> } | undefined> };
       const server = parsed.mcpServers?.[MCP_SERVER_NAME];
       entry = server ? {
         command: typeof server.command === 'string' ? server.command : undefined,
-        args: Array.isArray(server.args) ? server.args.filter((arg): arg is string => typeof arg === 'string') : undefined
+        args: Array.isArray(server.args) ? server.args.filter((arg): arg is string => typeof arg === 'string') : undefined,
+        env: server.env ? Object.fromEntries(Object.entries(server.env).filter((pair): pair is [string, string] => typeof pair[1] === 'string')) : undefined
       } : undefined;
     } else {
       entry = readCodexEntry(text);
+      if (entry) {
+        const envHeader = new RegExp(`^\\[mcp_servers\\.(?:${MCP_SERVER_NAME}|"${MCP_SERVER_NAME}")\\.env\\]\\s*$`, 'm');
+        const start = text.search(envHeader);
+        if (start >= 0) {
+          const body = text.slice(text.indexOf('\n', start) + 1);
+          const next = body.search(/^\s*\[/m);
+          const table = next < 0 ? body : body.slice(0, next);
+          entry.env = Object.fromEntries([...table.matchAll(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*"((?:[^"\\]|\\.)*)"/gm)].map(match => [match[1], unescapeToml(match[2])]));
+        }
+      }
     }
   } catch { entry = undefined; }
   if (!entry) { return { registered: false, current: false }; }
-  const current = entry.command !== undefined && path.resolve(entry.command) === path.resolve(launcher) && (entry.args ?? []).join(' ') === 'mcp';
-  return { registered: true, command: entry.command, args: entry.args, current };
+  const current = entry.command !== undefined && path.resolve(entry.command) === path.resolve(expected.command) && JSON.stringify(entry.args ?? []) === JSON.stringify(expected.args) &&
+    Object.entries(expected.env ?? {}).every(([key, value]) => entry!.env?.[key] === value);
+  return { registered: true, command: entry.command, args: entry.args, ...(entry.env && Object.keys(entry.env).length ? { env: entry.env } : {}), current };
 }
 
 /** `claude mcp add --scope user ai-usage -- <launcher> mcp`, so every project sees it; Codex's servers are global anyway. */
-export function mcpRegisterArgs(provider: AuthProvider, launcher: string): string[] {
+export function mcpRegisterArgs(provider: AuthProvider, launcher: string | McpCommand): string[] {
+  const descriptor = commandOf(launcher);
+  const envArgs = Object.entries(descriptor.env ?? {}).flatMap(([key, value]) => ['--env', `${key}=${value}`]);
   return provider === 'claude'
-    ? ['mcp', 'add', '--scope', 'user', '--transport', 'stdio', MCP_SERVER_NAME, '--', launcher, 'mcp']
-    : ['mcp', 'add', MCP_SERVER_NAME, '--', launcher, 'mcp'];
+    ? ['mcp', 'add', '--scope', 'user', '--transport', 'stdio', ...envArgs, MCP_SERVER_NAME, '--', descriptor.command, ...descriptor.args]
+    : ['mcp', 'add', ...envArgs, MCP_SERVER_NAME, '--', descriptor.command, ...descriptor.args];
 }
 
 export function mcpRemoveArgs(provider: AuthProvider): string[] {
@@ -132,7 +174,7 @@ export type RegistrationOutcome = { ok: boolean; detail: string; registration: M
  * Registers the launcher with the CLI. An entry of the same name is removed first: Claude Code refuses to add a
  * server that already exists, and Codex would keep whatever else the old table carried.
  */
-export async function registerMcpServer(provider: AuthProvider, cli: string, launcher: string, run: CliRunner = runCli): Promise<RegistrationOutcome> {
+export async function registerMcpServer(provider: AuthProvider, cli: string, launcher: string | McpCommand, run: CliRunner = runCli): Promise<RegistrationOutcome> {
   if (readMcpRegistration(provider, launcher).registered) {
     const removed = await run(cli, mcpRemoveArgs(provider));
     if (removed.code !== 0) {

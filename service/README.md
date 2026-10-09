@@ -49,15 +49,19 @@ ai-usage log [-n <lines>] [-f]
 ai-usage mcp                      MCP server for AI agents on stdin/stdout (experimental, off by default)
 ```
 
-`ai-usage --help` lists everything. Every VS Code `aiUsage.*` setting is available through `ai-usage config`
-with that prefix removed, including sources, intervals, proxy and bridge configuration, native CLI settings,
-advanced rotation diagnostics and presentation preferences. Nullable native settings accept `null`; arrays accept
-JSON. VS Code applies its effective values on connection and pushes subsequent edits; CLI changes are reflected
-back to connected editors. Without VS Code, `config.json` and the CLI configure the service independently.
+`ai-usage --help` lists everything. Engine settings use the VS Code `aiUsage.*` keys with that prefix removed,
+including sources, intervals, proxy and bridge configuration, native CLI settings and rotation diagnostics.
+Nullable native settings accept `null`; arrays accept JSON. The runtime persists authoritative values in
+`config.json`; editors read them on connection and explicit edits use revision checks. Presentation and editor
+connection preferences stay local to each editor. Background and editor-owned deployments acquire the same
+ownership lease before engine initialization and serve the same authenticated socket contract. Linux holds an
+abstract Unix socket lease, Windows a named pipe lease, and other platforms a deterministic loopback TCP port
+derived from the OS user and canonical service home. A TCP collision fails closed; no alternate port is tried, and
+the OS releases the endpoint when its process exits.
 
 For example: `ai-usage config codex.proxy.enabled true`,
 `ai-usage config codex.advanced.rotationDiagnostics true`, and `ai-usage rotation-weights codex`.
-Presentation preferences are stored for clients; connection preferences do not replace `ai-usage service start|stop`.
+Use `ai-usage service start|stop` for background process lifecycle.
 The proxy uses one ownership lease per OS user, independent of configured port (default `43117`). A port conflict
 is reported rather than silently choosing another port.
 
@@ -68,11 +72,12 @@ that holds such a file.
 ## AI agents
 
 `ai-usage mcp` serves the profiles to an AI agent over the Model Context Protocol (stdio): `list_accounts` lists
-every saved profile with its usage windows, `refresh_usage` reads one profile from the vendor now, and
+every saved profile plus native-login usage with freshness and model-window scope, `refresh_usage` reads a saved
+profile or, with profile omitted, the current native login, and
 `switch_account` and `rotate_account` change the active account. The feature is experimental and off until
 `ai-usage config mcp.enabled true`; `mcp.switching false` keeps agents to the usage tools. Register the launcher
 with the agent, for example `claude mcp add ai-usage -- ~/.ai-usage/bin/ai-usage mcp`. The VS Code extension offers
-the same server to the agents of its window while the setting is on. Details:
+the same server from its bundled package while the setting is on; background installation is optional. Details:
 [MCP server for AI agents](https://github.com/p0l0us/ai-usage-vscode-plugin/blob/main/docs/MCP.md).
 
 ## Where things are
@@ -84,3 +89,9 @@ month files of readings, switches and sweeps (`ai-usage history`), `service.log`
 
 Only the service writes these files; the command line and the extension go through it. Clients present the token
 in `service.token` first; on Windows that is what keeps other local users out of the named pipe.
+
+Claude and Codex default to `source: auto` with `checkIntervalMinutes: 30`. The engine uses a fresh shared cache,
+then a local usage file, direct API and CLI, stopping at the first usable reading and honoring endpoint budgets.
+Existing explicit source modes and intervals persist unchanged. `codex.autoReset.confirmationRequired` defaults
+to false; when enabled, a connected editor must approve the engine's reset decision. With no approving editor,
+no earned reset credit is spent. Details: [configuration](../docs/CONFIGURATION.md#earned-reset-confirmation).

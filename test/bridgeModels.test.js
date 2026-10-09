@@ -71,6 +71,7 @@ async function setup(t, provider) {
   const server = createBridgeServer(engine, { token: 'test-token-at-least-24-characters' });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   settings.set('aiUsage.bridge.url', `http://127.0.0.1:${server.address().port}`); settings.set('aiUsage.bridge.tokenFile', tokenFile);
+  settings.set(`aiUsage.bridge.${provider}.sessionDirectory`, directory);
   t.after(async () => { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); await engine.close(); settings.clear(); await rm(directory, { recursive: true, force: true }); });
   const modelProvider = new BridgeModelProvider({ ensure: async () => {} }, { appendLine() {} });
   t.after(() => modelProvider.dispose());
@@ -329,6 +330,7 @@ test('bundled runtime starts both fixture backends and authenticates discovery w
   const reserve = http.createServer(); await new Promise(resolve => reserve.listen(0, '127.0.0.1', resolve));
   const port = reserve.address().port; await new Promise(resolve => reserve.close(resolve));
   settings.set('aiUsage.bridge.url', `http://127.0.0.1:${port}`); settings.set('aiUsage.bridge.tokenFile', path.join(directory, 'token'));
+  settings.set('aiUsage.bridge.autoStart', true);
   for (const provider of ['codex', 'claude']) settings.set(`aiUsage.bridge.${provider}.executable`, path.resolve(`bridge/test/fixtures/${provider}.mjs`));
   const runtime = new BridgeRuntime(path.resolve('.'));
   const provider = new BridgeModelProvider(runtime, { appendLine() {} });
