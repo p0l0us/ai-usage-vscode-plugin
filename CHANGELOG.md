@@ -1,10 +1,10 @@
 # Changelog
 
-## 1.0.16 (unreleased)
+## 1.0.17 (unreleased)
 
 - Claude and Codex account menus offer **Open CLI…**: choose an account to launch its CLI in a VS Code terminal using its persistent home. Each menu now has a single **Settings…** entry.
 
-- Codex account menu rows show each account's earned-reset count beside its name, including zero and clearly marked stale or unknown reports. Open menus update counts from service events.
+- Codex account menu rows show each account's earned-reset count beside its name using the compact toolbar refresh icon, including zero and clearly marked stale or unknown reports. Open menus update counts from service events.
 
 - Each saved Claude and Codex account now uses a persistent numbered CLI home with its own login and settings. Homes survive service restarts and profile reordering; CLI token refreshes are synchronized before checks and activation.
 

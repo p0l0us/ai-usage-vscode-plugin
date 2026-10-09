@@ -10,7 +10,7 @@ import { MCP_SERVER_NAME, McpRegistration } from './mcpRegistration';
 import { pickWithBack } from './quickPick';
 import { ServiceManager } from './serviceManager';
 import { openAiUsageSettings } from './settingsLink';
-import { formatUsagePercent } from './usageFormatting';
+import { formatEarnedResetCount, formatUsagePercent } from './usageFormatting';
 
 /**
  * The Accounts menus of both services, as before, but every action goes to the account service. The service
@@ -264,9 +264,9 @@ export class AccountsMenu {
     const items: ProfileItem[] = view.profiles.map((profile) => {
       const displayedUsage = profile.active ? activeUsage?.(provider, profile.id) : undefined;
       const credits = provider === 'codex' ? projectResetCredits(displayedUsage, Date.now(), profile.usage) : undefined;
-      const resets = credits?.state === 'known' ? plural(credits.availableCount, 'reset')
-        : credits?.state === 'stale' ? `${plural(credits.lastReportedAvailableCount, 'reset')} (stale)`
-        : credits ? 'resets unknown' : undefined;
+      const resets = credits?.state === 'known' ? formatEarnedResetCount(credits.availableCount)
+        : credits?.state === 'stale' ? `${formatEarnedResetCount(credits.lastReportedAvailableCount)} (stale)`
+        : credits ? '$(refresh) ?' : undefined;
       // An exhausted account cannot be activated anyway, so its login trouble waits until the window resets.
       const loginProblem = profile.limit.readOnly ? undefined : profile.loginProblem;
       const icon = profile.active ? 'check' : 'key';

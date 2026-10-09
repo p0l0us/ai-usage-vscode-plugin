@@ -134,8 +134,8 @@ test('Codex menu labels show reset counts for every account, including zero, exp
   quickPickResponses.push(items => {
     const rows = items.filter(item => item.profile);
     assert.deepEqual(rows.map(item => item.label), [
-      '$(check) Work · 0 resets', 'Login expired · 1 reset', '$(circle-slash) Quota reset · 3 resets',
-      '$(key) Old reading · 4 resets (stale)', '$(key) Missing report · resets unknown'
+      '$(check) Work · $(refresh) 0', 'Login expired · $(refresh) 1', '$(circle-slash) Quota reset · $(refresh) 3',
+      '$(key) Old reading · $(refresh) 4 (stale)', '$(key) Missing report · $(refresh) ?'
     ]);
     assert.match(rows[0].detail, /Earned resets: 0 available/);
     assert.match(rows[2].detail, /Usage reset; waiting for a new reading · Earned resets: 3 available/);
@@ -161,11 +161,11 @@ test('an open Codex picker updates the reset count from service events', async (
   const listeners = new Set();
   f.services.onStateChanged = listener => { listeners.add(listener); return { dispose: () => listeners.delete(listener) }; };
   quickPickResponses.push((items, options, picker) => {
-    assert.match(items[0].label, /3 resets$/);
+    assert.match(items[0].label, /\$\(refresh\) 3$/);
     picker.activeItems = [items[0]];
     f.services.views.codex = { ...view, profiles: [profile({ active: true, usage: usage(2) })] };
     for (const listener of listeners) listener('codex');
-    assert.match(picker.items[0].label, /2 resets$/);
+    assert.match(picker.items[0].label, /\$\(refresh\) 2$/);
     assert.equal(picker.activeItems[0].profile.id, 'a');
     return undefined;
   });
