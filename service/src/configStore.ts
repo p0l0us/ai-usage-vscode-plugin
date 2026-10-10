@@ -143,7 +143,7 @@ export function defaultProviderConfig(provider: AuthProvider): ProviderConfig {
     cliPath: provider,
     checkIntervalMinutes: 30,
     api: { minIntervalSeconds: 30 },
-    keepAlive: { enabled: false, periodHours: claude ? 2 : 6, model: claude ? 'haiku' : 'gpt-5.6-luna', home: `~/.${provider}-tmp` },
+    keepAlive: { enabled: true, periodHours: claude ? 2 : 6, model: claude ? 'haiku' : 'gpt-5.6-luna', home: `~/.${provider}-tmp` },
     autoReset: { enabled: !claude, confirmationRequired: false },
     autoRotate: {
       enabled: false,

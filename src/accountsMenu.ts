@@ -36,7 +36,7 @@ type ProfileItem = vscode.QuickPickItem & {
   readOnly?: boolean;
   /** The login error of the profile's last check; selecting it offers to renew the login or check it again instead of activating. */
   loginProblem?: string;
-  action?: 'save' | 'manage' | 'openCli' | 'keepAliveNow' | 'registerMcp' | 'settings' | 'service' | 'install' | 'back';
+  action?: 'save' | 'manage' | 'openCli' | 'keepAliveNow' | 'registerMcp' | 'settings' | 'service' | 'install' | 'retry' | 'back';
 };
 
 export type MenuHooks = {
@@ -224,17 +224,13 @@ export class AccountsMenu {
     }
   }
 
-  /** The menu while accounts are turned off, or the service neither answers nor could be hosted in this window. */
+  /** Recovery actions when the shared runtime neither answers nor could be hosted in this window. */
   private async showUnavailable(provider: AuthProvider, hooks?: MenuHooks): Promise<void> {
     const items: ProfileItem[] = [];
-    if (!this.services.enabled) {
-      items.push({ label: '$(circle-slash) Accounts are turned off', detail: 'Saved profiles, keep-alives and rotation need the account service. Turn aiUsage.accountService.enabled on to use them.' });
-      items.push({ label: '$(gear) Open the setting', action: 'service' });
-    } else if (!this.services.isInstalled()) {
-      items.push({ label: '$(cloud-download) Install the account service…', detail: 'Saved profiles, keep-alives and rotation move to a background service that also runs while VS Code is closed, controlled here and by the ai-usage command.', action: 'install' });
-    } else {
-      items.push({ label: '$(debug-start) Connect to the account service…', detail: 'The service is installed but not answering; this starts it and connects.', action: 'install' });
-      items.push({ label: '$(server-process) Account service status…', action: 'service' });
+    items.push({ label: '$(refresh) Retry account connection', detail: 'Accounts are temporarily unavailable. Retry loading your saved profiles and account controls.', action: 'retry' });
+    items.push({ label: '$(server-process) Account service status…', detail: 'Check the runtime and log, or start it if it was manually stopped.', action: 'service' });
+    if (this.services.enabled && this.services.background && !this.services.isInstalled()) {
+      items.push({ label: '$(cloud-download) Install the account service…', detail: 'Optional: keep accounts running after VS Code closes. Accounts also work inside VS Code without installing the background service.', action: 'install' });
     }
     if (hooks?.back) {
       items.push({ label: '', kind: vscode.QuickPickItemKind.Separator });
@@ -242,7 +238,10 @@ export class AccountsMenu {
     }
     const picked = await pickWithBack(items, { title: `AI Usage · ${TITLES[provider]} accounts`, matchOnDetail: true },
       (item) => item.action === 'back', async () => hooks?.back?.(provider));
-    if (picked?.action === 'install') {
+    if (picked?.action === 'retry') {
+      if (await this.services.ensure()) { await this.show(provider, hooks); }
+      else { await this.services.showMenu({ description: `${TITLES[provider]} accounts`, run: () => this.show(provider, hooks) }); }
+    } else if (picked?.action === 'install') {
       if (!this.services.isInstalled()) { await this.services.install(); }
       else if (!await this.services.ensure()) { await this.services.showMenu({ description: `${TITLES[provider]} accounts`, run: () => this.show(provider, hooks) }); return; }
       if (this.services.connected) { await this.show(provider, hooks); }

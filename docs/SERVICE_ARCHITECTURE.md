@@ -32,6 +32,10 @@ before attempting to host one. Turning `aiUsage.accountService.enabled` off sele
 not create an independent engine or stop an existing background owner. Background installation remains optional.
 A disconnected client shows unavailable or stale state until it reconnects.
 
+The Account service menu offers Start, Stop and Restart in both deployments. A manual Stop suppresses automatic
+reconnects; explicit Start clears that stop and selects the configured host mode, without requiring a background
+installation. Account menus offer retry and status actions when a connection is unavailable.
+
 Both service modes use `~/.ai-usage/profiles.json` (mode 0600) and project profile files. Existing VS Code profiles
 are migrated into the service on connection when they are new, restore a missing login, or match an existing
 entry. A source entry is removed only after the target contains it. Conflicting legacy entries are retained for
@@ -92,6 +96,10 @@ The socket handshake authenticates the service token and negotiates a protocol v
 before accepting client context. Package versions and wire versions are separate. Incompatible clients receive an
 error instead of being treated as another deployment mode. `service.status`, `service.info` and `log.tail` expose
 the same owner and diagnostics in both deployments.
+
+`ServiceClient.call` derives method names, required arguments and results from `ServiceCommands`. `service.info`
+returns a numeric client count; `service.status` replaces that count with connection records. Compiler regression
+tests exercise the generated declarations, including invalid calls, so client code cannot omit required payloads.
 
 Requests can carry a deadline and a cancellation signal. Disconnects and owner shutdown abort pending requests.
 Cancellation can stop queued work; once a mutation starts, a timeout or disconnect can leave its result unknown.

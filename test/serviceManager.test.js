@@ -8,6 +8,7 @@ const Module = require('node:module');
 // Every window shares these user settings, as VS Code does.
 const settings = new Map();
 const informationMessages = [];
+test.beforeEach(() => { informationMessages.length = 0; });
 const quickPickResponses = [];
 const executed = [];
 const menus = [];
@@ -98,6 +99,7 @@ test('the background service survives window disposal and a manual stop is respe
   const client = await first.ensure();
   assert.ok(client);
   assert.equal(client.info.mode, 'background');
+  await client.setConfig({ 'codex.checkIntervalMinutes': 17 });
   const pid = client.info.pid;
   await first.stop();
   const second = open('second');
@@ -112,6 +114,19 @@ test('the background service survives window disposal and a manual stop is respe
   const autostart = spawnSync(process.execPath, [path.join(installed.dir, 'bin', 'ai-usage.js'), 'daemon'], { encoding: 'utf8', env: process.env });
   assert.equal(autostart.status, 0, 'autostart also respects the manual stop');
   assert.equal(readServiceInfo(home), undefined, 'a CLI read does not restart the stopped service');
+  quickPickResponses.push(items => items.find(item => item.action === 'start'));
+  await second.showMenu();
+  const resumed = second.connected;
+  assert.ok(resumed);
+  assert.equal(resumed.info.mode, 'background');
+  assert.notEqual(resumed.info.instanceId, client.info.instanceId);
+  assert.equal((await resumed.getConfig()).codex.checkIntervalMinutes, 17);
+  quickPickResponses.push(items => items.find(item => item.action === 'restart'));
+  await second.showMenu();
+  assert.ok(second.connected);
+  assert.equal(second.connected.info.mode, 'background');
+  assert.notEqual(second.connected.info.instanceId, resumed.info.instanceId);
+  assert.equal((await second.connected.getConfig()).codex.checkIntervalMinutes, 17);
 });
 
 test('without the background service one window hosts the service, the others use it, and one takes over when it closes', async (t) => {
@@ -287,4 +302,47 @@ test('closing a window during initial connection cannot leave an embedded host o
   assert.equal(manager.connected,undefined);
   assert.equal(manager.hosting,false);
   assert.equal(fs.existsSync(path.join(root,'home','service.sock')),false);
+});
+
+for (const enabled of [false, true]) test(`standalone Start, Stop and Restart preserve state without installation (service enabled=${enabled})`, async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-lifecycle-ui-'));
+  const previous = process.env.AI_USAGE_HOME;
+  process.env.AI_USAGE_HOME = path.join(root, 'home');
+  settings.clear();
+  for (const key of ['claude.enabled', 'codex.enabled', 'copilot.enabled', 'codex.autoReset.enabled', 'bridge.autoStart']) settings.set(`aiUsage.${key}`, false);
+  settings.set('aiUsage.accountService.enabled', enabled);
+  settings.set('aiUsage.accountService.background', !enabled);
+  const manager = new ServiceManager(windowContext(path.join(root, 'window')), () => {});
+  t.after(async () => {
+    await manager.stop();
+    if (previous === undefined) delete process.env.AI_USAGE_HOME; else process.env.AI_USAGE_HOME = previous;
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  const choose = async action => {
+    quickPickResponses.push(items => {
+      for (const expected of ['start', 'stop', 'restart']) assert.ok(items.some(item => item.action === expected), `${expected} works without installation`);
+      assert.doesNotMatch(JSON.stringify(items), /Turned off by aiUsage.accountService.enabled/);
+      return items.find(item => item.action === action);
+    });
+    await manager.showMenu();
+  };
+  const first = await manager.ensure();
+  assert.ok(first);
+  await first.setConfig({ 'codex.checkIntervalMinutes': 17 });
+  await choose('stop');
+  await until(() => !manager.connected && !manager.hosting);
+  assert.equal(await manager.ensure(), undefined, 'automatic reconnect respects the manual stop');
+  manager.tick();
+  assert.equal(manager.hosting, false);
+  await choose('start');
+  assert.ok(manager.connected);
+  const resumed = manager.connected;
+  assert.notEqual(resumed.info.instanceId, first.info.instanceId);
+  assert.equal((await resumed.getConfig()).codex.checkIntervalMinutes, 17);
+  await choose('restart');
+  assert.ok(manager.connected);
+  assert.notEqual(manager.connected.info.instanceId, resumed.info.instanceId);
+  assert.equal((await manager.connected.getConfig()).codex.checkIntervalMinutes, 17);
+  assert.equal(manager.isInstalled(), false);
+  assert.equal(fs.existsSync(path.join(root, 'home', 'service')), false);
 });

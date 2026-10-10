@@ -164,8 +164,8 @@ export const SETTINGS_CATALOG = [
   {
     "key": "claude.keepAlive.enabled",
     "type": "boolean",
-    "default": false,
-    "description": "**Account keep-alive and usage collection.** Periodically send the small `#aiUsage.claude.keepAlive.model#` prompt with every saved Claude account, including inactive ones, and record the usage each one reports. Each account keeps its login and CLI settings in a persistent home using `#aiUsage.claude.keepAlive.home#`, never in the native CLI home."
+    "default": true,
+    "description": "**Account keep-alive and usage collection.** Periodically send the small `#aiUsage.claude.keepAlive.model#` prompt with every saved Claude account, including inactive ones, and record the usage each one reports. On by default with the smallest model, so saved logins stay refreshed. Each account keeps its login and CLI settings in a persistent home using `#aiUsage.claude.keepAlive.home#`, never in the native CLI home."
   },
   {
     "key": "claude.autoRotate.enabled",
@@ -324,8 +324,8 @@ export const SETTINGS_CATALOG = [
   {
     "key": "codex.keepAlive.enabled",
     "type": "boolean",
-    "default": false,
-    "description": "**Account keep-alive and usage collection.** Periodically send the small `#aiUsage.codex.keepAlive.model#` prompt with every saved Codex account, including inactive ones, and record the usage each one reports. Each account keeps its login and CLI settings in a persistent home using `#aiUsage.codex.keepAlive.home#`, never in the native CLI home."
+    "default": true,
+    "description": "**Account keep-alive and usage collection.** Periodically send the small `#aiUsage.codex.keepAlive.model#` prompt with every saved Codex account, including inactive ones, and record the usage each one reports. On by default with the smallest model, so saved logins stay refreshed. Each account keeps its login and CLI settings in a persistent home using `#aiUsage.codex.keepAlive.home#`, never in the native CLI home."
   },
   {
     "key": "codex.autoRotate.enabled",

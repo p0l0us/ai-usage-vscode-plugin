@@ -4,7 +4,7 @@ import * as vscode from 'vscode';
 import {
   defaultConfig, AuthProvider, ProviderView, ServiceClient, ServiceConfig, ServiceEvent, ServiceHost, Snapshot, compareVersions, connectService, findNode,
   installService, launcherDir, logFile, readCurrentInstall, readServiceInfo, restartService, serviceHome, serviceStatus, startService, startServiceHost,
-  stopService, uninstallService, serviceManuallyStopped
+  stopService, uninstallService, serviceManuallyStopped, clearManualServiceStop
 } from '../service/out';
 import { ConfigSync, readSeedSettings } from './configSync';
 import { pickWithBack } from './quickPick';
@@ -463,7 +463,23 @@ export class ServiceManager implements vscode.Disposable {
     }
   }
 
-  /** When the store in use is empty but the other one keeps profiles, offers to bring them over, once per session. */
+  /** Explicit lifecycle actions use the same owner selection as normal connections in either mode. */
+  private async resumeRuntime(restart = false): Promise<void> {
+    await this.connecting;
+    if (restart) {
+      const stopped = await stopService(this.home);
+      if (!stopped.ok) {
+        void vscode.window.showWarningMessage(`AI Usage: could not restart account management: ${stopped.detail}.`);
+        return;
+      }
+      this.client?.close();
+      this.client = undefined;
+    }
+    clearManualServiceStop(this.home);
+    const client = await this.ensure();
+    if (client) { void vscode.window.showInformationMessage(`AI Usage: account management ${restart ? 'restarted' : 'started'}.`); }
+    else { void vscode.window.showWarningMessage('AI Usage: account management could not start. See the service log for details.'); }
+  }
 
   /**
    * The Account Service menu: status, profiles and transfers, start, stop, restart, reinstall, uninstall, log.
@@ -479,7 +495,7 @@ export class ServiceManager implements vscode.Disposable {
       detail: status.installed ? `${status.installed.dir} · Node.js ${status.installed.node.command}` : `Bundled version ${this.bundledVersion()} can be installed under ${this.home}.` });
     const embedded = this.host ? ' inside this VS Code window' : readServiceInfo(this.home)?.embedded ? ' inside a VS Code window' : '';
     items.push({ label: status.running ? `$(pass) Running${embedded}: pid ${status.pid}, version ${status.runningVersion}` : '$(circle-slash) Not running',
-      detail: client ? `Connected · ${client.info.clients} client${client.info.clients === 1 ? '' : 's'}` : this.enabled ? 'Not connected' : `Turned off by ${ENABLED_SETTING}` });
+      detail: client ? `Connected · ${client.info.clients} client${client.info.clients === 1 ? '' : 's'}` : serviceManuallyStopped(this.home) ? 'Stopped manually; choose Start to resume.' : 'Not connected' });
     items.push({ label: status.autostart.kind === 'none' ? '$(warning) Autostart: none available' : `$(${status.autostart.registered ? 'pass' : 'warning'}) Autostart: ${status.autostart.kind}, ${status.autostart.registered ? 'registered' : 'not registered'}`,
       detail: status.autostart.detail ?? (status.autostart.registered ? 'The service starts when you sign in.' : 'Reinstall to register it.') });
     if (status.launcher) { items.push({ label: '$(terminal) Command: ai-usage', detail: `${status.launcher} · available in VS Code terminals; add ${launcherDir(this.home)} to your PATH elsewhere.` }); }
@@ -492,10 +508,10 @@ export class ServiceManager implements vscode.Disposable {
 
     items.push({ label: 'Actions', kind: vscode.QuickPickItemKind.Separator });
     items.push({ label: status.installed ? '$(sync) Reinstall or upgrade' : '$(cloud-download) Install', detail: `Installs the bundled service ${this.bundledVersion()} and registers it to start at sign-in.`, action: 'install' });
+    items.push({ label: '$(debug-start) Start', action: 'start' });
+    items.push({ label: '$(debug-stop) Stop', detail: 'Keep-alives and rotation pause until it is started again.', action: 'stop' });
+    items.push({ label: '$(debug-restart) Restart', action: 'restart' });
     if (status.installed) {
-      items.push({ label: '$(debug-start) Start', action: 'start' });
-      items.push({ label: '$(debug-stop) Stop', detail: 'Keep-alives and rotation pause until it is started again.', action: 'stop' });
-      items.push({ label: '$(debug-restart) Restart', action: 'restart' });
       items.push({ label: '$(trash) Uninstall', detail: 'Stops and unregisters the service and removes its package; saved profiles and settings are kept.', action: 'uninstall' });
     }
     items.push({ label: '$(output) Open the service log', detail: logFile(this.home), action: 'log' });
@@ -511,9 +527,9 @@ export class ServiceManager implements vscode.Disposable {
       case 'install': await this.install(); break;
       case 'toService': await this.transfer('vscode', 'service'); break;
       case 'toVscode': await this.transfer('service', 'vscode'); break;
-      case 'start': { const result = startService(this.home); void vscode.window.showInformationMessage(`AI Usage: account service ${result.ok ? result.detail : `could not start: ${result.detail}`}.`); await this.ensure(); break; }
+      case 'start': await this.resumeRuntime(); break;
       case 'stop': { const result = await stopService(this.home); void vscode.window.showInformationMessage(`AI Usage: account service ${result.detail}.`); break; }
-      case 'restart': { const result = await restartService(this.home); void vscode.window.showInformationMessage(`AI Usage: account service ${result.ok ? `restarted (${result.detail})` : `could not restart: ${result.detail}`}.`); await this.ensure(); break; }
+      case 'restart': await this.resumeRuntime(true); break;
       case 'uninstall': {
         const confirmed = await vscode.window.showWarningMessage('Uninstall the AI Usage background service? Accounts, keep-alives and rotation then run inside VS Code while it is open. Saved profiles and settings are kept under ~/.ai-usage.', { modal: true }, 'Uninstall');
         if (confirmed !== 'Uninstall') { return; }

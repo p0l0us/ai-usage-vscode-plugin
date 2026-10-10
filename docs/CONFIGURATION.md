@@ -468,8 +468,8 @@ server with Claude Code and Codex, and what a switch by an agent means.
 ## Account automation
 
 Save or import each subscription login in **AI Usage: Manage Claude/Codex Authentication Profiles**. Under each
-provider's **Accounts** menu you can switch accounts manually and send a keep-alive on demand; both features are
-turned on in Settings, per provider, and default to off. The menu shows their current state and links to Settings.
+provider's **Accounts** menu you can switch accounts manually and send a keep-alive on demand. Both features are
+set in Settings, per provider: keep-alive is on by default, rotation off. The menu shows their current state and links to Settings.
 
 Account checks of one service run one at a time in the account service. A keep-alive sent by hand that finds a
 sweep running waits for it, up to 3 minutes, and says so in its progress notification, which can be cancelled;
@@ -482,7 +482,7 @@ in between two accounts. Once the wait runs out, the notification says that the 
 
 | Setting suffix (`aiUsage.claude.` / `aiUsage.codex.`) | Claude default | Codex default | Purpose |
 | --- | --- | --- | --- |
-| `keepAlive.enabled` | `false` | `false` | Periodically check every saved account, including inactive ones. |
+| `keepAlive.enabled` | `true` | `true` | Periodically check every saved account, including inactive ones, with the smallest model; this also keeps their logins refreshed. |
 | `autoRotate.enabled` | `false` | `false` | Switch accounts automatically at a threshold or, with `proactive`, when another account scores clearly better. |
 | `autoReset.enabled` | — | `true` | Automatically redeem an earned Codex rate-limit reset credit when the active saved account is limited and the timing rules favor a reset. |
 | `autoRotate.resetAware` | — | `true` | Avoid automatic Codex switches in the five minutes before a reported quota reset; recheck after it. |

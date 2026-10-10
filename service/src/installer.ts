@@ -398,11 +398,16 @@ export function serviceManuallyStopped(home: string): boolean {
   return fs.existsSync(path.join(home, 'state', 'service-stopped'));
 }
 
+/** An explicit Start or Restart permits either host mode to acquire ownership again. */
+export function clearManualServiceStop(home: string): void {
+  fs.rmSync(path.join(home, 'state', 'service-stopped'), { force: true });
+}
+
 /** Starts the installed daemon through the registered autostart, or detached when there is none. */
 export function startService(home: string): StepResult {
   const current = readCurrentInstall(home);
   if (!current) { return { ok: false, detail: 'the account service is not installed' }; }
-  fs.rmSync(path.join(home, 'state', 'service-stopped'), { force: true });
+  clearManualServiceStop(home);
   const env = { ...current.node.env, AI_USAGE_HOME: home };
   if (process.platform === 'linux' && systemdRegistered(home) && systemdUserAvailable()) {
     const result = run('systemctl', ['--user', 'start', SYSTEMD_UNIT]);

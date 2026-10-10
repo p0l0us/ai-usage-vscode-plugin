@@ -17,6 +17,9 @@ test('defaults match the extension settings: Claude rotates at 95/99.5, Codex at
   assert.equal(config.codex.autoReset.enabled, true);
   assert.equal(config.codex.keepAlive.periodHours, 6);
   assert.equal(config.codex.keepAlive.model, 'gpt-5.6-luna');
+  assert.equal(config.claude.keepAlive.enabled, true);
+  assert.equal(config.codex.keepAlive.enabled, true);
+  assert.equal(config.claude.keepAlive.model, 'haiku');
   assert.equal(config.claude.keepAlive.home, '~/.claude-profile-{number}');
 });
 

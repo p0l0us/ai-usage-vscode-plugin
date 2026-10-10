@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.2.0 (2026-10-10)
+
+- Claude and Codex account keep-alive is on by default, using the smallest models (`haiku`, `gpt-5.6-luna`). Without it, saved Claude logins that nobody used for a few hours showed "Login expired" because usage polling cannot refresh their tokens. Installs that already saved the setting keep their value.
+- Account connection failures offer retry and runtime status in both standalone and background modes. Standalone users are no longer told that account features require enabling or installing the background service.
+- Start, Stop and Restart are available without a background installation. Explicit Start resumes the editor-owned runtime after a manual Stop; saved configuration is preserved.
+- The shared service client requires mandatory RPC arguments and correctly types the connection list returned by `service.status`. Compiler regression tests check the generated client declarations as part of the full parity suite.
+
 ## 1.1.0 (2026-10-09)
 
 - The CLI bridge now advertises image and workspace context support. The service rejects older bridge processes with a clear error instead of attaching to them and failing image requests.

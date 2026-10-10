@@ -32,7 +32,7 @@ export type ServiceCommands = {
   'reset.resolve': { params: { id: string; approve: boolean }; result: ResetResolution };
   'status.snapshot': { params: StatusFilter | undefined; result: StatusRead };
   'service.info': { params: undefined; result: ServiceInfo };
-  'service.status': { params: undefined; result: ServiceInfo & { clients: Array<{ id: number; client: string; version?: string }> } };
+  'service.status': { params: undefined; result: Omit<ServiceInfo, 'clients'> & { clients: Array<{ id: number; client: string; version?: string }> } };
   snapshot: { params: undefined; result: Snapshot };
   'config.get': { params: undefined; result: ServiceConfig };
   'config.read': { params: undefined; result: ConfigState };

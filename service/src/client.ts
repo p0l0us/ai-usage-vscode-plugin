@@ -14,6 +14,10 @@ import type {
   SignInResult, Snapshot, UsageReadResult, CliPreparation, ServiceCommands
 } from './protocol';
 
+type OptionalParamsCommand = {
+  [K in keyof ServiceCommands]: undefined extends ServiceCommands[K]['params'] ? K : never
+}[keyof ServiceCommands];
+
 /** Why a connection could not be made, so a caller can install, start or just report. */
 export type UnavailableReason = 'not-installed' | 'not-running' | 'refused';
 
@@ -69,8 +73,10 @@ export class ServiceClient extends EventEmitter {
 
   supports(capability: string): boolean { return this.capabilities.includes(capability); }
 
-  call<K extends keyof ServiceCommands>(method: K, params?: ServiceCommands[K]['params'], options?: number | RequestOptions): Promise<ServiceCommands[K]['result']> {
-    return this.rpc.call(method, params, options) as Promise<ServiceCommands[K]['result']>;
+  call<K extends OptionalParamsCommand>(method: K, params?: ServiceCommands[K]['params'], options?: number | RequestOptions): Promise<ServiceCommands[K]['result']>;
+  call<K extends keyof ServiceCommands>(method: K, params: ServiceCommands[K]['params'], options?: number | RequestOptions): Promise<ServiceCommands[K]['result']>;
+  call(method: keyof ServiceCommands, params?: unknown, options?: number | RequestOptions): Promise<unknown> {
+    return this.rpc.call(method, params, options);
   }
 
   resetConfirmations(): Promise<ResetConfirmation[]> { return this.call('reset.confirmations'); }

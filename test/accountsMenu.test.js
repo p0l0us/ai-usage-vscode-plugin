@@ -397,16 +397,61 @@ test('saving the current login asks for a name, warns about a duplicate, and can
   assert.match(informationMessages[1], /profile “Work” updated from the current login/);
 });
 
-test('without the service the menu offers to install it', async () => {
+test('background installation is an optional action when the account connection is unavailable', async () => {
   const f = fixture({});
   f.services.connected = undefined;
   f.services.ensure = async () => undefined;
   f.services.isInstalled = () => false;
+  f.services.background = true;
   let installed = false;
   f.services.install = async () => { installed = true; return true; };
-  quickPickResponses.push((items) => { assert.match(items[0].label, /Install the account service/); return items[0]; });
+  quickPickResponses.push((items) => {
+    assert.equal(items[0].action, 'retry');
+    const install = items.find(item => item.action === 'install');
+    assert.match(install.detail, /Optional/);
+    return install;
+  });
   await f.menu.show('claude', { sendKeepAlive: async () => undefined, signIn: async () => undefined });
   assert.equal(installed, true);
+});
+
+for (const enabled of [false, true]) test(`standalone account recovery works without installation (service enabled=${enabled})`, async () => {
+  const view = { provider: 'codex', title: 'Codex', profiles: [], nativeUnsaved: false, checkingActive: false,
+    keepAlive: false, autoRotate: false, strategySummary: '', scopes };
+  const f = fixture({ codex: view });
+  const client = f.services.connected;
+  f.services.connected = undefined;
+  f.services.enabled = enabled;
+  f.services.background = false;
+  f.services.isInstalled = () => false;
+  f.services.install = async () => assert.fail('standalone recovery must not install a daemon');
+  let attempts = 0;
+  f.services.ensure = async () => {
+    if (++attempts === 1) return undefined;
+    f.services.connected = client;
+    return client;
+  };
+  quickPickResponses.push(items => {
+    assert.equal(items.some(item => item.action === 'install'), false);
+    assert.doesNotMatch(JSON.stringify(items), /Accounts are turned off|Turn aiUsage.accountService.enabled on/);
+    return items.find(item => item.action === 'retry');
+  }, items => {
+    assert.ok(items.some(item => item.action === 'save'), 'the connected account menu is available');
+    return undefined;
+  });
+  await f.menu.show('codex');
+  assert.equal(attempts, 2);
+});
+
+test('a failed account retry opens runtime status without installing or enabling the service', async () => {
+  const f = fixture({});
+  f.services.connected = undefined;
+  f.services.enabled = false;
+  f.services.ensure = async () => undefined;
+  f.services.install = async () => assert.fail('a failed retry must not install a daemon');
+  quickPickResponses.push(items => items.find(item => item.action === 'retry'));
+  await f.menu.show('claude');
+  assert.deepEqual(f.calls, [['showMenu']]);
 });
 
 test('where to keep a profile is asked only when both kinds are possible, and names the project', async () => {

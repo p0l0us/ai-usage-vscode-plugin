@@ -2,7 +2,7 @@
   "name": "ai-usage-vscode-plugin",
   "displayName": "AI subscription management and usage",
   "description": "Manage your Claude Code, Codex and GitHub Copilot subscriptions and see what is left of them: switch between saved accounts without signing in again, keep them warm, rotate on exhaustion, and read live 5h/7d windows, premium requests and org billing in the status bar and chat input. Open source, contributions welcome.",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "publisher": "p0l0us",
   "license": "GPL-3.0-only",
   "repository": {
@@ -7117,9 +7117,9 @@
           },
           "aiUsage.claude.keepAlive.enabled": {
             "type": "boolean",
-            "default": false,
+            "default": true,
             "order": 5,
-            "markdownDescription": "**Account keep-alive and usage collection.** Periodically send the small `#aiUsage.claude.keepAlive.model#` prompt with every saved Claude account, including inactive ones, and record the usage each one reports. Each account keeps its login and CLI settings in a persistent home using `#aiUsage.claude.keepAlive.home#`, never in the native CLI home."
+            "markdownDescription": "**Account keep-alive and usage collection.** Periodically send the small `#aiUsage.claude.keepAlive.model#` prompt with every saved Claude account, including inactive ones, and record the usage each one reports. On by default with the smallest model, so saved logins stay refreshed. Each account keeps its login and CLI settings in a persistent home using `#aiUsage.claude.keepAlive.home#`, never in the native CLI home."
           },
           "aiUsage.claude.autoRotate.enabled": {
             "type": "boolean",
@@ -7321,9 +7321,9 @@
           },
           "aiUsage.codex.keepAlive.enabled": {
             "type": "boolean",
-            "default": false,
+            "default": true,
             "order": 5,
-            "markdownDescription": "**Account keep-alive and usage collection.** Periodically send the small `#aiUsage.codex.keepAlive.model#` prompt with every saved Codex account, including inactive ones, and record the usage each one reports. Each account keeps its login and CLI settings in a persistent home using `#aiUsage.codex.keepAlive.home#`, never in the native CLI home."
+            "markdownDescription": "**Account keep-alive and usage collection.** Periodically send the small `#aiUsage.codex.keepAlive.model#` prompt with every saved Codex account, including inactive ones, and record the usage each one reports. On by default with the smallest model, so saved logins stay refreshed. Each account keeps its login and CLI settings in a persistent home using `#aiUsage.codex.keepAlive.home#`, never in the native CLI home."
           },
           "aiUsage.codex.autoRotate.enabled": {
             "type": "boolean",

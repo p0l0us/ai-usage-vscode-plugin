@@ -154,8 +154,8 @@ Click the Claude or Codex status bar item to open that service's **Accounts** me
 details panel); **Back** leads to the AI Usage menu of all services. This menu lets
 you switch accounts manually, save the current login to a new or existing profile, and send a keep-alive on
 demand. **Account keep-alive and usage collection** (`aiUsage.<service>.keepAlive.enabled`) and **automatic
-account rotation** (`aiUsage.<service>.autoRotate.enabled`) are turned on in Settings, independently per service;
-the menu shows what each one is set to.
+account rotation** (`aiUsage.<service>.autoRotate.enabled`) are set in Settings, independently per service
+(keep-alive is on by default with the smallest model, rotation off); the menu shows what each one is set to.
 
 ![Send keep-alive now… item under Account features in the Accounts menu](images/screenshots/accounts-keep-alive-now.png)
 ![Keep-alive and rotation settings… item showing keep-alive on and rotation on with the leastWaste strategy](images/screenshots/accounts-keep-alive-settings-claude.png)
