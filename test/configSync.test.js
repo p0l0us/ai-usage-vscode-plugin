@@ -29,6 +29,7 @@ test('setting names map to service keys only for known settings of the right ser
   assert.equal(configKeyOf('aiUsage.codex.keepAlive.periodHours'), 'codex.keepAlive.periodHours');
   assert.equal(configKeyOf('aiUsage.codex.autoRotate.strategy'), 'codex.autoRotate.strategy');
   assert.equal(configKeyOf('aiUsage.codex.autoRotate.resetAware'), 'codex.autoRotate.resetAware');
+  assert.equal(configKeyOf('aiUsage.codex.autoRotate.updateUsageBeforeRotation'), 'codex.autoRotate.updateUsageBeforeRotation');
   assert.equal(configKeyOf('aiUsage.codex.autoReset.enabled'), 'codex.autoReset.enabled');
   assert.equal(configKeyOf('aiUsage.claude.source'), 'claude.source', 'the service owns usage sources');
   assert.equal(configKeyOf('aiUsage.statusBar.enabled'), 'statusBar.enabled');

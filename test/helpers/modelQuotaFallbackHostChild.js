@@ -25,7 +25,8 @@ exports.options = (home, mode) => {
       const token = credential.claudeAiOauth.accessToken;
       fs.appendFileSync(path.join(home, 'probes.jsonl'), JSON.stringify({ token, keepAlive, model: settings.model }) + '\n');
       const data = state();
-      if (keepAlive && data.exhaustOnVerify === token) {
+      // The account's allowance is gone by the time rotation reads it again right before the switch.
+      if (data.exhaustOnVerify === token) {
         data.accounts[token] = [['5h', 100], ['7d', 65], ['7d Fable', 100]];
         fs.writeFileSync(path.join(home, 'fixture.json'), JSON.stringify(data));
       }

@@ -43,6 +43,7 @@ export type ProviderConfig = {
   autoRotate: {
     enabled: boolean;
     resetAware: boolean;
+    updateUsageBeforeRotation: boolean;
     fiveHourThresholdPercent: number;
     weeklyThresholdPercent: number;
     modelLimits: ModelLimits;
@@ -103,6 +104,7 @@ export const SETTINGS: SettingSchema[] = [
   { key: 'autoRotate.enabled', type: 'boolean', description: 'Switch the active account automatically once it reaches a rotation threshold.' },
   { key: 'autoReset.enabled', type: 'boolean', providers: ['codex'], description: 'Automatically redeem an available earned Codex rate-limit reset when it is more useful than rotating or waiting.' },
   { key: 'autoReset.confirmationRequired', type: 'boolean', providers: ['codex'], description: 'Require a connected editor to approve an earned Codex reset before redemption; without approval no credit is redeemed.' },
+  { key: 'autoRotate.updateUsageBeforeRotation', type: 'boolean', description: 'Read the usage of the account rotation is about to switch to right before the switch (a usage call, never a keep-alive). Off: the stored readings decide, with windows that have reset since counted as fresh.' },
   { key: 'autoRotate.resetAware', type: 'boolean', providers: ['codex'], description: 'Avoid automatic switches in the five minutes before a Codex usage window resets; reconsider after the reset.' },
   { key: 'autoRotate.fiveHourThresholdPercent', type: 'number', min: 1, max: 100, description: 'Rotate when the 5-hour window reaches this percentage; a candidate must be below it.' },
   { key: 'autoRotate.weeklyThresholdPercent', type: 'number', min: 1, max: 100, description: 'Rotate when a weekly window reaches this percentage; a candidate must be below it.' },
@@ -148,6 +150,7 @@ export function defaultProviderConfig(provider: AuthProvider): ProviderConfig {
     autoRotate: {
       enabled: true,
       resetAware: !claude,
+      updateUsageBeforeRotation: false,
       // Codex defaults to rotating on a used-up 5-hour window only.
       fiveHourThresholdPercent: claude ? 95 : 100,
       weeklyThresholdPercent: claude ? 99.5 : 99,
@@ -337,6 +340,7 @@ export function automationSettings(config: ServiceConfig, provider: AuthProvider
     strategy: own.autoRotate.strategy,
     trigger: own.autoRotate.trigger === 'proactive' ? 'proactive' : 'limit',
     resetAware: provider === 'codex' && own.autoRotate.resetAware,
+    updateUsageBeforeRotation: own.autoRotate.updateUsageBeforeRotation,
     minStayMs: Math.max(5, own.autoRotate.minStayMinutes) * 60_000,
     intervalMs: Math.max(0.25, own.keepAlive.periodHours) * 3_600_000,
     // Claude accepts a quarter minute: every endpoint call is spaced by the shared budget regardless.

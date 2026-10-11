@@ -111,11 +111,18 @@ every threshold, nothing is switched (with the `proactive` trigger, the sweep go
 ## Choosing the next account
 
 Candidates are visited in the order the strategy ranks them, and the first one that passes is switched to. At most
-one switch is made per sweep. Before switching, each candidate in turn is read again (it must still be below every
-applicable candidate threshold and report the required windows of the active account; a Claude model fallback
-uses the general windows) and is sent a keep-alive, because a usage
-reading alone does not prove that the login works. A candidate that fails either check is skipped, and a broken
-login is reported.
+one switch is made per sweep. A candidate is judged by its **stored reading**: it must be below every applicable
+candidate threshold and report the required windows of the active account (a Claude model fallback uses the
+general windows), and its last check must not have found a login problem. A window whose reset time has passed
+since the reading counts as fresh, so the service needs no keep-alive to know that an account's allowance is back.
+Rotation makes no call to the provider for a candidate and never sends a keep-alive: keep-alives are a separate
+periodic update (`keepAlive.enabled`), which also keeps the stored readings current for accounts that another
+computer's service uses too.
+
+With **Update usage before rotation** (`autoRotate.updateUsageBeforeRotation`, off by default) the candidate's usage
+is read right before the switch, a usage call only and never a keep-alive. The candidate must still be below every
+threshold on that fresh reading and report the required windows; otherwise it is skipped. Turn it on when accounts
+are also used from other computers, so stored readings may be out of date.
 
 The strategy decides the **order**. With the `limit` trigger, every strategy attempts a switch when the
 active account reaches a threshold; only [proactive switching](#proactive-switching) makes the strategy start
@@ -234,8 +241,8 @@ The same three candidates as above, each picked by a different rule:
 These apply to `soonestReset`, `evenPace` and `leastWaste`:
 
 - **Ranking uses stored readings.** Candidates are ranked from the readings already collected for each account (by
-  keep-alives, the status bar and earlier sweeps), so ranking costs no endpoint calls. Only the candidates actually
-  tried are read again.
+  keep-alives, the status bar and earlier sweeps), so ranking costs no endpoint calls. A tried candidate is read
+  again only with `autoRotate.updateUsageBeforeRotation`.
 - **Order of groups.** Accounts whose stored reading looks usable come first, best score first. Then usable accounts
   that report no weekly window, then those that look exhausted, then accounts never read. Ties keep saved-profile
   order.
@@ -244,14 +251,16 @@ These apply to `soonestReset`, `evenPace` and `leastWaste`:
   have recovered: the sweep leaves it out without a call until the reset has passed, then reads it again. An
   exhausted reading without a known reset time is still tried, since only a fresh reading can tell.
 - **A reset since the reading counts as fresh.** A stored reading of `7d` 97% with a reset time that has since passed
-  is ranked as 0% used, with its next reset one week later. The account is still read again before any switch.
+  is ranked as 0% used, with its next reset one week later. Without `updateUsageBeforeRotation` that stored reading
+  is what the switch is based on.
 - **Headroom is measured up to the thresholds.** "Allowance left" is the threshold minus the usage, not 100 minus the
   usage.
 - **The 5-hour window only blocks.** It does not change the ranking, except for `leastWaste`'s bonus. It acts through
   its threshold: an account at 5h 96% is never switched to, however good its weekly score.
-- **A failed last check disqualifies.** An account whose last keep-alive failed, whatever the reason, or whose last
-  usage check found a login problem, is not switched to and costs the sweep nothing, until a later check of it
-  succeeds: the next periodic keep-alive, or **Send keep-alive now…**. The notification that no candidate remains
+- **A login problem disqualifies.** An account whose last keep-alive or usage check found a login problem (an
+  expired or revoked login) is not switched to and costs the sweep nothing, until a later check of it succeeds: the
+  next periodic keep-alive, or **Send keep-alive now…**. A keep-alive that failed for another reason, such as a CLI
+  error or no credits, says nothing about the stored usage and does not block a rotation. The notification that no candidate remains
   names the accounts left out for that reason, and the accounts still at their limit by their last reading, with
   the time until their reset.
 - **Several weekly windows: the tightest one decides.** When both `7d` and `7d Fable` count, `soonestReset` uses the
@@ -330,7 +339,7 @@ use needs. See [Usage history](CONFIGURATION.md#usage-history).
 ## Safety
 
 - Missing, failed, incomplete or expired candidate readings never authorize a switch.
-- A candidate must pass a real keep-alive request before it is activated.
+- Activation verifies the login that was written (Claude's account file, Codex's app-server); a candidate with a known login problem is never chosen. Rotation itself sends no keep-alive.
 - The selected account must still match the native login immediately before activation, so a switch made meanwhile
   in another window or by the vendor CLI is not overwritten.
 - The only memory of past exhaustion is the stored reading itself: an account that was rotated away from becomes a
@@ -369,7 +378,7 @@ settings work together with **every** Codex strategy and both triggers:
 2. Skip a candidate when **any** of its reported 5-hour or 7-day windows resets within five minutes, even if the
    strategy ranks it first. Try the next candidate immediately; if none qualifies, retry just after the earliest
    skipped reset. If a credit is available, keep it while waiting for that candidate unless it expires first.
-   Every candidate still needs a fresh usage read and a successful keep-alive before activation.
+   With `updateUsageBeforeRotation` on, every candidate also needs a fresh usage read before activation.
 3. If every window blocking the active saved account is fully used (100%) and enough credits are available to
    cover those windows, first prefer a usable account selected by the rotation strategy. If no account qualifies
    (or account rotation is off), redeem a credit on the active
@@ -440,7 +449,7 @@ Enable the advanced `aiUsage.claude.advanced.rotationDiagnostics` or
 shows the active account, strategy score and candidate order, as well as missing/stale usage, errors and imminent
 reset exclusions. The explanation covers the threshold trigger, proactive margin, minimum stay and reset wait.
 `sequential` has an order rather than a numeric weight. The other strategies prefer lower scores, but eligibility
-and fresh verification still decide whether a switch can happen.
+and the stored (or, with `updateUsageBeforeRotation`, fresh) reading still decide whether a switch can happen.
 
 The service returns the scores directly. With the service connection disabled, the same engine computes them in
 VS Code. `ai-usage rotation-weights claude` or `ai-usage rotation-weights codex` prints them without an editor.

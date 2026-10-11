@@ -39,6 +39,8 @@ export type AutomationSettings = ProbeSettings & RotationLimits & {
   trigger?: RotationTrigger;
   /** Codex: avoid a short-lived switch immediately before a reported quota reset. */
   resetAware?: boolean;
+  /** Read the target account's usage right before a rotation switch; off, the stored readings decide. */
+  updateUsageBeforeRotation?: boolean;
   /** Proactive switching leaves a newly active account alone for at least this long. */
   minStayMs?: number;
   intervalMs: number;
@@ -346,6 +348,7 @@ export class AccountAutomation {
       fiveHourThresholdPercent: settings.fiveHourThresholdPercent, weeklyThresholdPercent: settings.weeklyThresholdPercent,
       ...(settings.autoReset !== undefined ? { autoReset: settings.autoReset } : {}),
       ...(settings.resetAware !== undefined ? { resetAware: settings.resetAware } : {}),
+      ...(settings.updateUsageBeforeRotation !== undefined ? { updateUsageBeforeRotation: settings.updateUsageBeforeRotation } : {}),
       ...(settings.minStayMs !== undefined ? { minStayMinutes: settings.minStayMs / 60_000 } : {}) };
   }
 
@@ -450,11 +453,11 @@ export class AccountAutomation {
 
   /**
    * The problem an account's last check recorded, which keeps rotation from switching to it until a later check
-   * succeeds: a failed keep-alive, whatever failed, or a usage check that found a login problem.
+   * succeeds: a login problem found by a keep-alive or a usage check. A keep-alive that failed for another reason
+   * (a CLI error, no credits) says nothing about the stored usage, so it never blocks a rotation.
    */
   private checkProblem(provider: AuthProvider, id: string): string | undefined {
-    const state = this.read(provider, id);
-    return state.keepAliveError ?? (isLoginProblem(state.lastError) ? state.lastError : undefined);
+    return this.loginProblem(provider, id);
   }
 
   /** Live reads belong to the profile captured before the request, never to a newly selected one. */
@@ -778,8 +781,8 @@ export class AccountAutomation {
         const reset = raw && settings.resetAware ? imminentReset(raw, now, settings) : undefined;
         const stale = raw && usageHasExpiredReset(raw, now);
         const detail = problem ? `Last check failed: ${explainAccountProblem(problem).label}.` : !raw ? 'No usage reading yet.'
-          : stale ? 'A quota reset has passed; fresh verification is required.' : reset && profile.id !== active ? 'Deferred: a quota reset is within five minutes.'
-          : atLimit(raw, settings) ? 'At a rotation threshold.' : 'Below thresholds; fresh verification is required before a switch.';
+          : stale ? (settings.updateUsageBeforeRotation ? 'A quota reset has passed; it is read again before a switch.' : 'A quota reset has passed; the stored reading counts it as fresh.') : reset && profile.id !== active ? 'Deferred: a quota reset is within five minutes.'
+          : atLimit(raw, settings) ? 'At a rotation threshold.' : (settings.updateUsageBeforeRotation ? 'Below thresholds; its usage is read again before a switch.' : 'Below thresholds; the stored reading decides a switch.');
         return { id: profile.id, name: profile.name, active: profile.id === active,
           rank: candidate ? ranked.indexOf(candidate) + 1 : undefined,
           score: raw ? rotationScore(strategy, raw, now, settings) : undefined, reason: detail, fetchedAt: raw?.fetchedAt.toISOString() };
@@ -1101,60 +1104,55 @@ export class AccountAutomation {
           entry.outcome = 'notBetter';
           continue;
         }
-        calls++;
-        const checked = await this.checkAccount(provider, candidate.id, settings, false, { source: 'rotation' });
-        const candidateUsage = checked.usage;
-        if (candidateUsage) { entry.usage = usageSnapshot(candidateUsage); }
-        if (!candidateUsage || !eligibleAccount(candidateUsage, this.now(), selectionSettings) ||
-          !requiredWindows.every((label) => candidateUsage.windows.some((window) => window.label === label))) {
-          entry.outcome = 'ineligible';
-          if (!candidateUsage) { entry.detail = checked.usageError ?? 'usage unavailable'; }
-          continue;
-        }
-        const freshReset = settings.resetAware && !forced ? imminentReset(candidateUsage, this.now(), settings) : undefined;
-        if (freshReset) {
-          entry.outcome = 'resetSoon';
-          entry.detail = `usage resets in ${formatResetRemaining(freshReset, new Date(this.now()))}`;
-          if (!deferredUntil || freshReset < deferredUntil) { deferredUntil = freshReset; }
-          continue;
-        }
-        const score = rotationScore(strategy, candidateUsage, this.now(), selectionSettings);
-        if (score !== undefined) { entry.freshScore = score; }
-        if (own !== undefined && !(score !== undefined && score + margin < own)) {
-          entry.outcome = 'notBetter';
-          continue;
+        let candidateUsage = cachedUsage;
+        if (settings.updateUsageBeforeRotation) {
+          // Read the target's usage now, as a usage call only: a keep-alive is never part of a rotation.
+          calls++;
+          const checked = await this.checkAccount(provider, candidate.id, settings, false, { source: 'rotation' });
+          candidateUsage = checked.usage;
+          if (candidateUsage) { entry.usage = usageSnapshot(candidateUsage); }
+          if (!candidateUsage || !eligibleAccount(candidateUsage, this.now(), selectionSettings) ||
+            !requiredWindows.every((label) => candidateUsage!.windows.some((window) => window.label === label))) {
+            entry.outcome = 'ineligible';
+            if (!candidateUsage) { entry.detail = checked.usageError ?? 'usage unavailable'; }
+            continue;
+          }
+          const freshReset = settings.resetAware && !forced ? imminentReset(candidateUsage, this.now(), settings) : undefined;
+          if (freshReset) {
+            entry.outcome = 'resetSoon';
+            entry.detail = `usage resets in ${formatResetRemaining(freshReset, new Date(this.now()))}`;
+            if (!deferredUntil || freshReset < deferredUntil) { deferredUntil = freshReset; }
+            continue;
+          }
+          const score = rotationScore(strategy, candidateUsage, this.now(), selectionSettings);
+          if (score !== undefined) { entry.freshScore = score; }
+          if (own !== undefined && !(score !== undefined && score + margin < own)) {
+            entry.outcome = 'notBetter';
+            continue;
+          }
+        } else {
+          // The stored reading decides. `usable` already counts a window that has reset since the reading as fresh and
+          // leaves out an account with a login problem; the periodic usage checks keep these readings current.
+          if (!cachedUsage || !candidate.usable ||
+            !requiredWindows.every((label) => cachedUsage.windows.some((window) => window.label === label))) {
+            entry.outcome = 'ineligible';
+            entry.detail = cachedUsage ? 'the stored reading shows no headroom' : 'no stored reading yet';
+            if (cachedUsage) { entry.usage = usageSnapshot(cachedUsage); }
+            continue;
+          }
+          entry.usage = usageSnapshot(cachedUsage);
         }
         if (this.disposed || this.paused || this.holds.has(provider) || !this.rotationAllowed(provider)) { return 'the sweep was interrupted'; }
-        // A usage reading does not prove that the login still works; a real model call does. Never switch to a
-        // broken login: report it and try the next account. The call counts as the account's periodic keep-alive.
-        this.write(provider, candidate.id, { ...this.read(provider, candidate.id), lastKeepAliveAt: this.now() });
-        calls++;
-        const verified = await this.checkAccount(provider, candidate.id, settings, true, { ignoreBackoff: true, verifying: true, source: 'rotation' });
-        if (verified.keepAliveError || !verified.usage || !eligibleAccount(verified.usage, this.now(), selectionSettings) ||
-          !requiredWindows.every(label => verified.usage!.windows.some(window => window.label === label))) {
-          entry.outcome = 'keepAliveFailed';
-          entry.detail = verified.keepAliveError ?? verified.usageError ?? 'usage unavailable';
-          this.log(`${provider}: not rotating to "${candidate.name}": ${entry.detail}`);
-          continue;
-        }
-        const verifiedReset = settings.resetAware && !forced ? imminentReset(verified.usage, this.now(), settings) : undefined;
-        if (verifiedReset) {
-          entry.outcome = 'resetSoon';
-          entry.detail = `usage resets in ${formatResetRemaining(verifiedReset, new Date(this.now()))}`;
-          if (!deferredUntil || verifiedReset < deferredUntil) { deferredUntil = verifiedReset; }
-          continue;
-        }
         if (this.profiles.activeProfileId(provider) !== active || !await this.profiles.matchesNative(provider, active)) { return 'the active login changed during the sweep'; }
         if (await this.profiles.activateProfile(provider, candidate.id, true)) {
           entry.outcome = 'chosen';
-          entry.usage = usageSnapshot(verified.usage);
           const stayedMs = this.stayed(provider, active);
           this.write(provider, 'rotation-stay', { activeId: candidate.id, checkedAt: this.now() });
           this.clearExhausted(provider, candidate.id, 'switch');
           this.log(`${provider}: automatically rotated to "${candidate.name}" (${strategy}, ${modelFallback ? 'general quota fallback; model limit remains' : exhausted ? 'active account at its limit' : 'better account available'})`);
           this.history?.record({ type: 'switch', provider, from: this.account(provider, active), to: this.account(provider, candidate.id),
             reason: exhausted ? 'limit' : 'proactive', automatic: true, ...(stayedMs !== undefined ? { stayedMs } : {}),
-            fromUsage: usageSnapshot(current), toUsage: usageSnapshot(verified.usage), settings: snapshot, candidates: evaluated, calls });
+            fromUsage: usageSnapshot(current), toUsage: usageSnapshot(candidateUsage!), settings: snapshot, candidates: evaluated, calls });
           await this.afterActivate(provider, { kind: 'activated', accountChanged: true });
           return undefined;
         }

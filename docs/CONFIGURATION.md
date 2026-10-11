@@ -488,6 +488,7 @@ in between two accounts. Once the wait runs out, the notification says that the 
 | `keepAlive.enabled` | `true` | `true` | Periodically check every saved account, including inactive ones, with the smallest model; this also keeps their logins refreshed. |
 | `autoRotate.enabled` | `true` | `true` | Switch accounts automatically at a threshold or, with `proactive`, when another account scores clearly better. |
 | `autoReset.enabled` | — | `true` | Automatically redeem an earned Codex rate-limit reset credit when the active saved account is limited and the timing rules favor a reset. |
+| `autoRotate.updateUsageBeforeRotation` | `false` | `false` | Read the target account's usage right before a rotation switch (a usage call, never a keep-alive). Off: stored readings decide, a window that has reset since counts as fresh. |
 | `autoRotate.resetAware` | — | `true` | Avoid automatic Codex switches in the five minutes before a reported quota reset; recheck after it. |
 | `keepAlive.periodHours` | `2` | `6` | Per-account keep-alive period, minimum 0.25 hours. |
 | `autoRotate.fiveHourThresholdPercent` | `95` | `100` | Threshold for the 5h window; Codex's default rotates only on a used-up window. |

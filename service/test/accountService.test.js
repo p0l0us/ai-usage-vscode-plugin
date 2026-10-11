@@ -144,6 +144,8 @@ test('an observed reading of the active account is stored, and a hand-run sweep 
   const work = await f.call('profiles.saveNative', { provider: 'claude', name: 'Work' });
   await f.call('profiles.importCredential', { provider: 'claude', name: 'Backup', credential: claudeLogin('b') });
   const reading = usage('claude', [50, 5]);
+  // Backup has no stored reading, so the sweep has to read it right before the switch.
+  await f.call('config.set', { values: { 'claude.autoRotate.updateUsageBeforeRotation': true } });
   await f.call('usage.live', { provider: 'claude' });
   let view = await f.call('profiles.list', { provider: 'claude' });
   assert.equal(view.profiles[0].usage.windows[0].usedPercent, 50);
@@ -154,8 +156,8 @@ test('an observed reading of the active account is stored, and a hand-run sweep 
   const rotated = f.events.find((event) => event.event === 'activated' && event.automatic);
   assert.ok(rotated);
   assert.match(rotated.message, /automatically rotated to account “Backup”/);
-  // Backup was read and then verified with a keep-alive before the switch.
-  assert.deepEqual(f.probes.filter(([, token]) => token === 'b').map(([, , keepAlive]) => keepAlive), [false, true]);
+  // Backup's usage was read before the switch; rotation sends no keep-alive.
+  assert.deepEqual(f.probes.filter(([, token]) => token === 'b').map(([, , keepAlive]) => keepAlive), [false]);
   view = await f.call('profiles.list', { provider: 'claude' });
   assert.equal(view.activeNumber, 2);
   const again = await f.call('automation.rotateNow', { provider: 'claude' });

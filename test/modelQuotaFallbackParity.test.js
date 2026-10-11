@@ -20,7 +20,7 @@ async function fixture(t, mode, scenario) {
   const accounts = structuredClone(screenshot);
   if (scenario === 'prefer') accounts.b[2][1] = 30;
   if (scenario === 'verify') accounts.b = structuredClone(accounts.c);
-  setFixture(f.home, { accounts, ...(scenario === 'verify' ? { exhaustOnVerify: 'a' } : {}) });
+  setFixture(f.home, { accounts });
   if (mode === 'embedded') {
     f.host = await startServiceHost(options(f.home, mode)); f.cleanups.push(() => f.host.stop());
   } else {
@@ -38,7 +38,7 @@ async function fixture(t, mode, scenario) {
   f.client = await ServiceClient.connect({ home: f.home, client: 'model-fallback-window', subscribe: 'all' });
   f.cleanups.push(() => f.client.close());
   const config = await f.client.getConfigState();
-  await f.client.patchConfig({ 'claude.cliPath': path.join(f.home, 'native-cli-forbidden'), 'codex.cliPath': path.join(f.home, 'native-cli-forbidden'), 'claude.autoRotate.modelLimits': 'always' }, config.revision);
+  await f.client.patchConfig({ 'claude.cliPath': path.join(f.home, 'native-cli-forbidden'), 'codex.cliPath': path.join(f.home, 'native-cli-forbidden'), 'claude.autoRotate.modelLimits': 'always', ...(scenario === 'verify' ? { 'claude.autoRotate.updateUsageBeforeRotation': true } : {}) }, config.revision);
   f.ids = {};
   for (const key of Object.keys(accounts)) {
     const saved = await f.client.importCredential('claude', `Claude ${key}`, { claudeAiOauth: { accessToken: key, expiresAt: Date.now() + 86_400_000 } });
@@ -46,6 +46,8 @@ async function fixture(t, mode, scenario) {
   }
   await f.client.activate('claude', f.ids[scenario === 'stay' ? 'a' : 'c']);
   for (const id of Object.values(f.ids)) await f.client.call('usage.read', { provider: 'claude', id });
+  // With the pre-rotation usage read on, `a` looks usable in storage but reads exhausted when rotation checks it.
+  if (scenario === 'verify') setFixture(f.home, { accounts, exhaustOnVerify: 'a' });
   return f;
 }
 for (const mode of ['background', 'embedded']) {

@@ -48,6 +48,7 @@ export type RotationSnapshot = {
   trigger: string;
   autoReset?: boolean;
   resetAware?: boolean;
+  updateUsageBeforeRotation?: boolean;
   fiveHourThresholdPercent: number;
   weeklyThresholdPercent: number;
   minStayMinutes?: number;

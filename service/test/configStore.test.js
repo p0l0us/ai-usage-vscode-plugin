@@ -15,6 +15,8 @@ test('defaults match the extension settings: Claude rotates at 95/99.5, Codex at
   assert.equal(config.codex.autoRotate.strategy, 'leastWaste');
   assert.equal(config.codex.autoRotate.resetAware, true);
   assert.equal(config.codex.autoReset.enabled, true);
+  assert.equal(config.claude.autoRotate.updateUsageBeforeRotation, false);
+  assert.equal(config.codex.autoRotate.updateUsageBeforeRotation, false);
   assert.equal(config.codex.keepAlive.periodHours, 6);
   assert.equal(config.codex.keepAlive.model, 'gpt-5.6-luna');
   assert.equal(config.claude.keepAlive.enabled, true);
@@ -51,6 +53,13 @@ test('setConfigValue coerces command-line strings, validates and never mutates t
   assert.equal(getConfigValue(setConfigValue(config, 'codex.autoRotate.strategy', 'evenPace'), 'codex.autoRotate.strategy'), 'evenPace');
   assert.equal(getConfigValue(setConfigValue(config, 'codex.autoRotate.resetAware', 'off'), 'codex.autoRotate.resetAware'), false);
   assert.equal(getConfigValue(setConfigValue(config, 'codex.autoReset.enabled', 'off'), 'codex.autoReset.enabled'), false);
+  for (const provider of ['claude', 'codex']) {
+    const key = `${provider}.autoRotate.updateUsageBeforeRotation`;
+    assert.equal(getConfigValue(config, key), false);
+    assert.equal(getConfigValue(setConfigValue(config, key, 'on'), key), true);
+    assert.equal(getConfigValue(setConfigValue(setConfigValue(config, key, 'on'), key, 'off'), key), false);
+    assert.throws(() => setConfigValue(config, key, 'maybe'), /true or false/);
+  }
   assert.throws(() => setConfigValue(config, 'copilot.keepAlive.enabled', true), /start with claude\. or codex\./);
   assert.throws(() => setConfigValue(config, 'claude.nothing', true), /Unknown setting/);
 });
@@ -62,6 +71,8 @@ test('listConfig lists every applicable key with Claude first and Codex without 
   assert.ok(keys.includes('claude.autoRotate.strategy'));
   assert.ok(keys.includes('codex.autoRotate.strategy'));
   assert.ok(keys.includes('codex.autoRotate.resetAware'));
+  assert.ok(keys.includes('claude.autoRotate.updateUsageBeforeRotation'));
+  assert.ok(keys.includes('codex.autoRotate.updateUsageBeforeRotation'));
   assert.ok(keys.includes('codex.autoReset.enabled'));
   assert.ok(keys.includes('codex.autoRotate.fiveHourThresholdPercent'));
   assert.equal(entries.length, ['claude', 'codex'].reduce((sum, provider) => sum + SETTINGS.filter(setting => !setting.providers || setting.providers.includes(provider)).length, 0) + GLOBAL_SETTINGS.length);
@@ -93,6 +104,8 @@ test('automation settings bound intervals and honor Codex strategy, trigger and 
   assert.equal(codex.trigger, 'proactive');
   assert.equal(codex.minStayMs, 15 * 60_000);
   assert.equal(codex.resetAware, true);
+  assert.equal(codex.updateUsageBeforeRotation, false);
+  assert.equal(claude.updateUsageBeforeRotation, false);
   assert.equal(codex.autoReset, true);
   assert.equal(codex.intervalMs, 6 * 3_600_000);
   assert.equal(strategySummary(config, 'claude'), 'leastWaste, proactive, 5h ≥ 95%, 7d ≥ 99.5%');

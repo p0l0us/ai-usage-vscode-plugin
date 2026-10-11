@@ -174,33 +174,41 @@ test('a profile reading from before reset cannot block activation or show the ol
 
 test('a weekly Codex limit skips exhausted next account and activates the next eligible one', async t => {
   const f = fixture(t, { values: { a: [10, 99.5], b: [99.5, 5] }, settings: { codex: { autoRotate: true } } });
-  f.observe('codex', [10, 99.5]);
+  f.observeAll('codex');
   await f.service.tick();
   assert.deepEqual(f.switches, [['codex', 'c', true]]);
-  // The active account's reading is moments old, so only candidates are read; the eligible one gets a real
-  // keep-alive before anything is switched.
-  assert.deepEqual(f.calls, [['codex', 'b', false], ['codex', 'c', false], ['codex', 'c', true]]);
+  // The stored readings decide: b is at its limit, c has headroom. The active account's reading is moments old and
+  // nothing is read or sent for a candidate.
+  assert.deepEqual(f.calls, []);
 });
 
-test('a candidate whose pre-switch keep-alive fails is reported and skipped for the next healthy account', async t => {
+test('a candidate whose periodic keep-alive failed for a non-login reason is still switched to; rotation sends no keep-alive', async t => {
   const f = fixture(t, { values: { a: [99.5, 10] }, keepAliveErrors: { b: 'Keep-alive CLI exited with code 1: Your workspace is out of credits.' },
     settings: { codex: { autoRotate: true } } });
-  f.observe('codex', [99.5, 10]);
-  await f.service.tick();
-  assert.deepEqual(f.switches, [['codex', 'c', true]]);
-  assert.deepEqual(f.problems, [['codex', 'b', 'Keep-alive CLI exited with code 1: Your workspace is out of credits.', false]]);
+  // b's own keep-alive failed (out of credits), which says nothing about its stored usage or its login.
+  await f.service.sendKeepAliveNow('codex', 'b');
   // The menu shows the problem in a few words, not the CLI's output.
   assert.match(f.service.usageDetail('codex', 'b'), /\$\(warning\) Insufficient credits$/);
+  f.observeAll('codex');
+  f.calls.length = 0;
+  await f.service.tick();
+  assert.deepEqual(f.switches, [['codex', 'b', true]]);
+  assert.deepEqual(f.calls, [], 'rotation reads nothing and sends no keep-alive');
 });
 
-test('a revoked candidate is never switched to and is announced once per credential', async t => {
+test('a revoked candidate is never switched to, costs no call, and is announced once per credential', async t => {
   const revoked = 'Keep-alive CLI exited with code 1: Your access token could not be refreshed because your refresh token was revoked. Please log out and sign in again.';
   const f = fixture(t, { values: { a: [99.5, 10], c: [99.5, 10] }, keepAliveErrors: { b: revoked }, settings: { codex: { autoRotate: true } } });
-  f.observe('codex', [99.5, 10]);
+  // The periodic keep-alive of b finds the dead login; b's stored reading alone would make it the best candidate.
+  await f.service.sendKeepAliveNow('codex', 'b');
+  f.observeAll('codex');
+  f.calls.length = 0;
   await f.service.tick();
   f.advance(600001);
   await f.service.tick();
+  await f.service.sendKeepAliveNow('codex', 'b');
   assert.deepEqual(f.switches, []);
+  assert.ok(!f.calls.some(call => call[1] === 'b' && !call[2]), 'no usage call on b during rotation');
   assert.deepEqual(f.problems, [['codex', 'b', revoked, true]]);
 });
 
@@ -258,17 +266,18 @@ test('a merely expired token is a login problem to check again, not one to annou
 
 test('all exhausted accounts leave the active login unchanged and throttle repeated sweeps', async t => {
   const f = fixture(t, { values: { b: [99.5, 5], c: [5, 100] }, settings: { codex: { autoRotate: true } } });
-  f.observe('codex', [99.5, 10]);
+  f.observeAll('codex');
   await f.service.tick();
   await f.service.tick();
-  assert.equal(f.calls.length, 2);
+  // The stored readings decide, so the exhausted candidates cost no call at all.
+  assert.equal(f.calls.length, 0);
   assert.deepEqual(f.switches, []);
-  // Their stored readings reset in a day; until then they are not read again, since they cannot have recovered.
+  // Their stored readings reset in a day; until then they stay out, whatever they would read now.
   f.advance(600001);
   f.values.b = [2, 2];
   await f.service.tick();
   assert.deepEqual(f.switches, []);
-  assert.deepEqual(f.calls.slice(2), [['codex', 'a', false]]);
+  assert.deepEqual(f.calls, [['codex', 'a', false]]);
   f.advance(86400000);
   await f.service.tick();
   assert.deepEqual(f.switches, [['codex', 'b', true]]);
@@ -354,7 +363,7 @@ test('manual keep-alive runs while disabled, updates account stats, and resets i
 test('rotation wraps once through saved order without selecting current account', async t => {
   const f = fixture(t, { values: { c: [99.5, 0], a: [1, 1] }, settings: { codex: { autoRotate: true } } });
   f.active.codex = 'c';
-  f.observe('codex', [99.5, 0]);
+  f.observeAll('codex');
   await f.service.tick();
   assert.deepEqual(f.switches, [['codex', 'a', true]]);
 });
@@ -364,7 +373,7 @@ test('per-service rotation threshold controls triggering and candidate eligibili
     values: { a: [80, 10], b: [79.9, 20] },
     settings: { codex: { autoRotate: true, fiveHourThresholdPercent: 80, weeklyThresholdPercent: 80 } }
   });
-  f.observe('codex', [80, 10]);
+  f.observeAll('codex');
   await f.service.tick();
   assert.deepEqual(f.switches, [['codex', 'b', true]]);
 });
@@ -411,7 +420,8 @@ test('soonest reset skips 5h-locked accounts and defers one spending its week to
   await f.service.tick();
   // e resets in 4 days and is behind pace; a resets later and is 42 points ahead with most of its week left.
   assert.deepEqual(f.switches, [['claude', 'e', true]]);
-  assert.deepEqual(f.calls, [['claude', 'e', false], ['claude', 'e', true]]);
+  // Chosen from the stored readings alone: nothing is read or sent for e.
+  assert.deepEqual(f.calls, []);
 });
 
 test('proactive soonest reset keeps the account resetting first without spending any calls', async t => {
@@ -445,13 +455,13 @@ test('proactive even pace leaves an account ahead of pace, but only after the mi
 
 test('proactive rotation does not switch when the fresh reading no longer shows a better account', async t => {
   const f = fixture(t, { ids: ['a', 'b', 'c', 'd', 'e'], values: afternoon,
-    settings: { claude: { autoRotate: true, strategy: 'evenPace', trigger: 'proactive', minStayMs: 0 } } });
+    settings: { claude: { autoRotate: true, strategy: 'evenPace', trigger: 'proactive', minStayMs: 0, updateUsageBeforeRotation: true } } });
   f.active.claude = 'c';
   f.observeAll('claude');
   f.values.e = [['5h', 53, 4], ['7d', 95, 96], ['7d Fable', 95, 96]];
   await f.service.tick();
   assert.deepEqual(f.switches, []);
-  assert.deepEqual(f.calls.map(call => call[1]), ['e']);
+  assert.deepEqual(f.calls, [['claude', 'e', false]], 'a usage read of the candidate, no keep-alive');
 });
 
 test('least waste prefers the most allowance per hour over the soonest reset', async t => {
@@ -496,7 +506,7 @@ test('Codex reset awareness can be disabled and manual rotation bypasses it', as
     const f = fixture(t, { ids: ['a', 'b'], values: {
       a: [['5h', 100, 1 / 60], ['7d', 10, 100]], b: [10, 10]
     }, settings: { codex: { autoRotate: !manual, resetAware: manual } } });
-    f.observe('codex', f.values.a);
+    f.observeAll('codex');
     if (manual) { assert.deepEqual(await f.service.rotateNow('codex'), { switched: true }); }
     else { await f.service.tick(); }
     assert.deepEqual(f.switches, [['codex', 'b', true]]);
@@ -518,6 +528,7 @@ test('Codex rotates before spending a reset credit unless the credit is about to
   const later = fixture(t, { ids: ['a', 'b'], credits: { a: 2 },
     values: { a: [['5h', 100, 10], ['7d', 10, 100]], b: [10, 10] },
     settings: { codex: { autoReset: true, autoRotate: true, resetAware: true, strategy: 'sequential' } } });
+  later.observe('codex', later.values.b, 'b');
   await later.service.tick();
   assert.deepEqual(later.switches, [['codex', 'b', true]]);
   assert.equal(later.resets.length, 0);
@@ -608,10 +619,11 @@ test('a cached window whose reset has passed ranks as fresh', () => {
 
 test('a reading that reaches a threshold rotates at once, without waiting for a tick or re-reading the account', async t => {
   const f = fixture(t, { settings: { claude: { autoRotate: true, fiveHourThresholdPercent: 91 } } });
+  f.observeAll('claude');
   f.observe('claude', [91, 10]);
   await f.service.tick(); // joins the rotation the reading started
   assert.deepEqual(f.switches, [['claude', 'b', true]]);
-  assert.deepEqual(f.calls, [['claude', 'b', false], ['claude', 'b', true]]);
+  assert.deepEqual(f.calls, [], 'the stored reading of b decides; nothing is read or sent');
 });
 
 test('a reading below every threshold does not start rotation', async t => {
@@ -625,6 +637,7 @@ test('a sweep that cannot read the active account retries once its pause ends, n
   const f = fixture(t, { values: { a: undefined }, transientErrors: { a: true }, settings: { claude: { autoRotate: false } } });
   // A rate-limited check pauses the active account's checks for the 10-minute interval.
   await f.service.sendKeepAliveNow('claude', 'a');
+  f.observeAll('claude');
   f.observe('claude', [99.5, 10]);
   f.advance(8 * 60000);
   f.settings.claude.autoRotate = true;
@@ -656,6 +669,7 @@ test('a session-log reading at the threshold makes the sweep read the active acc
     settings: { codex: { autoRotate: true, fiveHourThresholdPercent: 100, weeklyThresholdPercent: 90 } }
   });
   // The stored reading of the active account predates the limit.
+  f.observe('codex', [10, 50], 'b');
   f.observe('codex', [10, 40]);
   await f.service.tick();
   assert.deepEqual(f.switches, []);
@@ -698,7 +712,7 @@ test('a keep-alive sweep rotates as soon as the active account reaches its limit
 test('a hold stops the service\'s sweeps and rotation and refuses hand-run checks until it is resumed or runs out', async t => {
   const f = fixture(t, { values: { a: [99.5, 10], b: [10, 10] }, settings: { codex: { enabled: true, autoRotate: true } } });
   f.service.hold('codex', 'a Codex sign-in is in progress', 60_000);
-  f.observe('codex', [99.5, 10]);
+  f.observeAll('codex');
   await f.service.tick();
   assert.deepEqual(f.calls, []);
   assert.deepEqual(f.switches, []);
@@ -718,16 +732,16 @@ test('a hold stops the service\'s sweeps and rotation and refuses hand-run check
   assert.equal(f.service.heldFor('codex'), undefined);
 });
 
-test('an account whose last check failed is not switched to, and costs no call, until a later check succeeds', async t => {
-  const failure = 'Keep-alive CLI exited with code 1: workspace routing discovery unavailable';
+test('an account whose last check found a login problem is not switched to, and costs no call, until a later check succeeds', async t => {
+  const failure = 'Keep-alive CLI exited with code 1: Failed to authenticate: OAuth session expired and could not be refreshed';
   const f = fixture(t, { values: { a: [99.5, 10], b: [10, 10], c: [10, 10] }, keepAliveErrors: { b: failure }, settings: { codex: { autoRotate: true } } });
   // b's failed keep-alive marks it.
   await f.service.sendKeepAliveNow('codex', 'b');
+  f.observeAll('codex');
   f.calls.length = 0;
-  f.observe('codex', [99.5, 10]);
   await f.service.tick();
   assert.deepEqual(f.switches, [['codex', 'c', true]]);
-  assert.ok(!f.calls.some(call => call[1] === 'b'), JSON.stringify(f.calls));
+  assert.deepEqual(f.calls, [], 'no call for b or c');
   assert.ok(f.messages.some(message => /not rotating to "b": its last check failed/.test(message)), f.messages.join('\n'));
   // Once a keep-alive of b succeeds, it is a candidate again.
   delete f.options.keepAliveErrors.b;
@@ -741,33 +755,33 @@ test('an account whose last check failed is not switched to, and costs no call, 
 
 test('accounts left out for a failed last check are named when no candidate remains', async t => {
   const f = fixture(t, { ids: ['a', 'b'], values: { a: [99.5, 10], b: [10, 10] },
-    keepAliveErrors: { b: 'Keep-alive CLI exited with code 1: workspace routing discovery unavailable' }, settings: { codex: { autoRotate: true } } });
+    keepAliveErrors: { b: 'Keep-alive CLI exited with code 1: Failed to authenticate: OAuth session expired and could not be refreshed' }, settings: { codex: { autoRotate: true } } });
   const notices = [];
   f.service.onNoCandidate = (provider, detail) => notices.push(detail);
   await f.service.sendKeepAliveNow('codex', 'b');
-  f.observe('codex', [99.5, 10]);
+  f.observeAll('codex');
   await f.service.tick();
   assert.deepEqual(f.switches, []);
   assert.equal(notices.length, 1);
-  assert.match(notices[0], /left out for a failed last check: "b" \(.*workspace routing discovery unavailable/);
+  assert.match(notices[0], /left out for a failed last check: "b" \(Login expired\)/);
 });
 
 test('a candidate still at its limit by its stored reading, with the reset ahead, costs a limit sweep nothing until that reset', async t => {
   const f = fixture(t, { values: { a: [99.5, 10], b: [10, 10], c: [10, 10] }, settings: { codex: { autoRotate: true } } });
   // b's stored reading: weekly window at the threshold, resetting in 2 hours.
+  f.observeAll('codex');
   f.observe('codex', [['5h', 10, 1], ['7d', 99.5, 2]], 'b');
-  f.observe('codex', [99.5, 10]);
   await f.service.tick();
   assert.deepEqual(f.switches, [['codex', 'c', true]]);
-  assert.ok(!f.calls.some(call => call[1] === 'b'), JSON.stringify(f.calls));
-  // Once that reset has passed, b is read again and can be switched to; a's stored reading still blocks it.
+  assert.deepEqual(f.calls, [], 'neither b nor c costs a call');
+  // Once that reset has passed, b's stored reading counts as fresh and it can be switched to; a's stored reading still blocks it.
   f.values.c = [99.5, 10];
   f.observe('codex', [99.5, 10], 'c');
   f.advance(2 * HOUR + 1);
   f.calls.length = 0;
   await f.service.tick();
   assert.deepEqual(f.switches.at(-1), ['codex', 'b', true]);
-  assert.deepEqual(f.calls.map(call => call[1]), ['c', 'b', 'b']);
+  assert.deepEqual(f.calls, [['codex', 'c', false]], 'only the active account is read; b is chosen from its stored reading');
 });
 
 test('accounts still at their limit by their last reading are named with their reset when no candidate remains, and nothing is spent', async t => {
@@ -852,17 +866,19 @@ test('a rotation sweep by hand waits for a running sweep too, and reports a hold
 });
 
 test('the history records the readings of a sweep and the switch with every candidate and its outcome', async t => {
-  const f = fixture(t, { history: true, values: { a: [10, 99.5], b: [99.5, 5] }, settings: { codex: { autoRotate: true } } });
+  const f = fixture(t, { history: true, values: { a: [10, 99.5], b: [99.5, 5] },
+    settings: { codex: { autoRotate: true, updateUsageBeforeRotation: true } } });
   f.observe('codex', [10, 99.5]);
   await f.service.tick();
   assert.deepEqual(f.switches, [['codex', 'c', true]]);
+  assert.deepEqual(f.calls, [['codex', 'b', false], ['codex', 'c', false]], 'usage reads only, no keep-alive');
   const events = f.events();
-  // c was read and then verified with a keep-alive; the second reading showed the same figures and is not repeated.
+  // With the option on, b and c are read right before the switch.
   assert.deepEqual(events.map(e => [e.type, e.type === 'reading' ? `${e.account.id}:${e.source}:${e.active}` : e.reason]),
     [['reading', 'a:status:true'], ['reading', 'b:rotation:false'], ['reading', 'c:rotation:false'], ['switch', 'limit']]);
   const sw = events[3];
-  assert.deepEqual([sw.from, sw.to, sw.automatic, sw.calls, sw.stayedMs], [{ id: 'a', name: 'a' }, { id: 'c', name: 'c' }, true, 3, undefined]);
-  assert.deepEqual(sw.settings, { strategy: 'sequential', trigger: 'limit', fiveHourThresholdPercent: 99.5, weeklyThresholdPercent: 99.5 });
+  assert.deepEqual([sw.from, sw.to, sw.automatic, sw.calls, sw.stayedMs], [{ id: 'a', name: 'a' }, { id: 'c', name: 'c' }, true, 2, undefined]);
+  assert.deepEqual(sw.settings, { strategy: 'sequential', trigger: 'limit', fiveHourThresholdPercent: 99.5, weeklyThresholdPercent: 99.5, updateUsageBeforeRotation: true });
   assert.deepEqual(sw.fromUsage.windows.map(w => w.usedPercent), [10, 99.5]);
   assert.deepEqual(sw.toUsage.windows.map(w => w.usedPercent), [20, 20]);
   assert.deepEqual(sw.candidates.map(c => [c.account.id, c.usable, c.outcome, c.usage?.windows.map(w => w.usedPercent)]),
@@ -917,7 +933,7 @@ test('the history records a check when it starts failing and when it works again
 
 test('a sweep that spends calls without switching is recorded with what it found', async t => {
   const f = fixture(t, { history: true, ids: ['a', 'b', 'c', 'd', 'e'], values: afternoon,
-    settings: { claude: { autoRotate: true, strategy: 'evenPace', trigger: 'proactive', minStayMs: 0 } } });
+    settings: { claude: { autoRotate: true, strategy: 'evenPace', trigger: 'proactive', minStayMs: 0, updateUsageBeforeRotation: true } } });
   f.active.claude = 'c';
   f.observeAll('claude');
   f.values.e = [['5h', 53, 4], ['7d', 95, 96], ['7d Fable', 95, 96]];
@@ -968,7 +984,7 @@ for (const provider of ['claude', 'codex']) for (const strategy of ['sequential'
 }
 test('diagnostics explain imminent resets, unknown accounts and failed checks', async t => {
   const f = fixture(t, { values: { a: [['5h', 100, 0.04], ['7d', 10, 72]], b: null, c: [10, 10] },
-    settings: { codex: { strategy: 'leastWaste', autoRotate: false, resetAware: true } }, keepAliveErrors: { c: 'OAuth token expired' } });
+    settings: { codex: { strategy: 'leastWaste', autoRotate: false, resetAware: true } }, keepAliveErrors: { c: 'Keep-alive CLI exited with code 1: Failed to authenticate: OAuth session expired and could not be refreshed' } });
   f.observeAll('codex'); await f.service.sendKeepAliveNow('codex', 'c'); f.settings.codex.autoRotate = true;
   const d = f.service.diagnostics('codex'); assert.match(d.reason, /Waiting.*reset/);
   assert.match(d.candidates.find(c => c.id === 'b').reason, /No usage/);
@@ -1102,7 +1118,7 @@ const modelFallbackScreenshot = {
 };
 function modelFallbackFixture(t, options = {}) {
   const f = fixture(t, { ids: ['a', 'b', 'c', 'd', 'e'], values: modelFallbackScreenshot,
-    settings: { claude: { countsWindow: modelWindowFilter('auto', 'fable'), strategy: options.strategy || 'sequential' } }, ...options });
+    ...options, settings: { claude: { countsWindow: modelWindowFilter('auto', 'fable'), strategy: options.strategy || 'sequential', ...options.settings?.claude } } });
   f.active.claude = options.active || 'c';
   f.observeAll('claude'); f.settings.claude.autoRotate = true;
   return f;
@@ -1136,18 +1152,25 @@ test('Claude fallback keeps configured general thresholds and never accepts unkn
   await f.service.tick(); assert.deepEqual(f.switches, []);
 });
 
-test('Claude fallback verifies quota again after keep-alive and rejects a now-general-exhausted candidate', async t => {
+test('Claude fallback verifies quota on the pre-switch usage read and rejects a now-general-exhausted candidate', async t => {
   const f = modelFallbackFixture(t, { values: { ...modelFallbackScreenshot, b: modelFallbackScreenshot.c },
+    settings: { claude: { updateUsageBeforeRotation: true } },
     beforeProbe: async (provider, credential, keepAlive) => {
-      if (provider === 'claude' && credential.id === 'a' && keepAlive) f.values.a = modelFallbackScreenshot.d;
+      if (provider === 'claude' && credential.id === 'a' && !keepAlive) f.values.a = modelFallbackScreenshot.d;
     } });
   await f.service.tick(); assert.deepEqual(f.switches, []);
+  assert.ok(f.calls.some(call => call[1] === 'a' && !call[2]), 'a was read right before the switch');
+  assert.ok(!f.calls.some(call => call[2]), 'no keep-alive during rotation');
 });
 
-test('Claude fallback retains failed-login checks and never changes the configured keep-alive model', async t => {
-  const f = modelFallbackFixture(t, { keepAliveErrors: { a: 'invalid credentials', b: 'invalid credentials' } });
+test('Claude fallback skips candidates with a login problem without a call and never changes the configured keep-alive model', async t => {
+  const expired = 'Keep-alive CLI exited with code 1: Failed to authenticate: OAuth session expired and could not be refreshed';
+  const f = modelFallbackFixture(t, { keepAliveErrors: { a: expired, b: expired } });
   const model = f.settings.claude.model;
+  await f.service.sendKeepAliveNow('claude', 'a'); await f.service.sendKeepAliveNow('claude', 'b');
+  f.calls.length = 0;
   await f.service.tick(); assert.deepEqual(f.switches, []); assert.equal(f.settings.claude.model, model);
+  assert.ok(!f.calls.some(call => call[1] === 'a' || call[1] === 'b'), JSON.stringify(f.calls));
 });
 
 for (const mode of ['never', 'auto', 'always']) {
@@ -1160,4 +1183,79 @@ for (const mode of ['never', 'auto', 'always']) {
 test('Codex model-window eligibility remains strict; Claude fallback does not apply to other providers', async t => {
   const f = fixture(t, { ids: ['a', 'b'], values: { a: modelFallbackScreenshot.c, b: modelFallbackScreenshot.a }, settings: { codex: { autoRotate: true } } });
   f.observeAll('codex'); await f.service.tick(); assert.deepEqual(f.switches, []);
+});
+
+test('by default a rotation switches to a candidate by its stored reading, with no usage call and no keep-alive for it', async t => {
+  const f = fixture(t, { values: { a: [99.5, 10], b: [30, 40], c: [50, 50] }, settings: { codex: { autoRotate: true } } });
+  assert.equal(f.settings.codex.updateUsageBeforeRotation, undefined);
+  f.observeAll('codex');
+  await f.service.tick();
+  assert.deepEqual(f.switches, [['codex', 'b', true]]);
+  assert.deepEqual(f.calls, []);
+});
+
+test('by default a stored reading whose 5h window has reset since counts as fresh, and is still switched to without a call', async t => {
+  const f = fixture(t, { values: { a: [99.5, 10], b: [10, 10] }, settings: { codex: { autoRotate: true } } });
+  // b was at its 5h limit when read; that window reset an hour ago.
+  f.observe('codex', [['5h', 100, 1], ['7d', 10, 48]], 'b');
+  f.observe('codex', [['5h', 99.5, 8], ['7d', 10, 48]]);
+  f.advance(2 * HOUR);
+  f.observe('codex', [99.5, 10]);
+  await f.service.tick();
+  assert.deepEqual(f.switches, [['codex', 'b', true]]);
+  assert.ok(!f.calls.some(call => call[1] === 'b'), JSON.stringify(f.calls));
+});
+
+test('by default a candidate with no stored reading is not switched to and costs no call', async t => {
+  const f = fixture(t, { history: true, ids: ['a', 'b'], values: { a: [99.5, 10], b: [10, 10] }, settings: { codex: { autoRotate: true } } });
+  f.observe('codex', [99.5, 10]);
+  await f.service.tick();
+  assert.deepEqual(f.switches, []);
+  assert.deepEqual(f.calls, []);
+  const sweep = f.events().find(e => e.type === 'sweep' || e.type === 'exhausted');
+  assert.ok(sweep, 'the failed rotation is recorded');
+  const b = sweep.candidates.find(c => c.account.id === 'b');
+  assert.equal(b.outcome, 'ineligible');
+  assert.equal(b.detail, 'no stored reading yet');
+});
+
+test('by default a candidate whose stored reading shows no headroom is ineligible without a call', async t => {
+  const f = fixture(t, { history: true, ids: ['a', 'b'], values: { a: [99.5, 10], b: [99.5, 10] }, settings: { codex: { autoRotate: true } } });
+  f.observeAll('codex');
+  await f.service.tick();
+  assert.deepEqual(f.switches, []);
+  assert.deepEqual(f.calls, []);
+});
+
+test('with updateUsageBeforeRotation the candidate usage is read right before the switch, as a usage call only', async t => {
+  const f = fixture(t, { ids: ['a', 'b'], values: { a: [99.5, 10], b: [10, 10] },
+    settings: { codex: { autoRotate: true, updateUsageBeforeRotation: true } } });
+  f.observe('codex', [99.5, 10]);
+  await f.service.tick();
+  assert.deepEqual(f.switches, [['codex', 'b', true]]);
+  assert.deepEqual(f.calls, [['codex', 'b', false]]);
+});
+
+test('with updateUsageBeforeRotation a candidate whose stored reading looked fine but reads exhausted is rejected, without any keep-alive', async t => {
+  const f = fixture(t, { ids: ['a', 'b', 'c'], values: { a: [99.5, 10], b: [10, 10], c: [20, 20] },
+    settings: { codex: { autoRotate: true, updateUsageBeforeRotation: true } } });
+  f.observeAll('codex');
+  f.values.b = [99.5, 10];
+  await f.service.tick();
+  assert.deepEqual(f.switches, [['codex', 'c', true]]);
+  assert.deepEqual(f.calls, [['codex', 'b', false], ['codex', 'c', false]]);
+  assert.ok(!f.calls.some(call => call[2]), 'no keep-alive');
+});
+
+test('a candidate whose keep-alive failed for a non-login reason is not blocked, but a login problem is', async t => {
+  const f = fixture(t, { ids: ['a', 'b', 'c'], values: { a: [99.5, 10], b: [10, 10], c: [20, 20] },
+    keepAliveErrors: { b: 'Keep-alive CLI exited with code 1: out of credits' }, settings: { codex: { autoRotate: true } } });
+  await f.service.sendKeepAliveNow('codex', 'b');
+  assert.ok(f.service.accountState('codex', 'b').keepAliveError, 'the failure is recorded');
+  assert.equal(f.service.loginProblem('codex', 'b'), undefined);
+  f.observeAll('codex');
+  f.calls.length = 0;
+  await f.service.tick();
+  assert.deepEqual(f.switches, [['codex', 'b', true]]);
+  assert.deepEqual(f.calls, []);
 });

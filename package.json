@@ -2,7 +2,7 @@
   "name": "ai-usage-vscode-plugin",
   "displayName": "AI subscription management and usage",
   "description": "Manage your Claude Code, Codex and GitHub Copilot subscriptions and see what is left of them: switch between saved accounts without signing in again, keep them warm, rotate on exhaustion, and read live 5h/7d windows, premium requests and org billing in the status bar and chat input. Open source, contributions welcome.",
-  "version": "1.3.1",
+  "version": "1.4.0",
   "publisher": "p0l0us",
   "license": "GPL-3.0-only",
   "repository": {
@@ -7232,6 +7232,13 @@
             "markdownDescription": "**Claude minimum stay before a proactive switch, in minutes.** With the `proactive` trigger, an account that became active, automatically or by hand, is kept at least this long unless it reaches its limit.",
             "order": 13
           },
+          "aiUsage.claude.autoRotate.updateUsageBeforeRotation": {
+            "type": "boolean",
+            "default": false,
+            "scope": "machine",
+            "order": 13.1,
+            "markdownDescription": "**Update usage before Claude rotation.** Off (default): rotation chooses the next account from the readings the service already stores (a window that has reset since the reading counts as fresh), makes no call to the provider and never sends a keep-alive. On: the usage of the account about to be switched to is read right before the switch (a usage call only, never a keep-alive), which helps when the account is also used from another computer. Keep-alives run on their own schedule (`#aiUsage.claude.keepAlive.enabled#`)."
+          },
           "aiUsage.claude.keepAlive.home": {
             "type": "string",
             "default": "~/.claude-profile-{number}",
@@ -7456,6 +7463,13 @@
             "scope": "machine",
             "order": 14,
             "markdownDescription": "**Codex minimum stay before a proactive switch.** Limit-triggered rotation ignores this stay."
+          },
+          "aiUsage.codex.autoRotate.updateUsageBeforeRotation": {
+            "type": "boolean",
+            "default": false,
+            "scope": "machine",
+            "order": 14.1,
+            "markdownDescription": "**Update usage before Codex rotation.** Off (default): rotation chooses the next account from the readings the service already stores (a window that has reset since the reading counts as fresh), makes no call to the provider and never sends a keep-alive. On: the usage of the account about to be switched to is read right before the switch (a usage call only, never a keep-alive), which helps when the account is also used from another computer. Keep-alives run on their own schedule (`#aiUsage.codex.keepAlive.enabled#`)."
           },
           "aiUsage.codex.switchRestartHint": {
             "type": "boolean",

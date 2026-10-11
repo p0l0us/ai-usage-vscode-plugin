@@ -246,6 +246,12 @@ export const SETTINGS_CATALOG = [
     "description": "**Claude minimum stay before a proactive switch, in minutes.** With the `proactive` trigger, an account that became active, automatically or by hand, is kept at least this long unless it reaches its limit."
   },
   {
+    "key": "claude.autoRotate.updateUsageBeforeRotation",
+    "type": "boolean",
+    "default": false,
+    "description": "**Update usage before Claude rotation.** Off (default): rotation chooses the next account from the readings the service already stores (a window that has reset since the reading counts as fresh), makes no call to the provider and never sends a keep-alive. On: the usage of the account about to be switched to is read right before the switch (a usage call only, never a keep-alive), which helps when the account is also used from another computer. Keep-alives run on their own schedule (`#aiUsage.claude.keepAlive.enabled#`)."
+  },
+  {
     "key": "claude.keepAlive.home",
     "type": "string",
     "default": "~/.claude-profile-{number}",
@@ -414,6 +420,12 @@ export const SETTINGS_CATALOG = [
     "max": 10080,
     "default": 15,
     "description": "**Codex minimum stay before a proactive switch.** Limit-triggered rotation ignores this stay."
+  },
+  {
+    "key": "codex.autoRotate.updateUsageBeforeRotation",
+    "type": "boolean",
+    "default": false,
+    "description": "**Update usage before Codex rotation.** Off (default): rotation chooses the next account from the readings the service already stores (a window that has reset since the reading counts as fresh), makes no call to the provider and never sends a keep-alive. On: the usage of the account about to be switched to is read right before the switch (a usage call only, never a keep-alive), which helps when the account is also used from another computer. Keep-alives run on their own schedule (`#aiUsage.codex.keepAlive.enabled#`)."
   },
   {
     "key": "codex.switchRestartHint",

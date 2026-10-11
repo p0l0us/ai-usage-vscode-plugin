@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.4.0 (2026-10-11)
+
+- Rotation is no longer held up by keep-alives. It chooses the next account from the readings the service already stores (a window whose reset time has passed counts as fresh), makes no call to the provider for the candidate and no longer sends a keep-alive before switching. Keep-alives stay a separate periodic update. A keep-alive that failed for a reason other than a login problem (a CLI error, no credits) no longer excludes an account from rotation; an expired or revoked login still does.
+- New setting `aiUsage.claude.autoRotate.updateUsageBeforeRotation` / `aiUsage.codex.autoRotate.updateUsageBeforeRotation` (**Update usage before rotation**, off by default): when on, the usage of the account about to be switched to is read right before the switch (a usage call, never a keep-alive), for accounts that other computers also use.
+
 ## 1.3.1 (2026-10-11)
 
 - Automatic Claude and Codex account rotation is on by default in the extension and the standalone service. Installs that already saved the setting keep their value.

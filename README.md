@@ -155,7 +155,7 @@ details panel); **Back** leads to the AI Usage menu of all services. This menu l
 you switch accounts manually, save the current login to a new or existing profile, and send a keep-alive on
 demand. **Account keep-alive and usage collection** (`aiUsage.<service>.keepAlive.enabled`) and **automatic
 account rotation** (`aiUsage.<service>.autoRotate.enabled`) are set in Settings, independently per service
-(keep-alive is on by default with the smallest model, rotation off); the menu shows what each one is set to.
+(both are on by default, keep-alive with the smallest model); the menu shows what each one is set to. Rotation chooses the next account from stored readings and never sends a keep-alive; `aiUsage.<service>.autoRotate.updateUsageBeforeRotation` (off by default) reads the target's usage right before the switch.
 
 ![Send keep-alive now… item under Account features in the Accounts menu](images/screenshots/accounts-keep-alive-now.png)
 ![Keep-alive and rotation settings… item showing keep-alive on and rotation on with the leastWaste strategy](images/screenshots/accounts-keep-alive-settings-claude.png)
