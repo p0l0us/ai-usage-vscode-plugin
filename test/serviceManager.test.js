@@ -279,14 +279,14 @@ test('a queued editor edit keeps its original revision and cannot overwrite a co
   const client={connected:true,close(){this.connected=false;},async getConfigState(){return {config:persisted,revision:8};},
     async patchConfig(values,baseRevision){calls.push({values,baseRevision});assert.equal(baseRevision,7);throw new Error('config-conflict');}};
   manager.client=client;manager.config=persisted;manager.configRevision=7;
-  settings.clear();settings.set('aiUsage.claude.autoRotate.enabled',true);
+  settings.clear();settings.set('aiUsage.claude.autoRotate.enabled',false);
   let release;manager.settingsQueue=new Promise(resolve=>{release=resolve;});
   const edited=manager.pushSettings({affectsConfiguration:key=>key==='aiUsage.claude.autoRotate.enabled'});
   manager.configRevision=8; // A competing configChanged arrives while the edit is queued.
   release();await edited;
-  assert.deepEqual(calls,[{values:{'claude.autoRotate.enabled':true},baseRevision:7}]);
-  assert.equal(persisted.claude.autoRotate.enabled,false);
-  assert.equal(settings.get('aiUsage.claude.autoRotate.enabled'),false,'conflict reads and hydrates the winning value');
+  assert.deepEqual(calls,[{values:{'claude.autoRotate.enabled':false},baseRevision:7}]);
+  assert.equal(persisted.claude.autoRotate.enabled,true);
+  assert.equal(settings.get('aiUsage.claude.autoRotate.enabled'),true,'conflict reads and hydrates the winning value');
 });
 
 

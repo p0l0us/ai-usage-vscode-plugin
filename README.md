@@ -25,7 +25,7 @@ accounts without signing in again, and shows live rate-limit and quota usage for
 - **Honest when things fail**: a failed refresh keeps the previous reading and greys it out after 15 minutes.
 
 Nothing is shown for a tool that is not installed or signed in. Usage checks only read the tools' own login files.
-Account keep-alives and automatic profile rotation are optional and disabled by default. Earned Codex rate-limit
+Automatic profile rotation is on by default and acts once at least two profiles are saved. Earned Codex rate-limit
 reset redemption is enabled by default for a limited saved account when Codex reports available credits. Enable
 `aiUsage.codex.autoReset.confirmationRequired` to require editor approval before spending a credit; without an
 approving editor, confirmation mode leaves it untouched. Keep-alives

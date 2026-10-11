@@ -143,10 +143,10 @@ export function defaultProviderConfig(provider: AuthProvider): ProviderConfig {
     cliPath: provider,
     checkIntervalMinutes: 30,
     api: { minIntervalSeconds: 30 },
-    keepAlive: { enabled: true, periodHours: claude ? 2 : 6, model: claude ? 'haiku' : 'gpt-5.6-luna', home: `~/.${provider}-tmp` },
+    keepAlive: { enabled: true, periodHours: claude ? 2 : 6, model: claude ? 'haiku' : 'gpt-5.6-luna', home: `~/.${provider}-profile-{number}` },
     autoReset: { enabled: !claude, confirmationRequired: false },
     autoRotate: {
-      enabled: false,
+      enabled: true,
       resetAware: !claude,
       // Codex defaults to rotating on a used-up 5-hour window only.
       fiveHourThresholdPercent: claude ? 95 : 100,
@@ -249,6 +249,8 @@ export function normalizeConfig(parsed: unknown): ServiceConfig {
       try { assign(config[provider] as unknown as Record<string, unknown>, schema.key.split('.'), coerceSetting(schema, raw)); }
       catch { /* An invalid value keeps the default. */ }
     }
+    // The former default resolves to the same per-profile homes; keeping it would differ from the editor default.
+    if (config[provider].keepAlive.home === `~/.${provider}-tmp`) { config[provider].keepAlive.home = `~/.${provider}-profile-{number}`; }
   }
   for (const schema of GLOBAL_SETTINGS) {
     const raw = lookup(parsed, schema.key.split('.'));

@@ -143,8 +143,9 @@ export const SETTINGS_CATALOG = [
     "key": "claude.checkIntervalMinutes",
     "type": "number",
     "min": 0.25,
+    "max": 1440,
     "default": 30,
-    "description": "How often (minutes) Claude usage is checked; defaults to 30 minutes. In `auto` this is also the maximum age of a usable cached or local reading. Existing explicit intervals are preserved. Claude accepts fractional minutes down to 0.25; endpoint calls still respect the shared API budget and backoff. The separate account-file interval in seconds applies only to `accountFile` and `both`."
+    "description": "How often (minutes) Claude usage is checked; defaults to 30 minutes. In `auto` this is also the maximum age of a usable cached or local reading. Claude accepts fractional minutes down to 0.25; endpoint calls still respect the shared API budget and backoff. The separate account-file interval in seconds applies only to `accountFile` and `both`."
   },
   {
     "key": "claude.accountFile.checkIntervalSeconds",
@@ -170,13 +171,14 @@ export const SETTINGS_CATALOG = [
   {
     "key": "claude.autoRotate.enabled",
     "type": "boolean",
-    "default": false,
+    "default": true,
     "description": "**Automatic Claude account rotation.** Switch the active account as soon as its usage reaches `#aiUsage.claude.autoRotate.fiveHourThresholdPercent#` in the 5-hour window or `#aiUsage.claude.autoRotate.weeklyThresholdPercent#` in a weekly window, or proactively (`#aiUsage.claude.autoRotate.trigger#`). The account switched to is chosen by `#aiUsage.claude.autoRotate.strategy#` and must be below both thresholds. Requires at least two saved profiles. See [Rotation strategies and thresholds](https://github.com/p0l0us/ai-usage-vscode-plugin/blob/main/docs/CONFIGURATION.md#rotation-strategies-and-thresholds)."
   },
   {
     "key": "claude.keepAlive.periodHours",
     "type": "number",
     "min": 0.25,
+    "max": 168,
     "default": 2,
     "description": "**Claude keep-alive period in hours.** Each saved Claude account is checked once per period. The schedule persists across window restarts."
   },
@@ -239,6 +241,7 @@ export const SETTINGS_CATALOG = [
     "key": "claude.autoRotate.minStayMinutes",
     "type": "number",
     "min": 5,
+    "max": 10080,
     "default": 15,
     "description": "**Claude minimum stay before a proactive switch, in minutes.** With the `proactive` trigger, an account that became active, automatically or by hand, is kept at least this long unless it reaches its limit."
   },
@@ -252,7 +255,7 @@ export const SETTINGS_CATALOG = [
     "key": "claude.cliPath",
     "type": "string",
     "default": "claude",
-    "description": "Command or full path of the Claude CLI, used when `aiUsage.claude.source` is `cli` and for account keep-alives. Bare names are searched on PATH and in common install directories."
+    "description": "Command or full path of the Claude CLI, used for every service action that runs it: usage checks with source `cli`, keep-alives, sign-in, MCP registration and login refresh. Bare names are searched on PATH and in common install directories."
   },
   {
     "key": "claude.advanced.rotationDiagnostics",
@@ -312,14 +315,15 @@ export const SETTINGS_CATALOG = [
     "key": "codex.cliPath",
     "type": "string",
     "default": "codex",
-    "description": "Command or full path of the Codex CLI used when `#aiUsage.codex.source#` is `cli`. Bare names are searched on PATH and in common install directories."
+    "description": "Command or full path of the Codex CLI, used for every service action that runs it: usage checks with source `cli`, keep-alives, sign-in and login refresh. Bare names are searched on PATH and in common install directories."
   },
   {
     "key": "codex.checkIntervalMinutes",
     "type": "number",
     "min": 1,
+    "max": 1440,
     "default": 30,
-    "description": "How often (minutes) Codex usage is checked; defaults to 30 minutes. In `auto` this is also the maximum age of a usable cached or local reading. Existing explicit intervals are preserved. With `both` this is also the maximum age of a session-log record before the usage endpoint fills the gap."
+    "description": "How often (minutes) Codex usage is checked; defaults to 30 minutes. In `auto` this is also the maximum age of a usable cached or local reading. With `both` this is also the maximum age of a session-log record before the usage endpoint fills the gap."
   },
   {
     "key": "codex.keepAlive.enabled",
@@ -330,7 +334,7 @@ export const SETTINGS_CATALOG = [
   {
     "key": "codex.autoRotate.enabled",
     "type": "boolean",
-    "default": false,
+    "default": true,
     "description": "**Automatic Codex account rotation.** Switch when the active account reaches a 5-hour or weekly threshold, or proactively if configured. The selected strategy chooses among eligible saved accounts; reset-aware timing avoids short-lived switches just before a quota reset. Requires at least two saved profiles. See [Rotation strategies and thresholds](https://github.com/p0l0us/ai-usage-vscode-plugin/blob/main/docs/ROTATION.md)."
   },
   {
@@ -355,6 +359,7 @@ export const SETTINGS_CATALOG = [
     "key": "codex.keepAlive.periodHours",
     "type": "number",
     "min": 0.25,
+    "max": 168,
     "default": 6,
     "description": "**Codex keep-alive period in hours.** Each saved Codex account is checked once per period. The schedule persists across window restarts."
   },
@@ -406,6 +411,7 @@ export const SETTINGS_CATALOG = [
     "key": "codex.autoRotate.minStayMinutes",
     "type": "number",
     "min": 5,
+    "max": 10080,
     "default": 15,
     "description": "**Codex minimum stay before a proactive switch.** Limit-triggered rotation ignores this stay."
   },
@@ -563,7 +569,7 @@ export const SETTINGS_CATALOG = [
     "key": "bridge.tokenFile",
     "type": "string",
     "default": "",
-    "description": "Local bridge token file. Empty uses ~/.cli-byok-bridge/token on this extension host."
+    "description": "Local bridge token file. Empty uses ~/.cli-byok-bridge/token on the host that runs the account service."
   },
   {
     "key": "bridge.codex.executable",
@@ -631,6 +637,7 @@ export const SETTINGS_CATALOG = [
     "key": "history.retentionDays",
     "type": "number",
     "min": 1,
+    "max": 36500,
     "default": 365,
     "description": "**How long usage history is kept, in days.** A month's file is deleted once the whole month is older than this; 365 keeps a year. Mirrored to the service's `history.retentionDays` setting."
   },
@@ -662,21 +669,12 @@ export const SETTINGS_CATALOG = [
     "key": "refreshIntervalMinutes",
     "type": "number",
     "min": 1,
-    "description": "Legacy fallback interval (minutes) used when a service has no `checkIntervalMinutes` of its own."
+    "description": "Legacy interval (minutes). Ignored: use `aiUsage.claude.checkIntervalMinutes` and `aiUsage.codex.checkIntervalMinutes`."
   },
   {
     "key": "accounts",
     "type": "array",
-    "default": [
-      {
-        "name": "Copilot Pro",
-        "period": "weekly",
-        "usedTokens": 125000,
-        "tokenLimit": 500000,
-        "usedBudget": 9,
-        "budgetLimit": 20
-      }
-    ],
+    "default": [],
     "description": "Optional manual account figures. When set, an extra `AI xx%` status bar item shows the remaining share across these accounts."
   }
 ];

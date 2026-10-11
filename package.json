@@ -2,7 +2,7 @@
   "name": "ai-usage-vscode-plugin",
   "displayName": "AI subscription management and usage",
   "description": "Manage your Claude Code, Codex and GitHub Copilot subscriptions and see what is left of them: switch between saved accounts without signing in again, keep them warm, rotate on exhaustion, and read live 5h/7d windows, premium requests and org billing in the status bar and chat input. Open source, contributions welcome.",
-  "version": "1.2.0",
+  "version": "1.3.1",
   "publisher": "p0l0us",
   "license": "GPL-3.0-only",
   "repository": {
@@ -7040,18 +7040,21 @@
           "aiUsage.privateProfiles.enabled": {
             "type": "boolean",
             "default": true,
+            "scope": "machine",
             "order": 90,
             "markdownDescription": "**Private profiles.** Keep saved Claude and Codex profiles privately in the account service's own file (`~/.ai-usage/profiles.json`), the usual place, listed in every window on this host. When project profiles are enabled too and a local folder is open, saving a profile asks which kind to create; with only one kind possible, that kind is used without asking. Turning this off only stops new private profiles; existing ones stay listed. Mirrored to the service's `privateProfiles.enabled` setting."
           },
           "aiUsage.projectProfiles.enabled": {
             "type": "boolean",
             "default": true,
+            "scope": "machine",
             "order": 91,
             "markdownDescription": "**Project profiles.** Also load and save Claude and Codex profiles in each open workspace folder's project profile file (`#aiUsage.projectProfiles.file#`, `.ai-usage.profiles.json` by default), login included, so they travel with the project and are listed whenever it is open. Known limitation: the account service is one per host, so the project profiles of every folder open in any connected window are merged into one list, and a project can be used with another open project's profiles. The file holds login tokens in plain text; when the folder is a Git repository, it is added to its `.gitignore`. Mirrored to the service's `projectProfiles.enabled` setting."
           },
           "aiUsage.projectProfiles.file": {
             "type": "string",
             "default": ".ai-usage.profiles.json",
+            "scope": "machine",
             "order": 92,
             "markdownDescription": "**Project profile file.** Path of the file that holds a project's profiles, relative to each workspace folder. It has the format of a profile export and is written with mode `0600`; when the folder is a Git repository, the path is added to its `.gitignore` the first time a project profile is saved there. Mirrored to the service's `projectProfiles.file` setting."
           }
@@ -7064,6 +7067,7 @@
           "aiUsage.claude.enabled": {
             "type": "boolean",
             "default": true,
+            "scope": "machine",
             "description": "Show live Claude Code rate-limit usage in the status bar when a Claude Code login is found (~/.claude/.credentials.json or $CLAUDE_CONFIG_DIR).",
             "order": 1
           },
@@ -7076,6 +7080,7 @@
           "aiUsage.claude.source": {
             "type": "string",
             "default": "auto",
+            "scope": "machine",
             "enum": [
               "auto",
               "both",
@@ -7096,13 +7101,16 @@
           "aiUsage.claude.checkIntervalMinutes": {
             "type": "number",
             "default": 30,
+            "scope": "machine",
             "minimum": 0.25,
+            "maximum": 1440,
             "order": 3,
-            "markdownDescription": "How often (minutes) Claude usage is checked; defaults to 30 minutes. In `auto` this is also the maximum age of a usable cached or local reading. Existing explicit intervals are preserved. Claude accepts fractional minutes down to 0.25; endpoint calls still respect the shared API budget and backoff. The separate account-file interval in seconds applies only to `accountFile` and `both`."
+            "markdownDescription": "How often (minutes) Claude usage is checked; defaults to 30 minutes. In `auto` this is also the maximum age of a usable cached or local reading. Claude accepts fractional minutes down to 0.25; endpoint calls still respect the shared API budget and backoff. The separate account-file interval in seconds applies only to `accountFile` and `both`."
           },
           "aiUsage.claude.accountFile.checkIntervalSeconds": {
             "type": "number",
             "default": 15,
+            "scope": "machine",
             "minimum": 5,
             "order": 3.5,
             "markdownDescription": "How often (seconds) the account file is re-read, when `#aiUsage.claude.source#` is `accountFile` or `both`. It is a local file read with no rate limit of its own, so this can be much shorter than `#aiUsage.claude.checkIntervalMinutes#`; to actually see updates this often, also lower `#aiUsage.updateIntervalMinutes#` (it accepts fractional minutes, e.g. 0.25 for 15 seconds)."
@@ -7112,31 +7120,37 @@
             "minimum": 0,
             "maximum": 600,
             "default": 30,
+            "scope": "machine",
             "order": 4,
             "markdownDescription": "**Smallest gap between two calls to Anthropic's usage endpoint**, counted across all open windows, every saved account and manual refreshes. Anthropic rate-limits this endpoint and does not document the limit; the extension also honours a stricter one when a response advertises it (`anthropic-ratelimit-requests-*` or `Retry-After`). A refresh that arrives too early shows the cached reading instead of calling out. `0` leaves only the service's own limits."
           },
           "aiUsage.claude.keepAlive.enabled": {
             "type": "boolean",
             "default": true,
+            "scope": "machine",
             "order": 5,
             "markdownDescription": "**Account keep-alive and usage collection.** Periodically send the small `#aiUsage.claude.keepAlive.model#` prompt with every saved Claude account, including inactive ones, and record the usage each one reports. On by default with the smallest model, so saved logins stay refreshed. Each account keeps its login and CLI settings in a persistent home using `#aiUsage.claude.keepAlive.home#`, never in the native CLI home."
           },
           "aiUsage.claude.autoRotate.enabled": {
             "type": "boolean",
-            "default": false,
+            "default": true,
+            "scope": "machine",
             "order": 6,
             "markdownDescription": "**Automatic Claude account rotation.** Switch the active account as soon as its usage reaches `#aiUsage.claude.autoRotate.fiveHourThresholdPercent#` in the 5-hour window or `#aiUsage.claude.autoRotate.weeklyThresholdPercent#` in a weekly window, or proactively (`#aiUsage.claude.autoRotate.trigger#`). The account switched to is chosen by `#aiUsage.claude.autoRotate.strategy#` and must be below both thresholds. Requires at least two saved profiles. See [Rotation strategies and thresholds](https://github.com/p0l0us/ai-usage-vscode-plugin/blob/main/docs/CONFIGURATION.md#rotation-strategies-and-thresholds)."
           },
           "aiUsage.claude.keepAlive.periodHours": {
             "type": "number",
             "minimum": 0.25,
+            "maximum": 168,
             "default": 2,
+            "scope": "machine",
             "markdownDescription": "**Claude keep-alive period in hours.** Each saved Claude account is checked once per period. The schedule persists across window restarts.",
             "order": 7
           },
           "aiUsage.claude.keepAlive.model": {
             "type": "string",
             "default": "haiku",
+            "scope": "machine",
             "description": "Subscription model used for the small keep-alive request (default: haiku).",
             "order": 8
           },
@@ -7145,6 +7159,7 @@
             "minimum": 1,
             "maximum": 100,
             "default": 95,
+            "scope": "machine",
             "markdownDescription": "**Claude 5-hour rotation threshold.** Rotate when the 5-hour window reaches this percentage (usage ≥ threshold). An account can only be switched to while its 5-hour usage is below it.",
             "order": 9
           },
@@ -7153,6 +7168,7 @@
             "minimum": 1,
             "maximum": 100,
             "default": 99.5,
+            "scope": "machine",
             "markdownDescription": "**Claude weekly rotation threshold.** Rotate when a weekly window reaches this percentage (usage ≥ threshold): the all-models `7d` window, and `7d Fable` when `#aiUsage.claude.autoRotate.modelLimits#` counts it. An account can only be switched to while every counted weekly window is below it.",
             "order": 9.1
           },
@@ -7164,6 +7180,7 @@
               "never"
             ],
             "default": "auto",
+            "scope": "machine",
             "enumDescriptions": [
               "Count `7d Fable` (and other model-specific weekly windows) only when Claude Code's configured `model` is that model, or when no model is configured.",
               "Always count model-specific weekly windows.",
@@ -7181,6 +7198,7 @@
               "sequential"
             ],
             "default": "leastWaste",
+            "scope": "machine",
             "enumDescriptions": [
               "Soonest reset first: use the account whose weekly window resets soonest, so allowance about to expire is spent first. An account far ahead of an even spend with more than half its week left goes to the back of the queue.",
               "Even pace: use the account furthest below a straight line from 0% at the start of its week to 100% at its reset. No account runs out early; best combined with the proactive trigger.",
@@ -7197,6 +7215,7 @@
               "proactive"
             ],
             "default": "proactive",
+            "scope": "machine",
             "enumDescriptions": [
               "Switch only when the active account reaches a rotation threshold.",
               "Also switch when the strategy ranks another account clearly better, at most once per `#aiUsage.claude.autoRotate.minStayMinutes#`. Has no effect with the sequential strategy."
@@ -7207,7 +7226,9 @@
           "aiUsage.claude.autoRotate.minStayMinutes": {
             "type": "number",
             "minimum": 5,
+            "maximum": 10080,
             "default": 15,
+            "scope": "machine",
             "markdownDescription": "**Claude minimum stay before a proactive switch, in minutes.** With the `proactive` trigger, an account that became active, automatically or by hand, is kept at least this long unless it reaches its limit.",
             "order": 13
           },
@@ -7222,7 +7243,7 @@
             "type": "string",
             "default": "claude",
             "scope": "machine",
-            "description": "Command or full path of the Claude CLI, used when `aiUsage.claude.source` is `cli` and for account keep-alives. Bare names are searched on PATH and in common install directories."
+            "description": "Command or full path of the Claude CLI, used for every service action that runs it: usage checks with source `cli`, keep-alives, sign-in, MCP registration and login refresh. Bare names are searched on PATH and in common install directories."
           },
           "aiUsage.claude.advanced.rotationDiagnostics": {
             "type": "boolean",
@@ -7271,6 +7292,7 @@
           "aiUsage.codex.enabled": {
             "type": "boolean",
             "default": true,
+            "scope": "machine",
             "description": "Show live Codex rate-limit usage in the status bar when a Codex login is found (~/.codex/auth.json or $CODEX_HOME).",
             "order": 1
           },
@@ -7289,6 +7311,7 @@
           "aiUsage.codex.source": {
             "type": "string",
             "default": "auto",
+            "scope": "machine",
             "enum": [
               "auto",
               "both",
@@ -7309,56 +7332,67 @@
           "aiUsage.codex.cliPath": {
             "type": "string",
             "default": "codex",
+            "scope": "machine",
             "order": 3,
-            "markdownDescription": "Command or full path of the Codex CLI used when `#aiUsage.codex.source#` is `cli`. Bare names are searched on PATH and in common install directories."
+            "markdownDescription": "Command or full path of the Codex CLI, used for every service action that runs it: usage checks with source `cli`, keep-alives, sign-in and login refresh. Bare names are searched on PATH and in common install directories."
           },
           "aiUsage.codex.checkIntervalMinutes": {
             "type": "number",
             "default": 30,
+            "scope": "machine",
             "minimum": 1,
+            "maximum": 1440,
             "order": 4,
-            "markdownDescription": "How often (minutes) Codex usage is checked; defaults to 30 minutes. In `auto` this is also the maximum age of a usable cached or local reading. Existing explicit intervals are preserved. With `both` this is also the maximum age of a session-log record before the usage endpoint fills the gap."
+            "markdownDescription": "How often (minutes) Codex usage is checked; defaults to 30 minutes. In `auto` this is also the maximum age of a usable cached or local reading. With `both` this is also the maximum age of a session-log record before the usage endpoint fills the gap."
           },
           "aiUsage.codex.keepAlive.enabled": {
             "type": "boolean",
             "default": true,
+            "scope": "machine",
             "order": 5,
             "markdownDescription": "**Account keep-alive and usage collection.** Periodically send the small `#aiUsage.codex.keepAlive.model#` prompt with every saved Codex account, including inactive ones, and record the usage each one reports. On by default with the smallest model, so saved logins stay refreshed. Each account keeps its login and CLI settings in a persistent home using `#aiUsage.codex.keepAlive.home#`, never in the native CLI home."
           },
           "aiUsage.codex.autoRotate.enabled": {
             "type": "boolean",
-            "default": false,
+            "default": true,
+            "scope": "machine",
             "order": 6,
             "markdownDescription": "**Automatic Codex account rotation.** Switch when the active account reaches a 5-hour or weekly threshold, or proactively if configured. The selected strategy chooses among eligible saved accounts; reset-aware timing avoids short-lived switches just before a quota reset. Requires at least two saved profiles. See [Rotation strategies and thresholds](https://github.com/p0l0us/ai-usage-vscode-plugin/blob/main/docs/ROTATION.md)."
           },
           "aiUsage.codex.autoReset.enabled": {
             "type": "boolean",
             "default": true,
+            "scope": "machine",
             "order": 6.05,
             "markdownDescription": "**Automatically use earned Codex rate-limit resets.** When Codex reports an available reset credit and the active saved account is at a quota limit, the account service can redeem one through Codex app-server. It waits for a natural reset within five minutes, considers other saved accounts and the rotation strategy, and avoids letting a reported credit expire unused. Only provider-reported credits are used; the setting can be turned off independently of account rotation."
           },
           "aiUsage.codex.autoReset.confirmationRequired": {
             "type": "boolean",
             "default": false,
+            "scope": "machine",
             "order": 6.06,
             "markdownDescription": "Require confirmation before redeeming an earned Codex reset credit. The shared engine supplies and revalidates the proposed redemption; one connected editor may approve it. Without an approving editor, no credit is redeemed. Off preserves automatic redemption. This does not enable auto-reset by itself."
           },
           "aiUsage.codex.autoRotate.resetAware": {
             "type": "boolean",
             "default": true,
+            "scope": "machine",
             "order": 6.1,
             "markdownDescription": "**Reset-aware Codex rotation.** When on, automatic rotation waits if the active account's limiting quota resets naturally within 5 minutes, and skips a candidate whose reported 5-hour or weekly quota resets within 5 minutes. The service rechecks after the reset; a manual Rotate now bypasses this wait. Applies with every strategy. Earned credit redemption is controlled separately by `#aiUsage.codex.autoReset.enabled#`."
           },
           "aiUsage.codex.keepAlive.periodHours": {
             "type": "number",
             "minimum": 0.25,
+            "maximum": 168,
             "default": 6,
+            "scope": "machine",
             "markdownDescription": "**Codex keep-alive period in hours.** Each saved Codex account is checked once per period. The schedule persists across window restarts.",
             "order": 7
           },
           "aiUsage.codex.keepAlive.model": {
             "type": "string",
             "default": "gpt-5.6-luna",
+            "scope": "machine",
             "description": "Subscription model used for the small keep-alive request (default: gpt-5.6-luna). Empty uses the Codex CLI default.",
             "order": 9
           },
@@ -7367,6 +7401,7 @@
             "minimum": 1,
             "maximum": 100,
             "default": 100,
+            "scope": "machine",
             "markdownDescription": "**Codex 5-hour rotation threshold.** Rotate when the 5-hour window, if Codex reports one, reaches this percentage (usage ≥ threshold). An account can only be switched to while its 5-hour usage is below it. The default 100 rotates only once the window is used up; lower it to leave the account before that.",
             "order": 10
           },
@@ -7375,6 +7410,7 @@
             "minimum": 1,
             "maximum": 100,
             "default": 99,
+            "scope": "machine",
             "markdownDescription": "**Codex weekly rotation threshold.** Rotate when the weekly (7d) window reaches this percentage (usage ≥ threshold). An account can only be switched to while its weekly usage is below it.",
             "order": 11
           },
@@ -7387,6 +7423,7 @@
               "sequential"
             ],
             "default": "leastWaste",
+            "scope": "machine",
             "order": 12,
             "enumDescriptions": [
               "Soonest reset first: spend weekly allowance that expires sooner, except an account far ahead of an even pace early in its week.",
@@ -7403,6 +7440,7 @@
               "proactive"
             ],
             "default": "proactive",
+            "scope": "machine",
             "order": 13,
             "enumDescriptions": [
               "Switch only when the active account reaches a rotation threshold.",
@@ -7413,7 +7451,9 @@
           "aiUsage.codex.autoRotate.minStayMinutes": {
             "type": "number",
             "minimum": 5,
+            "maximum": 10080,
             "default": 15,
+            "scope": "machine",
             "order": 14,
             "markdownDescription": "**Codex minimum stay before a proactive switch.** Limit-triggered rotation ignores this stay."
           },
@@ -7426,6 +7466,7 @@
           "aiUsage.codex.proxy.enabled": {
             "type": "boolean",
             "default": false,
+            "scope": "machine",
             "tags": [
               "experimental"
             ],
@@ -7508,12 +7549,14 @@
           "aiUsage.copilot.enabled": {
             "type": "boolean",
             "default": true,
+            "scope": "machine",
             "description": "Show live GitHub Copilot premium-request usage for the account Copilot uses in this workspace. When the seat is paid by an organization (or the workspace repository belongs to one of the account's Copilot organizations), the item is labelled with that organization and includes organization-wide figures where permitted.",
             "order": 1
           },
           "aiUsage.copilot.source": {
             "type": "string",
             "default": "api",
+            "scope": "machine",
             "enum": [
               "api"
             ],
@@ -7526,12 +7569,14 @@
           "aiUsage.copilot.account": {
             "type": "string",
             "default": "",
+            "scope": "machine",
             "description": "GitHub login whose Copilot usage to show. Leave empty to pick automatically: the signed-in account whose Copilot organization owns the workspace repository, otherwise the first account with a Copilot seat.",
             "order": 3
           },
           "aiUsage.copilot.checkIntervalMinutes": {
             "type": "number",
             "default": 5,
+            "scope": "machine",
             "minimum": 1,
             "order": 4,
             "markdownDescription": "How often (minutes) the Copilot source is called and the result stored in the shared cache."
@@ -7545,7 +7590,7 @@
           "aiUsage.bridge.modelsEnabled": {
             "type": "boolean",
             "default": true,
-            "scope": "window",
+            "scope": "machine",
             "description": "Experimental. Automatically contribute signed-in Codex and Claude CLI models to the Copilot model picker.",
             "order": 10,
             "ignoreSync": true,
@@ -7556,7 +7601,7 @@
           "aiUsage.bridge.autoStart": {
             "type": "boolean",
             "default": true,
-            "scope": "window",
+            "scope": "machine",
             "description": "Start the bundled local bridge when model discovery needs it. Reuses an already-running bridge. Discovery checks login without running inference.",
             "order": 11,
             "ignoreSync": true,
@@ -7567,7 +7612,7 @@
           "aiUsage.bridge.codex.persistSessions": {
             "type": "boolean",
             "default": false,
-            "scope": "window",
+            "scope": "machine",
             "order": 12,
             "markdownDescription": "Save new Codex sessions started through Copilot's CLI bridge in native CLI history (**persistent sessions**), so they can be reopened later. Applies to all clients of this bridge. Disabling affects new sessions and does not delete saved history.",
             "ignoreSync": true,
@@ -7578,7 +7623,7 @@
           "aiUsage.bridge.codex.openInCli": {
             "type": "boolean",
             "default": false,
-            "scope": "window",
+            "scope": "machine",
             "order": 13,
             "markdownDescription": "Show **Open in CLI** and a copyable resume command above the answer as soon as a saved Codex CLI session starts in Copilot. Open after the response finishes. Enable `#aiUsage.bridge.codex.persistSessions#` before creating the session.",
             "ignoreSync": true,
@@ -7589,7 +7634,7 @@
           "aiUsage.bridge.codex.openInExtension": {
             "type": "boolean",
             "default": false,
-            "scope": "window",
+            "scope": "machine",
             "order": 14,
             "markdownDescription": "Show **Open in Codex chat** above the answer as soon as a saved CLI session starts in Copilot. The link opens that session in the native extension, preferring its sidebar. Open after the response finishes. Enable `#aiUsage.bridge.codex.persistSessions#` before creating the session.",
             "ignoreSync": true,
@@ -7610,7 +7655,7 @@
           "aiUsage.bridge.claude.persistSessions": {
             "type": "boolean",
             "default": false,
-            "scope": "window",
+            "scope": "machine",
             "order": 16,
             "markdownDescription": "Save new Claude sessions started through Copilot's CLI bridge in native CLI history (**persistent sessions**), so they can be reopened later. Applies to all clients of this bridge. Disabling affects new sessions and does not delete saved history.",
             "ignoreSync": true,
@@ -7621,7 +7666,7 @@
           "aiUsage.bridge.claude.openInCli": {
             "type": "boolean",
             "default": false,
-            "scope": "window",
+            "scope": "machine",
             "order": 17,
             "markdownDescription": "Show **Open in CLI** and a copyable resume command above the answer as soon as a saved Claude Code CLI session starts in Copilot. Open after the response finishes. Enable `#aiUsage.bridge.claude.persistSessions#` before creating the session.",
             "ignoreSync": true,
@@ -7632,7 +7677,7 @@
           "aiUsage.bridge.claude.openInExtension": {
             "type": "boolean",
             "default": false,
-            "scope": "window",
+            "scope": "machine",
             "order": 18,
             "markdownDescription": "Show **Open in Claude Code chat** above the answer as soon as a saved CLI session starts in Copilot. The link opens that session in the native extension, preferring its sidebar. Open after the response finishes. Enable `#aiUsage.bridge.claude.persistSessions#` before creating the session.",
             "ignoreSync": true,
@@ -7664,7 +7709,7 @@
             "type": "string",
             "default": "",
             "scope": "machine",
-            "description": "Local bridge token file. Empty uses ~/.cli-byok-bridge/token on this extension host.",
+            "description": "Local bridge token file. Empty uses ~/.cli-byok-bridge/token on the host that runs the account service.",
             "order": 21,
             "tags": [
               "experimental"
@@ -7693,7 +7738,7 @@
           "aiUsage.bridge.codex.subagentsEnabled": {
             "type": "boolean",
             "default": true,
-            "scope": "window",
+            "scope": "machine",
             "ignoreSync": true,
             "order": 50,
             "description": "Allow native subagents to delegate work through Copilot’s external tools. Native workspace tools stay disabled. Applies to new workers.",
@@ -7704,7 +7749,7 @@
           "aiUsage.bridge.codex.requestTimeoutMinutes": {
             "type": "integer",
             "default": 60,
-            "scope": "window",
+            "scope": "machine",
             "ignoreSync": true,
             "order": 51,
             "description": "Maximum minutes for one model request, including native subagent work. Cancellation remains available.",
@@ -7717,7 +7762,7 @@
           "aiUsage.bridge.codex.toolTimeoutMinutes": {
             "type": "integer",
             "default": 60,
-            "scope": "window",
+            "scope": "machine",
             "ignoreSync": true,
             "order": 52,
             "description": "Minutes to retain a worker while waiting for Copilot to return an external tool result.",
@@ -7730,7 +7775,7 @@
           "aiUsage.bridge.claude.subagentsEnabled": {
             "type": "boolean",
             "default": true,
-            "scope": "window",
+            "scope": "machine",
             "ignoreSync": true,
             "order": 53,
             "description": "Allow native subagents to delegate work through Copilot’s external tools. Native workspace tools stay disabled. Applies to new workers.",
@@ -7741,7 +7786,7 @@
           "aiUsage.bridge.claude.requestTimeoutMinutes": {
             "type": "integer",
             "default": 60,
-            "scope": "window",
+            "scope": "machine",
             "ignoreSync": true,
             "order": 54,
             "description": "Maximum minutes for one model request, including native subagent work. Cancellation remains available.",
@@ -7754,7 +7799,7 @@
           "aiUsage.bridge.claude.toolTimeoutMinutes": {
             "type": "integer",
             "default": 60,
-            "scope": "window",
+            "scope": "machine",
             "ignoreSync": true,
             "order": 55,
             "description": "Minutes to retain a worker while waiting for Copilot to return an external tool result.",
@@ -7773,13 +7818,16 @@
           "aiUsage.history.enabled": {
             "type": "boolean",
             "default": true,
+            "scope": "machine",
             "order": 1,
             "markdownDescription": "**Usage history.** The account service records every reading of every saved Claude and Codex account, every account switch (by hand, or by rotation together with the accounts it considered and what it did with each), the rotation sweeps that switched nothing, the stretches with every account at its limit, and checks that start or stop failing, so account use and the rotation rules can be analysed later. **AI Usage: Show Usage History…** and `ai-usage history` summarize a period and export CSV or JSON Lines. One file per month in `#aiUsage.history.directory#`, kept for `#aiUsage.history.retentionDays#`. No login material is recorded. Mirrored to the service's `history.enabled` setting."
           },
           "aiUsage.history.retentionDays": {
             "type": "number",
             "default": 365,
+            "scope": "machine",
             "minimum": 1,
+            "maximum": 36500,
             "order": 2,
             "markdownDescription": "**How long usage history is kept, in days.** A month's file is deleted once the whole month is older than this; 365 keeps a year. Mirrored to the service's `history.retentionDays` setting."
           },
@@ -7799,6 +7847,7 @@
           "aiUsage.mcp.enabled": {
             "type": "boolean",
             "default": false,
+            "scope": "machine",
             "order": 0,
             "tags": [
               "experimental"
@@ -7808,6 +7857,7 @@
           "aiUsage.mcp.switching": {
             "type": "boolean",
             "default": true,
+            "scope": "machine",
             "order": 1,
             "tags": [
               "experimental"
@@ -7829,22 +7879,13 @@
           "aiUsage.refreshIntervalMinutes": {
             "type": "number",
             "minimum": 1,
-            "deprecationMessage": "Replaced by the per-service `aiUsage.<service>.checkIntervalMinutes` settings; still honoured as a fallback when those are unset.",
+            "deprecationMessage": "Replaced by the per-service `aiUsage.<service>.checkIntervalMinutes` settings. It no longer has any effect; remove it.",
             "order": 2,
-            "markdownDescription": "Legacy fallback interval (minutes) used when a service has no `checkIntervalMinutes` of its own."
+            "markdownDescription": "Legacy interval (minutes). Ignored: use `aiUsage.claude.checkIntervalMinutes` and `aiUsage.codex.checkIntervalMinutes`."
           },
           "aiUsage.accounts": {
             "type": "array",
-            "default": [
-              {
-                "name": "Copilot Pro",
-                "period": "weekly",
-                "usedTokens": 125000,
-                "tokenLimit": 500000,
-                "usedBudget": 9,
-                "budgetLimit": 20
-              }
-            ],
+            "default": [],
             "items": {
               "type": "object",
               "required": [

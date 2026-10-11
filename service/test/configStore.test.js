@@ -40,10 +40,10 @@ test('a parsed file is merged over the defaults and invalid values keep the defa
 
 test('setConfigValue coerces command-line strings, validates and never mutates the input', () => {
   const config = defaultConfig();
-  const next = setConfigValue(setConfigValue(config, 'claude.autoRotate.enabled', 'on'), 'claude.autoRotate.fiveHourThresholdPercent', '90');
-  assert.equal(next.claude.autoRotate.enabled, true);
+  const next = setConfigValue(setConfigValue(config, 'claude.autoRotate.enabled', 'off'), 'claude.autoRotate.fiveHourThresholdPercent', '90');
+  assert.equal(next.claude.autoRotate.enabled, false);
   assert.equal(next.claude.autoRotate.fiveHourThresholdPercent, 90);
-  assert.equal(config.claude.autoRotate.enabled, false);
+  assert.equal(config.claude.autoRotate.enabled, true, 'rotation is on by default and the input is not mutated');
   assert.equal(getConfigValue(next, 'claude.autoRotate.fiveHourThresholdPercent'), 90);
   assert.throws(() => setConfigValue(config, 'claude.autoRotate.strategy', 'random'), /must be one of/);
   assert.throws(() => setConfigValue(config, 'claude.keepAlive.periodHours', '0'), /at least 0.25/);

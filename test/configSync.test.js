@@ -58,12 +58,12 @@ test('the MCP switches are seeded, pulled and pushed like the provider settings'
 
 test('user settings are read for seeding, differences are found, and pulls write only what differs', async () => {
   settings.clear(); updates.length = 0;
-  settings.set('aiUsage.claude.autoRotate.enabled', true);
+  settings.set('aiUsage.claude.autoRotate.enabled', false);
   settings.set('aiUsage.claude.autoRotate.strategy', 'evenPace');
   settings.set('aiUsage.codex.keepAlive.periodHours', 12);
   const config = defaultConfig();
   const values = readSettings(config);
-  assert.equal(values['claude.autoRotate.enabled'], true);
+  assert.equal(values['claude.autoRotate.enabled'], false);
   assert.equal(values['claude.autoRotate.strategy'], 'evenPace');
   assert.equal(values['codex.keepAlive.periodHours'], 12);
   assert.equal(values['claude.keepAlive.enabled'], undefined, 'unset settings seed nothing');
@@ -72,7 +72,7 @@ test('user settings are read for seeding, differences are found, and pulls write
   const sync = new ConfigSync(() => undefined);
   const serviceConfig = setConfigValue(config, 'claude.autoRotate.strategy', 'leastWaste');
   assert.equal(await sync.pull(serviceConfig), 3);
-  assert.deepEqual(updates.sort(), [['aiUsage.claude.autoRotate.enabled', false], ['aiUsage.claude.autoRotate.strategy', 'leastWaste'], ['aiUsage.codex.keepAlive.periodHours', 6]]);
+  assert.deepEqual(updates.sort(), [['aiUsage.claude.autoRotate.enabled', true], ['aiUsage.claude.autoRotate.strategy', 'leastWaste'], ['aiUsage.codex.keepAlive.periodHours', 6]]);
   assert.equal(sync.isWriting, false, 'hydration has finished; expected values suppress only matching events');
   assert.deepEqual(sync.changedKeys({ affectsConfiguration: () => true }, serviceConfig), {}, 'nothing is pushed back during a pull');
   assert.equal(sync.isWriting, false);
@@ -142,7 +142,7 @@ test('an unrelated user change during hydration is not discarded by a global wri
   const config = defaultConfig();
   const sync = new ConfigSync(() => undefined);
   await sync.pull(config);
-  settings.set('aiUsage.claude.autoRotate.enabled', true);
+  settings.set('aiUsage.claude.autoRotate.enabled', false);
   assert.deepEqual(sync.changedKeys({ affectsConfiguration: key => key === 'aiUsage.claude.autoRotate.enabled' }, config),
-    { 'claude.autoRotate.enabled': true });
+    { 'claude.autoRotate.enabled': false });
 });

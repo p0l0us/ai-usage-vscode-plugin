@@ -37,6 +37,8 @@ const codexView = () => ({ provider: 'codex', title: 'Codex', nativeUnsaved: tru
 function fakeClient(config = { enabled: true, switching: true }) {
   const calls = [];
   const configuration = defaultConfig();
+  configuration.claude.autoRotate.enabled = false;
+  configuration.codex.autoRotate.enabled = false;
   configuration.claude.checkIntervalMinutes = 60; configuration.codex.checkIntervalMinutes = 60; configuration.mcp = config;
   return Object.assign(new EventEmitter(), {
     calls, connected: true, config: configuration,

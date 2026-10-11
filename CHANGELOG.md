@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.3.1 (2026-10-11)
+
+- Automatic Claude and Codex account rotation is on by default in the extension and the standalone service. Installs that already saved the setting keep their value.
+- Settings cleanup: the Settings UI now enforces the maximums the service applies (`checkIntervalMinutes` 1440, `keepAlive.periodHours` 168, `autoRotate.minStayMinutes` 10080, `history.retentionDays` 36500) instead of accepting values the service ignores. The `aiUsage.accounts` default is empty instead of a sample entry, and the descriptions of `cliPath`, `bridge.tokenFile`, `checkIntervalMinutes` and the legacy `refreshIntervalMinutes` (which has no effect) are corrected.
+- The service's Keep Alive home default is `~/.<provider>-profile-{number}`, the same as the extension; the former `~/.<provider>-tmp` value is read as that default, so the two no longer disagree.
+- Engine settings (keep-alive, rotation, earned resets, MCP, bridge and the other settings the account service stores) are now machine-scoped. A remote window reads them from that host's Remote settings only, and Settings marks a User value it cannot apply instead of letting a hidden Remote value override it. Workspace values no longer reach the shared service.
+
 ## 1.2.0 (2026-10-10)
 
 - Claude and Codex account keep-alive is on by default, using the smallest models (`haiku`, `gpt-5.6-luna`). Without it, saved Claude logins that nobody used for a few hours showed "Login expired" because usage polling cannot refresh their tokens. Installs that already saved the setting keep their value.

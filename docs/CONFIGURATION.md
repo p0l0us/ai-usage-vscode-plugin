@@ -417,6 +417,9 @@ and reconnect instead of pushing their entire settings. An explicit editor engin
 configuration revision; a conflicting key edit is rejected and the client reloads authoritative values.
 Explicit CLI writes may set requested keys without a revision guard. CLI changes are
 announced to connected editors. Presentation and editor connection preferences remain local to the editor.
+Engine settings are machine-scoped, like the service they configure: a local window takes them from the **User**
+settings, a remote window (SSH, WSL, container) from that host's **Remote** settings, and workspace values are not
+allowed. A User value that a remote window cannot apply is marked so in Settings instead of being silently overridden.
 Use `ai-usage service start|stop` to manage the background process. A manual stop is honored by editor
 reconnects and CLI reads; use Start or Restart to resume it. Closing or reloading VS Code disconnects the
 window from a background service without stopping it.
@@ -469,7 +472,7 @@ server with Claude Code and Codex, and what a switch by an agent means.
 
 Save or import each subscription login in **AI Usage: Manage Claude/Codex Authentication Profiles**. Under each
 provider's **Accounts** menu you can switch accounts manually and send a keep-alive on demand. Both features are
-set in Settings, per provider: keep-alive is on by default, rotation off. The menu shows their current state and links to Settings.
+set in Settings, per provider: both are on by default. The menu shows their current state and links to Settings.
 
 Account checks of one service run one at a time in the account service. A keep-alive sent by hand that finds a
 sweep running waits for it, up to 3 minutes, and says so in its progress notification, which can be cancelled;
@@ -483,7 +486,7 @@ in between two accounts. Once the wait runs out, the notification says that the 
 | Setting suffix (`aiUsage.claude.` / `aiUsage.codex.`) | Claude default | Codex default | Purpose |
 | --- | --- | --- | --- |
 | `keepAlive.enabled` | `true` | `true` | Periodically check every saved account, including inactive ones, with the smallest model; this also keeps their logins refreshed. |
-| `autoRotate.enabled` | `false` | `false` | Switch accounts automatically at a threshold or, with `proactive`, when another account scores clearly better. |
+| `autoRotate.enabled` | `true` | `true` | Switch accounts automatically at a threshold or, with `proactive`, when another account scores clearly better. |
 | `autoReset.enabled` | — | `true` | Automatically redeem an earned Codex rate-limit reset credit when the active saved account is limited and the timing rules favor a reset. |
 | `autoRotate.resetAware` | — | `true` | Avoid automatic Codex switches in the five minutes before a reported quota reset; recheck after it. |
 | `keepAlive.periodHours` | `2` | `6` | Per-account keep-alive period, minimum 0.25 hours. |

@@ -25,6 +25,7 @@ function fixture(t, options = {}) {
   const service = new AccountService({
     ownership: options.ownership,
     seedConfig: { 'claude.keepAlive.enabled': false, 'codex.keepAlive.enabled': false,
+      'claude.autoRotate.enabled': false, 'codex.autoRotate.enabled': false,
       'claude.keepAlive.home': path.join(root, '.claude-profile-{number}'),
       'codex.keepAlive.home': path.join(root, '.codex-profile-{number}') },
     home, version: 'test', fetchUsage: async provider => ({ kind: 'ok', usage: usage(provider, [50, 5]) }), log: (message) => logs.push(message),

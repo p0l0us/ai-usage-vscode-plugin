@@ -63,10 +63,10 @@ test('a daemon serves the typed client, reports itself, and stops on request', a
   assert.equal(snapshot.service.clients, 1);
   const events = [];
   client.on('event', (event) => events.push(event));
-  await client.setConfig({ 'codex.autoRotate.enabled': true });
+  await client.setConfig({ 'codex.autoRotate.enabled': false });
   await new Promise((resolve) => setTimeout(resolve, 50));
-  assert.ok(events.some((event) => event.event === 'configChanged' && event.config.codex.autoRotate.enabled));
-  assert.ok(events.some((event) => event.event === 'log' && /config: changed codex.autoRotate.enabled = true/.test(event.line)));
+  assert.ok(events.some((event) => event.event === 'configChanged' && event.config.codex.autoRotate.enabled === false));
+  assert.ok(events.some((event) => event.event === 'log' && /config: changed codex.autoRotate.enabled = false/.test(event.line)));
   assert.ok((await client.tailLog(10)).some((line) => /account service 9.9.9 started/.test(line)));
   assert.equal((await pingService(home)).version, '9.9.9');
   await assert.rejects(runDaemon({ home }), /already running/);
