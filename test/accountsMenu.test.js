@@ -66,6 +66,7 @@ function fixture(views) {
     saveNative: async (provider, options) => { calls.push(['saveNative', provider, options]); return options.name === 'Twin' && !options.allowDuplicate
       ? { status: 'duplicate', twin: { id: 'a', name: 'Work' }, warning: 'already saved as “Work”' } : { status: options.id ? 'updated' : 'saved', profile: { id: 'n', name: options.name ?? 'Work' } }; },
     rename: async (provider, id, name) => { calls.push(['rename', provider, id, name]); return { id, name }; },
+    setDisabled: async (provider, id, disabled) => { calls.push(['setDisabled', provider, id, disabled]); return { id, name: 'x', ...(disabled ? { disabled } : {}) }; },
     reorder: async (provider, id, step) => {
       calls.push(['reorder', provider, id, step]);
       const profiles = views[provider].profiles;
@@ -221,7 +222,7 @@ test('profile actions live in Manage saved profiles and moving a profile updates
     return items.find((item) => item.action === 'manage');
   });
   quickPickResponses.push((items) => {
-    assert.deepEqual(items.filter((item) => item.action).map((item) => item.action), ['importCredential', 'transfer', 'signIn', 'rename', 'reorder', 'delete']);
+    assert.deepEqual(items.filter((item) => item.action).map((item) => item.action), ['importCredential', 'transfer', 'signIn', 'rename', 'reorder', 'disable', 'delete']);
     return items.find((item) => item.action === 'reorder');
   });
   quickPickResponses.push((items) => items.find((item) => item.profile?.id === 'b'));
@@ -1097,4 +1098,33 @@ test('events: configChanged redraws an open menu, other providers\' changes and 
   });
   await f.menu.show('claude');
   assert.equal(state.size + events.size, 0);
+});
+
+test('a disabled profile is marked in the Accounts menu, its row button enables it, and Manage offers disable and enable', async () => {
+  const views = { codex: { provider: 'codex', title: 'Codex', profiles: [profile({ active: true }), profile({ id: 'b', name: 'Backup', number: 2, disabled: true })],
+    activeProfileId: 'a', nativeUnsaved: false, checkingActive: false, keepAlive: false, autoRotate: false, strategySummary: '', scopes } };
+  const f = fixture(views);
+  quickPickResponses.push((items, options, picker) => {
+    const row = items.find((item) => item.profile?.id === 'b');
+    assert.match(row.description, /Disabled/);
+    assert.match(row.info, /Disabled: rotation, keep-alives/);
+    const toggle = row.buttons.find((button) => button.setDisabled !== undefined);
+    assert.equal(toggle.setDisabled, false, 'a disabled row offers to enable');
+    assert.equal(items.find((item) => item.profile?.id === 'a').buttons.find((button) => button.setDisabled !== undefined).setDisabled, true);
+    picker.triggerItemButton(row, toggle);
+    return items.find((item) => item.action === 'manage');
+  });
+  quickPickResponses.push((items) => {
+    assert.deepEqual(items.filter((item) => item.action).map((item) => item.action), ['importCredential', 'transfer', 'signIn', 'rename', 'reorder', 'disable', 'enable', 'delete']);
+    return items.find((item) => item.action === 'disable');
+  });
+  quickPickResponses.push((items) => {
+    assert.deepEqual(items.filter((item) => item.profile).map((item) => item.profile.id), ['a'], 'only enabled profiles can be disabled');
+    return items.find((item) => item.profile?.id === 'a');
+  });
+  quickPickResponses.push(undefined);
+  quickPickResponses.push(undefined);
+  await f.menu.show('codex');
+  assert.deepEqual(f.calls.filter((call) => call[0] === 'setDisabled'), [['setDisabled', 'codex', 'b', false], ['setDisabled', 'codex', 'a', true]]);
+  assert.match(informationMessages.at(-1), /“Work” is disabled/);
 });

@@ -51,7 +51,7 @@ export function renderRows(view: ProviderView, selected: number, now: Date): str
     const windows = profile.usage?.windows ?? [];
     const cells = labels.map((label) => { const window = windows.find((candidate) => candidate.label === label); return window ? percent(window, now) : dim('–'); });
     const other = windows.filter((window) => !labels.includes(window.label)).map((window) => `${window.label} ${percent(window, now)}`).join(' ');
-    const problem = profile.loginProblem ? yellow(readableProblem(profile.loginProblem).split('. ')[0])
+    const problem = profile.disabled ? dim('disabled') : profile.loginProblem ? yellow(readableProblem(profile.loginProblem).split('. ')[0])
       : profile.limit.readOnly ? red('at its limit') : profile.problems[0] ? yellow(profile.problems[0].label) : '';
     return [String(profile.number), `${profile.active ? green('● ') : '  '}${profile.active ? bold(profile.name) : profile.name}`, profile.email ?? dim('–'), ...cells, other, clock(profile.checkedAt), problem];
   });

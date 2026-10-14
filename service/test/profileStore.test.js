@@ -744,3 +744,20 @@ test('a profile list that changes while a new profile is being checked is rechec
   await assert.rejects(store.importCredential('claude', 'Late', claudeLogin('new2')), /already has the maximum of 20 saved profiles/);
   assert.equal(store.profileCount('claude'), MAX_PROFILES);
 });
+
+test('a disabled profile keeps the flag in the store and its exports, and can be enabled again', async (t) => {
+  const f = fixture(t);
+  const work = await f.store.saveNative('claude', { name: 'Work' });
+  const backup = await f.store.importCredential('claude', 'Backup', claudeLogin('b'));
+  assert.equal(f.store.setDisabled('claude', backup.profile.id, true).disabled, true);
+  assert.equal(f.store.profile('claude', backup.profile.id).disabled, true);
+  assert.ok(!('disabled' in f.store.profile('claude', work.profile.id)), 'an enabled profile carries no flag');
+  assert.throws(() => f.store.setDisabled('claude', 'gone', true), /no longer exists/);
+  const exported = f.store.exportEntries();
+  assert.equal(exported.entries.find((entry) => entry.id === backup.profile.id).disabled, true);
+  assert.ok(!('disabled' in exported.entries.find((entry) => entry.id === work.profile.id)));
+  // Disabling twice changes nothing; enabling removes the flag.
+  const before = f.store.profile('claude', backup.profile.id).updatedAt;
+  assert.equal(f.store.setDisabled('claude', backup.profile.id, true).updatedAt, before);
+  assert.ok(!('disabled' in f.store.setDisabled('claude', backup.profile.id, false)));
+});

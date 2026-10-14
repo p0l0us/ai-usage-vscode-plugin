@@ -427,7 +427,8 @@ test('occasional account selection stays allowed with automatic rotation enabled
   const result = await tool(mcp, 'switch_account', { service: 'claude', profile: 'Backup' });
   assert.equal(result.isError, undefined);
   assert.equal(result.structuredContent.accountChanged, true);
-  assert.deepEqual(client.calls, [['activate', 'claude', { ref: 'Backup' }]]);
+  // The list read first checks that the profile is not a disabled one.
+  assert.deepEqual(client.calls, [['list', 'claude'], ['activate', 'claude', { ref: 'Backup' }]]);
   assert.match(result.content[0].text, /automatic rotation remains enabled.*select another account later/);
   assert.equal(client.config.claude.autoRotate.enabled, true, 'a deliberate switch never silently disables automatic rotation');
   assert.equal(result.structuredContent.rotationPolicy.settings['claude.autoRotate.enabled'], true);
@@ -864,4 +865,27 @@ test('stdio closes the connection on an oversized message, an unwritable output 
   assert.equal(await Promise.race([backlog, pause(3000).then(() => 'hung')]), 0);
   assert.ok(logs.includes('MCP output queue limit exceeded; closing this connection.'), logs.join('\n'));
   assert.equal(frames.length, 1, 'only the frame already handed to the reader was written');
+});
+
+test('a disabled profile is listed as such and never usable, and switch_account refuses it', async () => {
+  const { profileSummary } = require('../out/mcp');
+  assert.deepEqual([profileSummary(profile({}), NOW).disabled, profileSummary(profile({ disabled: true }), NOW).disabled], [false, true]);
+  assert.equal(profileSummary(profile({ disabled: true }), NOW).usable, false);
+  const client = fakeClient();
+  const original = client.list.bind(client);
+  client.list = async (provider) => { const view = await original(provider); view.profiles[1].disabled = true; return view; };
+  const mcp = server(client);
+  const listed = await tool(mcp, 'list_accounts', { service: 'claude' });
+  const backup = listed.structuredContent.services[0].profiles[1];
+  assert.deepEqual([backup.name, backup.disabled, backup.usable], ['Backup', true, false]);
+  assert.match(listed.content[0].text, /Backup[^\n]*disabled/);
+  const refused = await tool(mcp, 'switch_account', { service: 'claude', profile: 'backup' });
+  assert.equal(refused.isError, true);
+  assert.match(refused.content[0].text, /“Backup” is disabled/);
+  assert.equal(refused.structuredContent.disabled, true);
+  assert.ok(!client.calls.some((call) => call[0] === 'activate'), 'nothing was activated');
+  // An enabled profile still switches.
+  const switched = await tool(mcp, 'switch_account', { service: 'claude', profile: 'Work' });
+  assert.notEqual(switched.isError, true);
+  assert.ok(client.calls.some((call) => call[0] === 'activate'));
 });

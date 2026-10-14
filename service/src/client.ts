@@ -104,6 +104,10 @@ export class ServiceClient extends EventEmitter {
   rename(provider: AuthProvider, target: string | { ref: string }, name: string): Promise<{ id: string; name: string }> {
     return this.call('profiles.rename', { provider, ...(typeof target === 'string' ? { id: target } : target), name });
   }
+  /** Takes a profile out of automatic rotation, keep-alives and background usage reads (`disabled`), or puts it back. */
+  setDisabled(provider: AuthProvider, target: string | { ref: string }, disabled: boolean): Promise<ProfileMetadata> {
+    return this.call('profiles.setDisabled', { provider, ...(typeof target === 'string' ? { id: target } : target), disabled });
+  }
   reorder(provider: AuthProvider, id: string, step: -1 | 1): Promise<ProfileMetadata[]> {
     return this.call('profiles.reorder', { provider, id, step });
   }

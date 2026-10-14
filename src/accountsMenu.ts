@@ -31,6 +31,9 @@ export function cliTerminalCommand(cli: string, args: string[]): string {
   return `${process.platform === 'win32' ? '& ' : ''}${[cli, ...args].map(quote).join(' ')}`;
 }
 
+/** A row button: the info one, or the one that disables (`setDisabled: true`) or enables the profile. */
+type MenuButton = vscode.QuickInputButton & { setDisabled?: boolean };
+
 type ProfileItem = vscode.QuickPickItem & {
   profile?: ProfileView;
   /** The account's full reading as the status bar hover shows it, in plain text. */
@@ -89,6 +92,7 @@ function accountInfo(profile: ProfileView, displayedUsage?: LiveUsage): string {
   const lines = [usage ? tooltipPlainText(usage, now, profile.name)
     : `${profile.name}${profile.email ? ` · ${profile.email}` : ''}\n${stored ? 'Usage reset; waiting for a new reading.' : 'Usage not checked yet.'}`];
   if (profile.active) { lines.push('This is the active account.'); }
+  if (profile.disabled) { lines.push('Disabled: rotation, keep-alives and background usage reads leave it out. It can still be chosen by hand.'); }
   if (profile.limit.readOnly) { lines.push('At its usage limit: it cannot be activated until a window resets.'); }
   else if (profile.limit.dimmed) { lines.push('Fable limit reached: other models still work.'); }
   if (profile.loginProblem) { lines.push(`Login problem: ${profile.loginProblem}`); }
@@ -197,7 +201,14 @@ export class AccountsMenu {
           picker.activeItems = picker.items.filter(item => active.has(key(item)));
         };
         const state = this.services.onStateChanged?.(changed => { if (!changed || changed === provider) update(); });
-        const info = picker.onDidTriggerItemButton?.(({ item }) => {
+        const info = picker.onDidTriggerItemButton?.(({ item, button }) => {
+          const setDisabled = (button as MenuButton).setDisabled;
+          if (setDisabled !== undefined && item.profile) {
+            const name = item.profile.name;
+            void client.setDisabled(provider, item.profile.id, setDisabled).then(update, (error) =>
+              void vscode.window.showErrorMessage(`AI Usage: could not ${setDisabled ? 'disable' : 'enable'} “${name}”: ${errorMessage(error)}`));
+            return;
+          }
           if (item.info) { void vscode.window.showInformationMessage(item.profile?.name ?? 'Account', { modal: true, detail: item.info }); }
         });
         const events = this.services.onEvent?.(event => { if (event.event === 'configChanged') update(); });
@@ -296,12 +307,17 @@ export class AccountsMenu {
       // An exhausted account cannot be activated anyway, so its login trouble waits until the window resets.
       const loginProblem = profile.limit.readOnly ? undefined : profile.loginProblem;
       const icon = profile.active ? 'check' : 'key';
-      const label = profile.limit.readOnly ? `$(circle-slash) ${profile.name}` : profile.limit.dimmed || loginProblem ? profile.name : `$(${icon}) ${profile.name}`;
+      // A disabled profile is drawn like a dimmed one: still there, out of rotation's hands.
+      const dimmed = profile.limit.dimmed || Boolean(profile.disabled);
+      const label = profile.limit.readOnly ? `$(circle-slash) ${profile.name}` : dimmed || loginProblem ? profile.name : `$(${icon}) ${profile.name}`;
+      const toggle: MenuButton = profile.disabled
+        ? { iconPath: new vscode.ThemeIcon('play-circle'), tooltip: 'Enable: let rotation and keep-alives use this account again', setDisabled: false }
+        : { iconPath: new vscode.ThemeIcon('circle-slash'), tooltip: 'Disable: leave this account out of rotation, keep-alives and background usage reads', setDisabled: true };
       return {
         label,
         iconPath: loginProblem ? new vscode.ThemeIcon('warning', new vscode.ThemeColor('editorWarning.foreground'))
-          : profile.limit.dimmed ? new vscode.ThemeIcon(icon, new vscode.ThemeColor('disabledForeground')) : undefined,
-        description: [profileDescription(profile, view.profiles, false),
+          : dimmed ? new vscode.ThemeIcon(icon, new vscode.ThemeColor('disabledForeground')) : undefined,
+        description: [profileDescription(profile, view.profiles, false), profile.disabled ? 'Disabled' : undefined,
           profile.limit.readOnly ? 'At its usage limit' : profile.limit.dimmed ? 'Fable limit reached' : undefined,
           loginProblem ? 'Login problem' : undefined].filter(Boolean).join(' · ') || undefined,
         detail: usageDetail(profile, displayedUsage, provider) ?? (profile.checkedAt
@@ -310,7 +326,7 @@ export class AccountsMenu {
         profile,
         readOnly: profile.limit.readOnly,
         loginProblem,
-        ...((info) => ({ info, buttons: [{ iconPath: new vscode.ThemeIcon('info'), tooltip: info }] }))(accountInfo(profile, displayedUsage))
+        ...((info) => ({ info, buttons: [{ iconPath: new vscode.ThemeIcon('info'), tooltip: info } as MenuButton, toggle] }))(accountInfo(profile, displayedUsage))
       };
     });
     // VS Code shows a separator's label right-aligned on the row below it, where the active account stands out;
@@ -463,7 +479,7 @@ export class AccountsMenu {
 
   /** Management actions return here; Back returns to the Accounts menu. */
   private async manageMenu(client: ServiceClient, provider: AuthProvider, hooks?: MenuHooks): Promise<void> {
-    type Action = 'importCredential' | 'transfer' | 'signIn' | 'rename' | 'reorder' | 'delete';
+    type Action = 'importCredential' | 'transfer' | 'signIn' | 'rename' | 'reorder' | 'disable' | 'enable' | 'delete';
     while (true) {
       const view = await this.view(client, provider);
       const items: Array<vscode.QuickPickItem & { action?: Action }> = [
@@ -475,6 +491,12 @@ export class AccountsMenu {
         items.push({ label: '$(edit) Rename a profile…', action: 'rename' });
         if (view.profiles.length > 1) {
           items.push({ label: '$(list-ordered) Move a profile up or down…', detail: 'Changes the order of saved profiles in the Accounts menu and in rotation.', action: 'reorder' });
+        }
+        if (view.profiles.some((profile) => !profile.disabled)) {
+          items.push({ label: '$(circle-slash) Disable a profile…', detail: 'Leaves a profile out of automatic rotation, keep-alives and background usage reads. It stays saved and can still be chosen by hand.', action: 'disable' });
+        }
+        if (view.profiles.some((profile) => profile.disabled)) {
+          items.push({ label: '$(play-circle) Enable a profile…', detail: 'Lets rotation and keep-alives use a disabled profile again.', action: 'enable' });
         }
         items.push({ label: '$(trash) Delete a saved profile…', action: 'delete' });
       }
@@ -492,6 +514,8 @@ export class AccountsMenu {
         }
         case 'rename': await this.rename(client, provider, view); break;
         case 'reorder': await this.reorder(client, provider, view); break;
+        case 'disable': await this.setDisabled(client, provider, view, true); break;
+        case 'enable': await this.setDisabled(client, provider, view, false); break;
         case 'delete': await this.delete(client, provider, view); break;
       }
     }
@@ -598,7 +622,7 @@ export class AccountsMenu {
   private async pickSaved(view: ProviderView, title: string): Promise<ProfileView | undefined> {
     const items: Array<vscode.QuickPickItem & { profile?: ProfileView }> = view.profiles.map((profile) => ({
       label: profile.name,
-      description: [profileDescription(profile), profile.loginProblem ? 'Login problem' : undefined].filter(Boolean).join(' · ') || undefined,
+      description: [profileDescription(profile), profile.disabled ? 'Disabled' : undefined, profile.loginProblem ? 'Login problem' : undefined].filter(Boolean).join(' · ') || undefined,
       profile
     }));
     items.push({ label: '', kind: vscode.QuickPickItemKind.Separator });
@@ -643,8 +667,9 @@ export class AccountsMenu {
   /** Like `pickSaved`, with an extra "All accounts" entry on top; empty when nothing was picked. */
   private async pickKeepAliveTargets(view: ProviderView): Promise<ProfileView[]> {
     const items: Array<vscode.QuickPickItem & { profiles?: ProfileView[] }> = [];
-    if (view.profiles.length > 1) {
-      items.push({ label: '$(run-all) All accounts', description: `${view.profiles.length} saved accounts, one by one`, profiles: view.profiles });
+    const enabled = view.profiles.filter((profile) => !profile.disabled);
+    if (enabled.length > 1) {
+      items.push({ label: '$(run-all) All accounts', description: `${enabled.length} ${enabled.length === view.profiles.length ? 'saved' : 'enabled'} accounts, one by one`, profiles: enabled });
       items.push({ label: '', kind: vscode.QuickPickItemKind.Separator });
     }
     items.push(...view.profiles.map((profile) => ({ label: profile.name, description: profileDescription(profile), profiles: [profile] })));
@@ -682,6 +707,17 @@ export class AccountsMenu {
       if (!picked?.step) { return; }
       await client.reorder(provider, chosen.id, picked.step);
     }
+  }
+
+  /** Takes a profile out of automatic rotation, keep-alives and background usage reads, or puts it back. */
+  private async setDisabled(client: ServiceClient, provider: AuthProvider, view: ProviderView, disabled: boolean): Promise<void> {
+    const candidates = { ...view, profiles: view.profiles.filter((profile) => Boolean(profile.disabled) !== disabled) };
+    const profile = await this.pickSaved(candidates, `${disabled ? 'Disable' : 'Enable'} a ${TITLES[provider]} profile`);
+    if (!profile) { return; }
+    await client.setDisabled(provider, profile.id, disabled);
+    void vscode.window.showInformationMessage(disabled
+      ? `“${profile.name}” is disabled: rotation, keep-alives and background usage reads leave it out. It stays saved and can still be chosen by hand.`
+      : `“${profile.name}” is enabled again.`);
   }
 
   private async delete(client: ServiceClient, provider: AuthProvider, view: ProviderView): Promise<void> {

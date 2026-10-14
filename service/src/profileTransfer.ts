@@ -12,6 +12,8 @@ export type ExportedProfile = {
   name: string;
   email?: string;
   accountId?: string;
+  /** Left out of automatic rotation, keep-alives and background usage reads where it was exported. */
+  disabled?: boolean;
   createdAt: string;
   updatedAt: string;
   credential: StoredCredential;
@@ -83,6 +85,7 @@ export function parseProfileExport(text: string): ExportedProfile[] {
     const accountId = optionalString(entry.accountId);
     if (email) { parsed.email = email; }
     if (accountId) { parsed.accountId = accountId; }
+    if (entry.disabled === true) { parsed.disabled = true; }
     return parsed;
   });
 }

@@ -723,3 +723,22 @@ test('the executable: usage text, exit codes and the MCP server over stdin and s
   assert.match(result.stderr, /^The AI Usage MCP server is turned off: its tools answer with that until "ai-usage config mcp\.enabled true"/);
   assert.equal(JSON.parse(result.stdout.trim().split('\n')[0]).id, 1);
 });
+
+test('disable and enable take a profile out of rotation and the list says so', async (t) => {
+  const { run } = await runningService(t);
+  await run('save', 'claude', 'Work');
+  await run('import', 'claude', credentialFile('b.json', 'b'), '--name', 'Backup');
+  let result = await run('disable', 'claude', 'Backup');
+  assert.deepEqual([result.code, result.stdout], [0, '✓ Disabled “Backup”: rotation, keep-alives and background usage reads leave it out.\n']);
+  assert.equal(JSON.parse((await run('list', 'claude', '--json')).stdout).profiles[1].disabled, true);
+  assert.match((await run('list', 'claude')).stdout, /disabled/);
+  result = await run('enable', 'claude', '2');
+  assert.deepEqual([result.code, result.stdout], [0, '✓ Enabled “Backup”.\n']);
+  assert.equal(JSON.parse((await run('list', 'claude', '--json')).stdout).profiles[1].disabled, false);
+  result = await run('disable', 'claude');
+  assert.notEqual(result.code, 0);
+  assert.match(result.stderr, /Usage: ai-usage disable <service> <profile>/);
+  result = await run('disable', 'claude', 'nobody');
+  assert.notEqual(result.code, 0);
+  assert.match(result.stderr, /No Claude profile matches "nobody"/);
+});

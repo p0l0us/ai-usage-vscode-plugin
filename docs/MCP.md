@@ -90,7 +90,7 @@ zero-percent usage. Native-login usage is available even when no profile was sav
 
 `profile` is what `list_accounts` shows: the name, the 1-based number, the id or the login email. Every answer carries
 a text the agent can read and a `structuredContent` object with the same facts. `usable` in a profile entry means
-a login is stored, a fresh reading shows general quota remaining, and no login problem blocks it. This is not a guarantee of headroom for a particular model or eligibility under every configured rotation threshold. `atLimit` reports general exhaustion; `modelLimited` reports model-only exhaustion, so a generally capable Fable-limited fallback can be usable while its Fable window still shows 100%. `loginStored` reports the stored-login fact separately; it does not prove usable capacity. Expired quota resets make a reading stale, and missing, invalid or future-dated readings are unknown. A failure the agent can act on (the service is not running, no such profile, the tool is turned off) is a
+a login is stored, a fresh reading shows general quota remaining, and no login problem blocks it. This is not a guarantee of headroom for a particular model or eligibility under every configured rotation threshold. `atLimit` reports general exhaustion; `modelLimited` reports model-only exhaustion, so a generally capable Fable-limited fallback can be usable while its Fable window still shows 100%. `loginStored` reports the stored-login fact separately; it does not prove usable capacity. `disabled` marks a profile the user left out of automatic selection: it is never `usable`, and `switch_account` refuses it until the user enables it again. Expired quota resets make a reading stale, and missing, invalid or future-dated readings are unknown. A failure the agent can act on (the service is not running, no such profile, the tool is turned off) is a
 tool result with `isError`, with the reason as its text.
 
 **Example.** Saved-account rows in `list_accounts` with `service: "claude"` include text like
@@ -110,7 +110,7 @@ The following excerpt shows the saved-account portion of `structuredContent`; th
     "activeProfile": { "id": "…", "name": "Claude 1", "number": 1 }, "nativeUnsaved": false,
     "keepAlive": true, "autoRotate": true, "rotation": "leastWaste, proactive, 5h ≥ 95%, 7d ≥ 99.5%",
     "profiles": [ { "number": 1, "id": "…", "name": "Claude 1", "email": "user1@example.com", "active": true,
-        "usable": true, "loginStored": true, "atLimit": false, "modelLimited": false, "problems": [], "checkedAt": "2026-09-30T21:35:35.000Z",
+        "usable": true, "loginStored": true, "disabled": false, "atLimit": false, "modelLimited": false, "problems": [], "checkedAt": "2026-09-30T21:35:35.000Z",
         "usage": { "fetchedAt": "2026-09-30T21:35:35.000Z",
           "windows": [ { "label": "5h", "usedPercent": 2, "resetsAt": "2026-10-01T00:00:00.000Z", "resetsIn": "2h" }, … ] } }, … ] } ] }
 ```

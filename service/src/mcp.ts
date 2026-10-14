@@ -6,7 +6,7 @@ import { readableProblem } from './accountProbe';
 import type { ServiceClient } from './client';
 import { formatResetRemaining } from './live';
 import type { UsageStateView } from './usageMonitor';
-import { PROVIDERS, TITLES } from './profileStore';
+import { PROVIDERS, TITLES, matchesProfileReference } from './profileStore';
 import type { RequestOptions, ProfileView, ProviderView, SerializedUsage, SerializedWindow } from './protocol';
 
 /**
@@ -204,9 +204,11 @@ export type ProfileSummary = {
   name: string;
   email?: string;
   active: boolean;
-  /** A login is stored, its reading is fresh, and neither a counted limit nor a login problem blocks it. */
+  /** A login is stored, its reading is fresh, the profile is enabled, and neither a counted limit nor a login problem blocks it. */
   usable: boolean;
   loginStored: boolean;
+  /** The user left the profile out of automatic selection; `switch_account` refuses it until it is enabled again. */
+  disabled: boolean;
   freshness: Freshness;
   atLimit: boolean;
   /** Only a model-scoped weekly window (such as 7d Fable) is used up; other models still work. */
@@ -241,8 +243,9 @@ export function profileSummary(profile: ProfileView, now: Date, maxAgeMs = 60 * 
   const freshness = readingFreshness(usage, now, maxAgeMs);
   return {
     number: profile.number, id: profile.id, name: profile.name, email: profile.email, active: profile.active,
-    usable: profile.hasCredential && !profile.loginProblem && !profile.limit.readOnly && freshness.state === 'fresh',
+    usable: profile.hasCredential && !profile.loginProblem && !profile.limit.readOnly && freshness.state === 'fresh' && !profile.disabled,
     loginStored: profile.hasCredential,
+    disabled: Boolean(profile.disabled),
     atLimit: profile.limit.readOnly, modelLimited: profile.limit.dimmed, freshness,
     loginProblem: profile.loginProblem ? readableProblem(profile.loginProblem) : undefined,
     problems: profile.problems.map((problem) => problem.label),
@@ -272,7 +275,7 @@ export function summaryText(summary: ServiceSummary): string {
   const nativeLine = native ? `  native active login${summary.nativeUnsaved ? ' (unsaved)' : ''}: ${native.usage ? windowsText(native.usage.windows) : 'no reading'} · ${native.freshness.state}${native.problem ? ` · ${native.problem}` : ''}` : undefined;
   if (!summary.profiles.length) { return [header, nativeLine, '  no saved profiles'].filter(Boolean).join('\n'); }
   const lines = summary.profiles.map((profile) => {
-    const state = [profile.active ? 'active' : undefined, profile.atLimit ? 'at its limit' : undefined, profile.modelLimited ? 'model window used up' : undefined,
+    const state = [profile.active ? 'active' : undefined, profile.disabled ? 'disabled' : undefined, profile.atLimit ? 'at its limit' : undefined, profile.modelLimited ? 'model window used up' : undefined,
       profile.loginProblem ? `login problem: ${profile.loginProblem}` : undefined, ...profile.problems.map((problem) => `problem: ${problem}`),
       !profile.loginStored ? 'no login stored' : undefined].filter(Boolean).join(', ');
     const reading = profile.usage ? `${windowsText(profile.usage.windows)} · checked ${profile.checkedAt ?? profile.usage.fetchedAt}` : 'no reading yet';
@@ -730,7 +733,14 @@ export class McpServer {
       }
       case 'switch_account': {
         const provider = providerArg(input.service);
-        const result = await client.activate(provider, { ref: profileArg(input.profile) }, options);
+        const reference = profileArg(input.profile);
+        // A profile the user disabled is theirs to pick by hand; an agent is not allowed to.
+        const wanted = (await client.list(provider, options)).profiles.find((profile) => matchesProfileReference(profile, reference));
+        if (wanted?.disabled) {
+          return text(`“${wanted.name}” is disabled: the user left it out of automatic selection. It can be enabled again in the Accounts menu or with "ai-usage enable ${provider} ${wanted.number}".`,
+            { service: provider, profile: { id: wanted.id, name: wanted.name, number: wanted.number }, disabled: true }, true);
+        }
+        const result = await client.activate(provider, { ref: reference }, options);
         const policy = rotationPolicy(config, this.options.now?.() ?? new Date());
         const warning = config[provider].autoRotate.enabled ? ` Built-in ${TITLES[provider]} automatic rotation remains enabled and may select another account later.` : '';
         return text(`${result.message}${result.accountChanged ? '' : ' The account in use did not change.'}${warning}`,

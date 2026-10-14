@@ -126,7 +126,10 @@ first candidate's limiting window resets, or at the next regular slot if that is
 ## Choosing the next account
 
 Candidates are visited in the order the strategy ranks them, and the first one that passes is switched to. At most
-one switch is made per sweep. A candidate is judged by its **stored reading**: it must be below every applicable
+one switch is made per sweep. A profile the user disabled (**Disable a profile…** or the row button in the Accounts
+menu, or `ai-usage disable`) is never a candidate, whatever its reading, and gets no keep-alive or background usage
+read; when every other profile is disabled, rotation keeps the active account and says so. A candidate is judged by
+its **stored reading**: it must be below every applicable
 candidate threshold and report the required windows of the active account (a Claude model fallback uses the
 general windows), and its last check must not have found a login problem. A window whose reset time has passed
 since the reading counts as fresh, so the service needs no keep-alive to know that an account's allowance is back.

@@ -12,7 +12,7 @@ import { findNode, installService, launcherPath, readCurrentInstall, restartServ
 import { Logger } from './logger';
 import { runMcpStdio } from './mcp';
 import { logFile, serviceHome } from './paths';
-import { PROVIDERS, TITLES } from './profileStore';
+import { PROVIDERS, TITLES, matchesProfileReference } from './profileStore';
 import type { ProfileView, ProviderView, ServiceEvent, Snapshot } from './protocol';
 import { formatResetRemaining } from './live';
 import { runTop } from './tui';
@@ -40,6 +40,8 @@ Accounts
   import <service> <file> --name <name> [--project[=<dir>]]
                                   Import a credential JSON file as a profile without activating it
   rename <service> <profile> <new name>
+  disable <service> <profile>     Leave a profile out of rotation, keep-alives and background usage reads
+  enable <service> <profile>      Put a disabled profile back
   move <service> <profile> up|down   Move a saved profile one place in its list
   delete <service> <profile> [-y]
   login <service> <profile> [-y]  Sign in again with the vendor CLI (isolated home) and store the new login
@@ -166,7 +168,7 @@ export function profileRows(view: ProviderView, now = new Date()): string[][] {
     const windows = profile.usage?.windows ?? [];
     const cells = labels.map((label) => { const window = windows.find((candidate) => candidate.label === label); return window ? percentText(window, now) : dim('–'); });
     const other = windows.filter((window) => !labels.includes(window.label)).map((window) => `${window.label} ${percentText(window, now)}`).join(' ');
-    const problem = profile.loginProblem ? yellow(readableProblem(profile.loginProblem).split('. ')[0])
+    const problem = profile.disabled ? dim('disabled') : profile.loginProblem ? yellow(readableProblem(profile.loginProblem).split('. ')[0])
       : profile.limit.readOnly ? red('at its limit') : profile.problems[0] ? yellow(profile.problems[0].label) : '';
     const where = [profile.email ?? dim('–'), profile.folder ? dim(`project ${path.basename(profile.folder)}`) : ''].filter(Boolean).join(' · ');
     rows.push([String(profile.number), profile.active ? bold(profile.name) : profile.name, profile.active ? green('●') : '', where,
@@ -388,6 +390,19 @@ export async function main(argv: string[], io?: CliOutput): Promise<number> {
           if (!target) { throw new UsageError(`No ${TITLES[service]} profile matches "${rest[1]}".`); }
           const profiles = await client.reorder(service, target.id, rest[2] === 'up' ? -1 : 1);
           if (json) { printJson(profiles); } else { out(`${green('✓')} Moved “${target.name}” ${rest[2]}.\n`); }
+          return 0;
+        }, flags);
+      }
+      case 'disable': case 'enable': {
+        const service = provider(rest[0]);
+        if (!rest[1]) { throw new UsageError(`Usage: ai-usage ${command} <service> <profile>`); }
+        return withClient(home, [], async (client) => {
+          const view = await client.list(service);
+          const target = view.profiles.find((candidate) => matches(candidate, rest.slice(1).join(' ')));
+          if (!target) { throw new UsageError(`No ${TITLES[service]} profile matches "${rest.slice(1).join(' ')}".`); }
+          const changed = await client.setDisabled(service, target.id, command === 'disable');
+          if (json) { printJson(changed); }
+          else { out(`${green('✓')} ${command === 'disable' ? `Disabled “${changed.name}”: rotation, keep-alives and background usage reads leave it out.` : `Enabled “${changed.name}”.`}\n`); }
           return 0;
         }, flags);
       }
@@ -627,9 +642,7 @@ export async function main(argv: string[], io?: CliOutput): Promise<number> {
 }
 
 function matches(profile: ProfileView, reference: string): boolean {
-  const wanted = reference.trim().toLowerCase();
-  const number = /^#?(\d+)$/.exec(wanted);
-  return profile.id === reference || profile.name.toLowerCase() === wanted || (number !== null && profile.number === Number(number[1])) || profile.email?.toLowerCase() === wanted;
+  return matchesProfileReference(profile, reference);
 }
 
 async function serviceCommand(home: string, rest: string[], flags: Flags): Promise<number> {

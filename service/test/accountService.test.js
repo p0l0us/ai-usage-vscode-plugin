@@ -415,3 +415,17 @@ test('a native live read waits for saved-account ownership without spending a pr
   release();await held;
   assert.equal((await f.call('usage.live',{provider:'claude',force:true})).result.kind,'ok');
 });
+
+test('profile setDisabled RPC marks the profile, the view shows it, and the flag is a required boolean', async (t) => {
+  const f = fixture(t);
+  await f.call('profiles.saveNative', { provider: 'claude', name: 'Work' });
+  const backup = await f.call('profiles.importCredential', { provider: 'claude', name: 'Backup', credential: claudeLogin('b') });
+  const changed = await f.call('profiles.setDisabled', { provider: 'claude', ref: 'Backup', disabled: true });
+  assert.equal(changed.disabled, true);
+  let view = await f.call('profiles.list', { provider: 'claude' });
+  assert.deepEqual(view.profiles.map((item) => [item.name, item.disabled]), [['Work', false], ['Backup', true]]);
+  await assert.rejects(f.call('profiles.setDisabled', { provider: 'claude', id: backup.profile.id }), /whether the profile is disabled/);
+  await f.call('profiles.setDisabled', { provider: 'claude', id: backup.profile.id, disabled: false });
+  view = await f.call('profiles.list', { provider: 'claude' });
+  assert.equal(view.profiles[1].disabled, false);
+});

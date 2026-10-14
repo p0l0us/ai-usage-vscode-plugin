@@ -102,7 +102,9 @@ a profile whose token has expired is repaired after signing in with that account
 ![Save current login picker with Create a new profile… and an existing profile to update](images/screenshots/save-current-login.png)
 
 **Manage saved profiles…** contains **Import credential JSON…**, **Export or import saved profiles…**, sign-in,
-rename, move and delete. The transfer item leads to both actions. **Export saved profiles…** writes the saved
+rename, move, disable/enable and delete. A disabled profile is left out of automatic rotation, keep-alives and
+background usage reads; it stays saved with a **Disabled** label, every account row has a button to disable or
+enable it, and it can still be chosen by hand. The transfer item leads to both actions. **Export saved profiles…** writes the saved
 Claude and Codex profiles, logins included, to a JSON file and opens it in the editor, and **Import saved
 profiles…** reads it on another computer: profiles not saved there are added, and a saved profile whose login is missing gets it back. Nothing is activated. The file holds live login tokens in plain text, so delete
 it once imported, and mind that a copied login is the same session on both computers; see

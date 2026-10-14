@@ -17,7 +17,7 @@ const PROVIDERS: AuthProvider[] = ['claude', 'codex'];
 export type ProfileStoreKind = 'service' | 'vscode';
 export const STORE_TITLES: Record<ProfileStoreKind, string> = { service: 'the account service', vscode: 'VS Code' };
 
-type StoredMetadata = { id: string; name: string; createdAt?: string; updatedAt?: string; email?: string; accountId?: string };
+type StoredMetadata = { id: string; name: string; createdAt?: string; updatedAt?: string; email?: string; accountId?: string; disabled?: boolean };
 type StoredState = Partial<Record<AuthProvider, { profiles?: StoredMetadata[]; activeProfileId?: string }>>;
 
 export type VscodeProfileBackend = PrivateProfileBackend & {

@@ -57,7 +57,8 @@ export type KeepAliveNowResult = {
  *  weekly window is exhausted; the account still works for other models. */
 export type ProfileLimitState = { readOnly: boolean; dimmed: boolean };
 
-type Profile = { id: string; name: string; email?: string };
+/** `disabled`: the user left the profile out of rotation, keep-alives and background usage reads; it may still be the active one. */
+type Profile = { id: string; name: string; email?: string; disabled?: boolean };
 export interface AutomationProfiles {
   profiles(provider: AuthProvider): Profile[];
   activeProfileId(provider: AuthProvider): string | undefined;
@@ -628,6 +629,8 @@ export class AccountAutomation {
       const profiles = [...this.profiles.profiles(provider)].sort((a, b) => Number(b.id === active) - Number(a.id === active));
       for (const profile of profiles) {
         if (this.disposed || this.paused || this.holds.has(provider)) break;
+        // A disabled profile is left alone unless it is the active one, whose reading rotation still needs.
+        if (profile.disabled && profile.id !== active) continue;
         const settings = this.settings(provider);
         const state = this.read(provider, profile.id);
         const usage = deserializeUsage(state);
@@ -745,6 +748,7 @@ export class AccountAutomation {
       if (settings.enabled) {
         for (const profile of this.profiles.profiles(provider)) {
           if (this.disposed || this.paused || this.holds.has(provider) || !this.settings(provider).enabled) { break; }
+          if (profile.disabled) { continue; }
           const due = () => {
             const state = this.read(provider, profile.id);
             return state.lastKeepAliveAt === undefined || this.now() - state.lastKeepAliveAt >= settings.intervalMs ? state : undefined;
@@ -847,7 +851,7 @@ export class AccountAutomation {
     const now = this.now();
     const group = (entry: { score?: number; usable: boolean; cached: boolean }) =>
       !entry.cached ? 3 : !entry.usable ? 2 : entry.score === undefined ? 1 : 0;
-    return nextAccounts(this.profiles.profiles(provider), active).map((profile, index) => {
+    return nextAccounts(this.profiles.profiles(provider), active).filter((profile) => !profile.disabled).map((profile, index) => {
       const usage = deserializeUsage(this.read(provider, profile.id));
       // A window that has reset since the reading no longer blocks the account.
       const usable = Boolean(usage) && counted(usage!, settings).length > 0 && counted(usage!, settings).every((window) =>
@@ -896,7 +900,7 @@ export class AccountAutomation {
         const problem = this.checkProblem(provider, profile.id);
         const reset = raw && settings.resetAware ? imminentReset(raw, now, settings) : undefined;
         const stale = raw && usageHasExpiredReset(raw, now);
-        const detail = problem ? `Last check failed: ${explainAccountProblem(problem).label}.` : !raw ? 'No usage reading yet.'
+        const detail = profile.disabled ? 'Disabled: left out of rotation.' : problem ? `Last check failed: ${explainAccountProblem(problem).label}.` : !raw ? 'No usage reading yet.'
           : stale ? (settings.updateUsageBeforeRotation ? 'A quota reset has passed; it is read again before a switch.' : 'A quota reset has passed; the stored reading counts it as fresh.') : reset && profile.id !== active ? 'Deferred: a quota reset is within five minutes.'
           : atLimit(raw, settings) ? 'At a rotation threshold.' : (settings.updateUsageBeforeRotation ? 'Below thresholds; its usage is read again before a switch.' : 'Below thresholds; the stored reading decides a switch.');
         return { id: profile.id, name: profile.name, active: profile.id === active,
@@ -1069,6 +1073,7 @@ export class AccountAutomation {
     const active = this.profiles.activeProfileId(provider);
     if (!active) { return 'no saved profile is active'; }
     if (this.profiles.profiles(provider).length < 2 && !settings.autoReset) { return 'fewer than two profiles are saved'; }
+    if (!settings.autoReset && !this.profiles.profiles(provider).some((profile) => profile.id !== active && !profile.disabled)) { return 'every other saved profile is disabled'; }
     if (!await this.profiles.matchesNative(provider, active)) { return 'the native login is not the active profile\'s'; }
     const strategy = settings.strategy ?? 'sequential';
     const proactive = settings.autoRotate && settings.trigger === 'proactive' && strategy !== 'sequential';

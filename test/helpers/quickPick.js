@@ -5,12 +5,15 @@
  */
 function quickPickFactory(responses, menus = []) {
   return () => {
-    const listeners = { accept: [], hide: [] };
+    const listeners = { accept: [], hide: [], button: [] };
     const menu = { shown: false, hidden: false, disposed: false };
     const picker = {
       items: [], selectedItems: [], activeItems: [],
       onDidAccept(listener) { listeners.accept.push(listener); return { dispose() {} }; },
       onDidHide(listener) { listeners.hide.push(listener); return { dispose() {} }; },
+      onDidTriggerItemButton(listener) { listeners.button.push(listener); return { dispose() {} }; },
+      /** Test hook: a click on one of an item's buttons. */
+      triggerItemButton(item, button) { listeners.button.forEach((listener) => listener({ item, button })); },
       show() {
         menu.title = picker.title; menu.shown = true; menus.push(menu);
         const response = responses.shift();

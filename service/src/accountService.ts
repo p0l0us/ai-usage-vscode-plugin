@@ -754,7 +754,8 @@ export class AccountService {
       limit: this.automation.limitState(provider, profile.id),
       loginProblem: this.automation.loginProblem(provider, profile.id),
       hasCredential: this.store.hasCredential(provider, profile.id),
-      folder: profile.folder
+      folder: profile.folder,
+      disabled: Boolean(profile.disabled)
     };
   }
 
@@ -1096,6 +1097,15 @@ export class AccountService {
         const renamed = await paused(async () => this.store.rename(provider, profile.id, stringParam(params, 'name')));
         this.emit({ event: 'stateChanged', provider });
         return renamed;
+      }
+      case 'profiles.setDisabled': {
+        const provider = providerParam(params);
+        const profile = this.resolveParam(provider, params);
+        if (typeof params.disabled !== 'boolean') { throw new Error('Say whether the profile is disabled (true) or enabled (false).'); }
+        const disabled = params.disabled;
+        const changed = await paused(async () => this.store.setDisabled(provider, profile.id, disabled));
+        this.emit({ event: 'stateChanged', provider });
+        return changed;
       }
       case 'profiles.reorder': {
         const provider = providerParam(params);

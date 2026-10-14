@@ -47,6 +47,7 @@ export type ServiceCommands = {
   'profiles.saveNative': { params: { provider: AuthProvider; name?: string; id?: string; allowDuplicate?: boolean; folder?: string }; result: SaveNativeResult };
   'profiles.importCredential': { params: { provider: AuthProvider; name: string; credential: unknown; allowDuplicate?: boolean; folder?: string }; result: SaveNativeResult };
   'profiles.rename': { params: ProfileReference & { name: string }; result: ProfileMetadata };
+  'profiles.setDisabled': { params: ProfileReference & { disabled: boolean }; result: ProfileMetadata };
   'profiles.reorder': { params: { provider: AuthProvider; id: string; step: -1 | 1 }; result: ProfileMetadata[] };
   'profiles.delete': { params: ProfileReference; result: { profile: ProfileMetadata; wasActive: boolean } };
   'profiles.export': { params: { selection?: ImportSelection }; result: ExportResult };
@@ -125,6 +126,8 @@ export type ProfileView = {
   hasCredential: boolean;
   /** The project folder a project profile lives in; a private profile has none. */
   folder?: string;
+  /** Left out of automatic rotation, keep-alives and background usage reads by the user; still selectable by hand. */
+  disabled?: boolean;
 };
 
 export type ProviderView = {

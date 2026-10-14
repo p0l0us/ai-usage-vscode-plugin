@@ -41,6 +41,8 @@ export type ProfileMetadata = {
   accountId?: string;
   /** The project folder a project profile lives in; a private profile has none. Never written to profiles.json. */
   folder?: string;
+  /** Left out of automatic rotation, keep-alives and background usage reads; still listed, and selectable by hand. */
+  disabled?: boolean;
 };
 
 export type StoredProfile = ProfileMetadata & { credential?: StoredCredential };
@@ -99,12 +101,13 @@ export type ProfileScopes = { privateEnabled: boolean; projectEnabled: boolean; 
 
 /** A project entry as the file and the merged list both see it, so an unchanged file is not written again. */
 function projectEntryKey(entry: ExportedProfile): string {
-  return JSON.stringify([entry.provider, entry.id, entry.name, entry.createdAt, entry.updatedAt, entry.email, entry.accountId, entry.credential]);
+  return JSON.stringify([entry.provider, entry.id, entry.name, entry.createdAt, entry.updatedAt, entry.email, entry.accountId, entry.disabled, entry.credential]);
 }
 
 function toEntry(provider: AuthProvider, profile: StoredProfile, credential: StoredCredential): ExportedProfile {
   return { provider, id: profile.id, name: profile.name, createdAt: profile.createdAt, updatedAt: profile.updatedAt,
-    ...(profile.email ? { email: profile.email } : {}), ...(profile.accountId ? { accountId: profile.accountId } : {}), credential };
+    ...(profile.email ? { email: profile.email } : {}), ...(profile.accountId ? { accountId: profile.accountId } : {}),
+    ...(profile.disabled ? { disabled: true } : {}), credential };
 }
 export type ProviderState = { profiles: StoredProfile[]; activeProfileId?: string };
 export type ProfileFile = { version: 1; claude: ProviderState; codex: ProviderState };
@@ -190,6 +193,13 @@ function plural(count: number, noun: string): string {
 function strip(profile: StoredProfile): ProfileMetadata {
   const { credential: _credential, ...metadata } = profile;
   return metadata;
+}
+
+/** Whether `reference` names the profile: its id, its name or email (case-insensitively) or its 1-based number (`2` or `#2`). */
+export function matchesProfileReference(profile: { id: string; name: string; email?: string; number: number }, reference: string): boolean {
+  const wanted = reference.trim().toLowerCase();
+  const number = /^#?(\d+)$/.exec(wanted);
+  return profile.id === reference || profile.name.toLowerCase() === wanted || (number !== null && profile.number === Number(number[1])) || profile.email?.toLowerCase() === wanted;
 }
 
 /** Stable account id of a native login, read locally: Codex's token field, Claude's account file. */
@@ -298,7 +308,8 @@ export class ProfileStore {
         if (seen.has(key)) { continue; }
         seen.add(key);
         loaded[entry.provider].push({ id: entry.id, name: entry.name, createdAt: entry.createdAt, updatedAt: entry.updatedAt,
-          ...(entry.email ? { email: entry.email } : {}), ...(entry.accountId ? { accountId: entry.accountId } : {}), folder, credential: entry.credential });
+          ...(entry.email ? { email: entry.email } : {}), ...(entry.accountId ? { accountId: entry.accountId } : {}),
+          ...(entry.disabled ? { disabled: true } : {}), folder, credential: entry.credential });
       }
     }
     return loaded;
@@ -689,6 +700,20 @@ export class ProfileStore {
     return strip(target);
   }
 
+  /** Takes a profile out of automatic rotation, keep-alives and background usage reads, or puts it back. */
+  setDisabled(provider: AuthProvider, id: string, disabled: boolean): ProfileMetadata {
+    const state = this.state();
+    const target = this.find(state, provider, id);
+    if (!target) { throw new Error('The profile no longer exists.'); }
+    if (Boolean(target.disabled) !== disabled) {
+      if (disabled) { target.disabled = true; } else { delete target.disabled; }
+      target.updatedAt = new Date().toISOString();
+      this.updateState(state);
+      this.log(`${provider}: ${disabled ? 'disabled' : 'enabled'} authentication profile "${target.name}"${disabled ? ' (left out of rotation, keep-alives and usage checks)' : ''}`);
+    }
+    return strip(target);
+  }
+
   /** Move a profile one place within private profiles or its own project folder. */
   reorder(provider: AuthProvider, id: string, step: -1 | 1): ProfileMetadata[] {
     const state = this.state();
@@ -732,7 +757,7 @@ export class ProfileStore {
         const credential = this.readSecret(provider, profile.id, state);
         if (!credential) { missing.push(`${TITLES[provider]} “${profile.name}”`); continue; }
         entries.push({ provider, id: profile.id, name: profile.name, email: profile.email, accountId: profile.accountId,
-          createdAt: profile.createdAt, updatedAt: profile.updatedAt, credential });
+          ...(profile.disabled ? { disabled: true } : {}), createdAt: profile.createdAt, updatedAt: profile.updatedAt, credential });
       }
     }
     return { entries, missing };
@@ -775,7 +800,7 @@ export class ProfileStore {
       } else {
         const profiles = state[entry.provider].profiles;
         profile = { id: entry.id, name: uniqueName(entry.name, profiles.map((saved) => saved.name)), createdAt: entry.createdAt, updatedAt: now,
-          email: entry.email, accountId: entry.accountId, credential: entry.credential };
+          email: entry.email, accountId: entry.accountId, ...(entry.disabled ? { disabled: true } : {}), credential: entry.credential };
         profiles.push(profile);
       }
       if (!profile.email || !profile.accountId) { identify.push([entry.provider, profile.id, entry.credential]); }

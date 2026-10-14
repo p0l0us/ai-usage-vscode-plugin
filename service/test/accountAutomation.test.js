@@ -29,7 +29,7 @@ function fixture(t, options = {}) {
   const profiles = {
     profiles: () => {
       if (options.profilesThrow) throw new Error(options.profilesThrow);
-      return (options.ids ?? ['a', 'b', 'c']).map(id => ({ id, name: id }));
+      return (options.ids ?? ['a', 'b', 'c']).map(id => ({ id, name: id, ...(options.disabled?.includes(id) ? { disabled: true } : {}) }));
     },
     activeProfileId: provider => active[provider],
     credential: async (provider, id) => options.credential ? options.credential(provider, id) : ({ id }),
@@ -1668,4 +1668,36 @@ test('a usage refresh reads the active account before the others', async t => {
   f.active.claude = 'c';
   await f.service.refreshUsage('claude', true);
   assert.deepEqual(f.calls.map(call => call[1]), ['c', 'a', 'b']);
+});
+
+test('a disabled profile is never switched to and gets no keep-alive or background read, but is still rotated away from', async t => {
+  const f = fixture(t, { values: { a: [99.5, 10], b: [5, 5], c: [20, 20] }, settings: { codex: { enabled: true, autoRotate: true } }, disabled: ['b'] });
+  f.observeAll('codex');
+  await f.service.tick();
+  // b has the most headroom, but it is disabled: c is chosen, and b gets no keep-alive in the same sweep.
+  assert.deepEqual(f.switches, [['codex', 'c', true]]);
+  assert.ok(!f.calls.some(call => call[1] === 'b'), `b was touched: ${JSON.stringify(f.calls)}`);
+  f.calls.length = 0;
+  await f.service.refreshUsage('codex', true);
+  assert.deepEqual(f.calls.map(call => call[1]).sort(), ['a', 'c'], 'the background usage read leaves b out');
+  assert.equal(f.service.diagnostics('codex').candidates.find(candidate => candidate.id === 'b').reason, 'Disabled: left out of rotation.');
+  // Chosen by hand, a disabled account is still left when it reaches its limit, and read first in a refresh.
+  f.active.codex = 'b';
+  f.values.b = [99.5, 10];
+  f.calls.length = 0;
+  await f.service.refreshUsage('codex', true);
+  assert.equal(f.calls[0][1], 'b');
+  f.observe('codex', [99.5, 10], 'b');
+  await f.service.tick();
+  assert.deepEqual(f.switches.at(-1), ['codex', 'c', true]);
+});
+
+test('with every other profile disabled, rotation keeps the active account and says why, spending nothing', async t => {
+  const f = fixture(t, { values: { a: [99.5, 10], b: [5, 5], c: [5, 5] }, settings: { claude: { autoRotate: true } }, disabled: ['b', 'c'] });
+  f.observeAll('claude');
+  // The reading at the limit started a tick of its own; let it finish before asking by hand.
+  await f.service.tick();
+  assert.deepEqual(await f.service.rotateNow('claude'), { switched: false, reason: 'every other saved profile is disabled' });
+  assert.deepEqual(f.switches, []);
+  assert.deepEqual(f.calls, []);
 });

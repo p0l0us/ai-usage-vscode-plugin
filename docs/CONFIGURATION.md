@@ -198,7 +198,11 @@ one, and follows with **Save current login…** and **Manage saved profiles…**
 **Manage saved profiles…** contains credential import and profile transfer even when no profiles are saved. With
 saved profiles it also offers sign-in, rename, move and delete. Moving a profile changes the order used by the
 Accounts menu and sequential rotation; a project profile moves within its own folder. The terminal equivalent is
-`ai-usage move <service> <profile> up|down`.
+`ai-usage move <service> <profile> up|down`. **Disable a profile…** leaves a profile out of automatic rotation,
+keep-alives and background usage reads; it stays saved, shows **Disabled** in the list with a row button that enables
+it again, and can still be activated by hand (rotation then leaves it as soon as it reaches a threshold). **Enable a
+profile…** puts it back. In the terminal: `ai-usage disable|enable <service> <profile>`; the flag travels with
+exported profiles.
 
 The AI Usage menu of all services confirms which profile is active and shows its detected plan:
 
@@ -408,7 +412,7 @@ start the service when they need it.
 
 **The `ai-usage` command.** `ai-usage --help` lists everything. `ai-usage` alone in a terminal opens the live
 view; `status` and `list` print the same information, `use <service> <profile>` switches (by name, number or
-id), `save`, `import`, `rename`, `delete`, `login`, `keepalive`, `rotate`, `export` and `import-profiles`
+id), `save`, `import`, `rename`, `disable`, `enable`, `delete`, `login`, `keepalive`, `rotate`, `export` and `import-profiles`
 do what the Accounts menus do, `config` shows or changes the settings, `service status|install|uninstall|start|
 stop|restart|run` manages the service, `log` shows its log and `mcp` serves the
 [MCP tools for AI agents](#mcp-server-for-ai-agents-experimental). `--project[=<dir>]` lists a project folder's
