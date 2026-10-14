@@ -4,7 +4,7 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import {
   AuthProvider, ImportPlanView, LiveUsage, ProfileView, ProviderView, ServiceClient, ServiceConfig, deserializeUsage,
-  explainAccountProblem, formatResetRemaining, nativeCredentialPath, newestValidUsage, parseCredentialJson, projectResetCredits, strategySummary
+  explainAccountProblem, formatResetRemaining, nativeCredentialLocation, newestValidUsage, parseCredentialJson, projectResetCredits, strategySummary
 } from '../service/out';
 import { MCP_SERVER_NAME, McpRegistration } from './mcpRegistration';
 import { pickWithBack } from './quickPick';
@@ -324,7 +324,7 @@ export class AccountsMenu {
       items.push({ label: 'No profiles saved yet', kind: vscode.QuickPickItemKind.Separator });
     }
     items.push({ label: 'Manage', kind: vscode.QuickPickItemKind.Separator });
-    items.push({ label: '$(save) Save current login…', detail: `Create a profile or replace an existing profile from ${nativeCredentialPath(provider)}.`, action: 'save' });
+    items.push({ label: '$(save) Save current login…', detail: `Create a profile or replace an existing profile from ${nativeCredentialLocation(provider)}.`, action: 'save' });
     items.push({ label: '$(tools) Manage saved profiles…', detail: 'Import, export, sign in again, rename, reorder, or delete profiles.', action: 'manage' });
     items.push({ label: 'Account features', kind: vscode.QuickPickItemKind.Separator });
     if (view.profiles.length) {

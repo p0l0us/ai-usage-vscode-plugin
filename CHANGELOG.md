@@ -8,6 +8,8 @@
 - A refresh no longer replaces the status bar figures with a spinner: the figures stay and a spinner is added after them. After an account switch, the previous figures stay with the spinner until the new account's first reading arrives.
 - In the Claude and Codex Accounts menus the active account is marked by an "Active" label aligned right, like the section labels, instead of a word at the end of its description.
 - Each account row in the Accounts menu has an info button whose tooltip shows the account's reading as the status bar hover does (every window with its exact reset time, earned resets, plan, details, last update and profile) plus its limit and login problems; clicking it opens the same text in a dialog. Menu rows themselves cannot have a hover in VS Code.
+- On macOS the current Claude login can be saved as a profile. Claude Code keeps it in the login Keychain (`Claude Code-credentials`) rather than in `~/.claude/.credentials.json`, which the account service looked for alone, so "Save current login" failed with "No Claude login was found" and live Claude usage stayed unavailable. The service now reads the Keychain first and the file second, as Claude Code does, and switching profiles writes the login back to the Keychain item (keeping MCP sign-ins stored beside it). Linux, Windows and Remote-SSH hosts keep using the file as before.
+- The offer to install the background account service is shown on first run with two answers: **Install**, or **No**, which keeps the service inside VS Code (`aiUsage.accountService.background` off). An offer that is closed or not answered is shown again every 5 minutes until it is answered or the service is installed elsewhere.
 
 ## 1.4.6 (2026-10-14)
 

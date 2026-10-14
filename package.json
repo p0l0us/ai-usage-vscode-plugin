@@ -7068,7 +7068,7 @@
             "type": "boolean",
             "default": true,
             "scope": "machine",
-            "description": "Show live Claude Code rate-limit usage in the status bar when a Claude Code login is found (~/.claude/.credentials.json or $CLAUDE_CONFIG_DIR).",
+            "description": "Show live Claude Code rate-limit usage in the status bar when a Claude Code login is found (the macOS Keychain, ~/.claude/.credentials.json, or the same file in $CLAUDE_CONFIG_DIR).",
             "order": 1
           },
           "aiUsage.claude.statusBar.accountNumber": {

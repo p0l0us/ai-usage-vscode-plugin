@@ -388,10 +388,10 @@ keeps running once VS Code is closed; accounts, keep-alives and rotation work as
 **AI Usage: Account Service…** shows "Running inside this VS Code window". A background service that is already
 running, for example one started from a terminal, is used instead.
 
-**Installation.** On activation, with no service installed, the extension asks once per session: **Install**,
-**Not now** (the service runs inside VS Code for this session) or **Don't ask again** (which turns
-`aiUsage.accountService.background` off, so it keeps running inside VS Code; turn the setting on again to be asked
-again, or run **AI Usage: Install Account Service**). The extension copies the service package it carries to
+**Installation.** On activation, with no service installed, the extension asks: **Install** or **No** (which turns
+`aiUsage.accountService.background` off, so the service keeps running inside VS Code; turn the setting on again to be
+asked again, or run **AI Usage: Install Account Service**). Until the offer is answered the service runs inside
+VS Code, and an offer that was closed or ignored is shown again every 5 minutes. The extension copies the service package it carries to
 `~/.ai-usage/service/<version>`, writes the `ai-usage` launcher to `~/.ai-usage/bin`, registers the service to
 start at sign-in and starts it. It looks for Node.js 20 or newer on the PATH and in the usual install locations
 (`nvm`, `volta`, `/usr/local/bin`, …), and falls back to VS Code's own runtime (`ELECTRON_RUN_AS_NODE`) or, in a

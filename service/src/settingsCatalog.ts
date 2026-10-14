@@ -118,7 +118,7 @@ export const SETTINGS_CATALOG = [
     "key": "claude.enabled",
     "type": "boolean",
     "default": true,
-    "description": "Show live Claude Code rate-limit usage in the status bar when a Claude Code login is found (~/.claude/.credentials.json or $CLAUDE_CONFIG_DIR)."
+    "description": "Show live Claude Code rate-limit usage in the status bar when a Claude Code login is found (the macOS Keychain, ~/.claude/.credentials.json, or the same file in $CLAUDE_CONFIG_DIR)."
   },
   {
     "key": "claude.statusBar.accountNumber",

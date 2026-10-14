@@ -6,7 +6,7 @@ import {
   StoredCredential,
   extractCredential,
   isSameCredentialOwner,
-  nativeCredentialPath,
+  nativeCredentialLocation,
   readNativeCredential,
   writeJsonAtomically,
   writeNativeCredential,
@@ -888,6 +888,6 @@ export class ProfileStore {
 
   /** Where the native login of a provider lives, for messages. */
   static nativePath(provider: AuthProvider): string {
-    return nativeCredentialPath(provider);
+    return nativeCredentialLocation(provider);
   }
 }

@@ -29,6 +29,8 @@ const TAKEOVER_DELAY_MS = 300;
 const PROVIDERS: AuthProvider[] = ['claude', 'codex'];
 /** How often a lost connection is retried. */
 const RECONNECT_MS = 30_000;
+/** How often the install offer is shown again while nobody answered it. */
+export const INSTALL_OFFER_REPEAT_MS = 5 * 60_000;
 
 export class ServiceManager implements vscode.Disposable {
   private client?: ServiceClient;
@@ -46,7 +48,11 @@ export class ServiceManager implements vscode.Disposable {
   private lastAttemptAt = 0;
   /** Why the latest connection attempt or connection failed, for the status bar; cleared on connect. */
   private lastFailure?: { at: Date; message: string };
-  private offered = false;
+  /** Repeats the install offer until it is answered; set while the offer is open. */
+  private offerTimer?: ReturnType<typeof setInterval>;
+  private offerAnswered = false;
+  /** How often an unanswered install offer is shown again (tests shorten it). */
+  offerRepeatMs = INSTALL_OFFER_REPEAT_MS;
   private disposed = false;
   /** The latest view of each provider, refreshed on the service's `stateChanged` events. */
   views: Partial<Record<AuthProvider, ProviderView>> = {};
@@ -71,6 +77,7 @@ export class ServiceManager implements vscode.Disposable {
     if (this.shutdown) return this.shutdown;
     this.disposed = true;
     clearTimeout(this.takeoverTimer);
+    clearInterval(this.offerTimer);
     this.client?.close();
     this.shutdown = (async () => {
       await this.connecting;
@@ -176,7 +183,7 @@ export class ServiceManager implements vscode.Disposable {
           }
           return await this.connect();
         }
-        // No background service in use: offer it once (without waiting), then use whichever service answers (another
+        // No background service in use: offer it (without waiting; repeated until answered), then use whichever service answers (another
         // window's, or one started from a terminal), or host it in this window.
         if (!installed && this.enabled && this.background && options.promptInstall) { void this.offerInstall(); }
         return await this.connectExisting() ?? await this.hostHere();
@@ -403,21 +410,33 @@ export class ServiceManager implements vscode.Disposable {
     } catch { return undefined; }
   }
 
+  /** Whether the background service is still wanted but not installed, so the install offer applies. */
+  private installWanted(): boolean {
+    return !this.disposed && this.enabled && this.background && !readCurrentInstall(this.home);
+  }
+
   /**
-   * Asks once per session whether to install the background service. Accounts work either way: without it the
-   * service runs inside VS Code. "Don't ask again" keeps it that way by turning the background setting off.
+   * Offers to install the background service until it is answered. Accounts work either way: until then, and after
+   * "No", the service runs inside VS Code. "No" keeps it that way by turning the background setting off. An offer
+   * that is closed or ignored is shown again every five minutes; VS Code replaces the older notification with it.
    */
-  private async offerInstall(): Promise<void> {
-    if (this.offered) { return; }
-    this.offered = true;
-    const choice = await vscode.window.showInformationMessage(
-      'AI Usage can run its account service in the background, so keep-alives and rotation keep running while VS Code is closed and the ai-usage command works in any terminal. Without it, accounts work while VS Code is open. Install it? It goes to ~/.ai-usage and is registered to start when you sign in.',
-      'Install', 'Not now', 'Don\'t ask again');
-    if (choice === 'Install') { await this.install(); }
-    else if (choice === 'Don\'t ask again') {
+  private offerInstall(): void {
+    if (this.offerTimer || this.offerAnswered) { return; }
+    const ask = async () => {
+      if (this.offerAnswered || !this.installWanted()) { clearInterval(this.offerTimer); return; }
+      const choice = await vscode.window.showInformationMessage(
+        'AI Usage can run its account service in the background, so keep-alives and rotation keep running while VS Code is closed and the ai-usage command works in any terminal. Without it, accounts work while VS Code is open. Install it? It goes to ~/.ai-usage and is registered to start when you sign in.',
+        'Install', 'No');
+      if (!choice || this.offerAnswered || this.disposed) { return; }
+      this.offerAnswered = true;
+      clearInterval(this.offerTimer);
+      if (choice === 'Install') { await this.install(); return; }
       await vscode.workspace.getConfiguration().update(BACKGROUND_SETTING, false, vscode.ConfigurationTarget.Global);
       void vscode.window.showInformationMessage(`AI Usage: accounts keep working while VS Code is open; nothing runs in the background. Turn ${BACKGROUND_SETTING} on to install the service later.`);
-    }
+    };
+    this.offerTimer = setInterval(() => { void ask(); }, this.offerRepeatMs);
+    this.offerTimer.unref?.();
+    void ask();
   }
 
   /** Installs (or reinstalls) the bundled service, starts it and connects; every outcome is reported. */
