@@ -1,8 +1,9 @@
 # Changelog
 
-## 1.5.1 (unreleased)
+## 1.5.1 (2026-10-14)
 
 - Rotation no longer waits for the rest of a usage-refresh round. The round reads the active account first, but when that reading reached a threshold the switch only came after the other due accounts had been read, 30 seconds apart (today: 95% read at 20:50:41, switched at 20:52:12, with the status bar showing the limit meanwhile). The active account is now rotated away right after its own reading, inside the round.
+- Internal: every test process now gets its own `HOME` beneath the run's temporary one (`test/helpers/isolatedHome.js`), so services started by different test files no longer meet in the same default per-profile CLI home and fail with "This account home belongs to another profile", which had aborted a release's `npm test`.
 
 ## 1.5.0 (2026-10-14)
 
