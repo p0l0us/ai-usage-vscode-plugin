@@ -38,8 +38,10 @@ try {
   if (exitCode === 0) {
     const files = args.length ? args : ['test', 'service/test', 'bridge/test'].flatMap(directory =>
       fs.readdirSync(path.join(root, directory)).filter(file => /\.test\.(?:js|mjs)$/.test(file)).sort().map(file => path.join(directory, file)));
-    const preload = path.join(root, 'test/helpers/fixtureNetwork.js');
-    const testEnv = { ...env, NODE_OPTIONS: `${env.NODE_OPTIONS || ''} --require=${JSON.stringify(preload)}`.trim() };
+    // Each test process gets its own HOME beneath the run's one (isolatedHome.js), so services started by different
+    // files do not share the default per-profile CLI homes; fixtureNetwork.js refuses non-loopback network access.
+    const preloads = ['test/helpers/isolatedHome.js', 'test/helpers/fixtureNetwork.js'].map((file) => `--require=${JSON.stringify(path.join(root, file))}`);
+    const testEnv = { ...env, NODE_OPTIONS: `${env.NODE_OPTIONS || ''} ${preloads.join(' ')}`.trim() };
     const result = spawnSync(process.execPath, ['--test', ...files], { cwd: root, env: testEnv, stdio: 'inherit' });
     if (result.error) throw result.error;
     exitCode = result.status ?? 1;

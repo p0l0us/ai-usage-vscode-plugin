@@ -17,8 +17,10 @@ service's 60 s tick to pick up a hand-edited `config.json`) and needs `npm run c
 
 Tests must never read or write the real account service home (`~/.ai-usage`), `~/.claude` or `~/.codex`. Every runner
 (`scripts/run-tests.js`, `scripts/coverage.js`, `test/e2e/runTest.js`) points `HOME`, `AI_USAGE_HOME`, `CODEX_HOME` and
-`CLAUDE_CONFIG_DIR` at a temporary directory and preloads `test/helpers/fixtureNetwork.js`, which refuses non-loopback
-network access. A fixture that creates a profile store or service sets `AI_USAGE_HOME` to its own temporary directory.
+`CLAUDE_CONFIG_DIR` at a temporary directory and preloads `test/helpers/isolatedHome.js`, which gives each test process
+its own `HOME` beneath that directory (services started by different files must not share the default per-profile CLI
+homes `~/.claude-profile-N`), and `test/helpers/fixtureNetwork.js`, which refuses non-loopback network access. A fixture
+that creates a profile store or service sets `AI_USAGE_HOME` to its own temporary directory.
 When running a single file by hand, use `AI_USAGE_HOME=$(mktemp -d) node --test <file>`.
 
 ## Coverage ratchet

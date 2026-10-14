@@ -85,7 +85,7 @@ function main(args) {
       fs.readdirSync(path.join(root, directory)).filter(file => /\.test\.(?:js|mjs)$/.test(file)).sort().map(file => `${directory}/${file}`));
     fs.mkdirSync(outputDir, { recursive: true });
     fs.rmSync(lcovFile, { force: true });
-    const preload = path.join(root, 'test/helpers/fixtureNetwork.js');
+    const preloads = ['test/helpers/isolatedHome.js', 'test/helpers/fixtureNetwork.js'].map((file) => `--require=${JSON.stringify(path.join(root, file))}`);
     const nodeArgs = ['--test', '--experimental-test-coverage',
       '--test-coverage-include=out/**', '--test-coverage-include=service/out/**', '--test-coverage-include=bridge/src/**',
       '--test-coverage-exclude=**/*.d.ts',
@@ -93,7 +93,7 @@ function main(args) {
       '--test-reporter=lcov', `--test-reporter-destination=${lcovFile}`, ...tests];
     const result = spawnSync(process.execPath, nodeArgs, {
       cwd: root, stdio: 'inherit',
-      env: { ...env, NODE_OPTIONS: `${env.NODE_OPTIONS || ''} --require=${JSON.stringify(preload)}`.trim() }
+      env: { ...env, NODE_OPTIONS: `${env.NODE_OPTIONS || ''} ${preloads.join(' ')}`.trim() }
     });
     if (result.error) throw result.error;
     if (result.status !== 0) { console.error('\nTests failed; coverage is not evaluated.'); return result.status ?? 1; }
