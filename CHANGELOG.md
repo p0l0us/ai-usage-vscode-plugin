@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.4.5 (unreleased)
+
+- The account service no longer locks up reading chat token counts. Every VS Code window asks for them every 10 seconds, and for Codex the service opened every saved Codex session (all of `~/.codex/sessions`, often gigabytes) to find the current workspace's chat, then re-read the whole active transcript after each change. With several windows open that kept the service busy full-time, so connections and usage checks timed out ("timed out connecting to the service", "Request failed: timed out", "codex app-server did not answer in time"). It now reads each session's first line only once and only up to its end, checks the newest sessions first, and parses a growing transcript from where it stopped. In a test with 1,300 Codex sessions a read took about 25 ms instead of 2 s.
+
 ## 1.4.4 (2026-10-14)
 
 - Subagent limits now have defaults: Claude Code runs up to 40 subagents at once (`aiUsage.claudeConfig.env.maxConcurrentSubagents`, was unset) and Codex up to 40 agent threads per session (`aiUsage.codexConfig.agents.maxConcurrentThreadsPerSession`, was unset). Subagents may nest 10 levels deep in both: Codex through `aiUsage.codexConfig.agents.maxDepth` (was unset), Claude Code through the new `aiUsage.claudeConfig.env.maxSubagentSpawnDepth` (`env.CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH`). The values are written to `~/.claude/settings.json` and `~/.codex/config.toml` and apply to sessions started afterwards. Set a setting to empty (`null`) to keep the files' own values.

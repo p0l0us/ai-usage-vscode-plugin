@@ -226,3 +226,37 @@ test('read: an unchanged file is served from the cache; a changed size or mtime 
   write(file, claudeLog(22) + '\n' + claudeLog(100, 'second'), '2026-10-02T00:00:00Z');
   assert.equal(readCurrentSessionTokens('claude', ['/w/cache']).outputTokens, 122);
 });
+
+test('read: growth is parsed from where the last read stopped; a half-written last line waits for its end', (t) => {
+  const root = environment(t);
+  const file = path.join(root, 'claude', 'projects', '-w-tail', 'a.jsonl');
+  const turn = (id, output) => JSON.stringify(claudeTurn(id, { input_tokens: 1, output_tokens: output }));
+  write(file, `${turn('a', 10)}\n`, '2026-10-01T00:00:00Z');
+  assert.equal(readCurrentSessionTokens('claude', ['/w/tail']).outputTokens, 10);
+  const second = turn('b', 5);
+  fs.appendFileSync(file, second.slice(0, 20));
+  fs.utimesSync(file, new Date('2026-10-02T00:00:00Z'), new Date('2026-10-02T00:00:00Z'));
+  assert.equal(readCurrentSessionTokens('claude', ['/w/tail']).outputTokens, 10, 'the partial line is not counted yet');
+  fs.appendFileSync(file, `${second.slice(20)}\n${turn('a', 30)}\n`);
+  fs.utimesSync(file, new Date('2026-10-03T00:00:00Z'), new Date('2026-10-03T00:00:00Z'));
+  assert.equal(readCurrentSessionTokens('claude', ['/w/tail']).outputTokens, 35, 'b completes, and a later record for a replaces the first');
+});
+
+test('read: a transcript rewritten with longer, different content is parsed again from the start', (t) => {
+  const root = environment(t);
+  const file = path.join(root, 'claude', 'projects', '-w-rewrite', 'a.jsonl');
+  write(file, `${claudeLog(10, 'first')}\n`, '2026-10-01T00:00:00Z');
+  assert.equal(readCurrentSessionTokens('claude', ['/w/rewrite']).outputTokens, 10);
+  write(file, `${claudeLog(7, 'other')}\n${claudeLog(8, 'more')}\n`, '2026-10-02T00:00:00Z');
+  assert.equal(readCurrentSessionTokens('claude', ['/w/rewrite']).outputTokens, 15);
+});
+
+test('read Codex: a session whose first line is still being written is checked again later', (t) => {
+  const root = environment(t);
+  const file = path.join(root, 'codex', 'sessions', 'new.jsonl');
+  const line = JSON.stringify({ type: 'session_meta', payload: { id: 'late', cwd: '/work/late' } });
+  write(file, line.slice(0, 15), '2026-10-01T00:00:00Z');
+  assert.equal(readCurrentSessionTokens('codex', ['/work/late']), undefined);
+  write(file, codexLog('/work/late', 42, 'late'), '2026-10-02T00:00:00Z');
+  assert.equal(readCurrentSessionTokens('codex', ['/work/late']).inputTokens, 42);
+});
