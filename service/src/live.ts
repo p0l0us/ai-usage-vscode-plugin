@@ -125,18 +125,21 @@ export function isFreshUsage(usage: LiveUsage, provider: ProviderId, intervalMs:
         (Number.isFinite(window.resetsAt.getTime()) && window.resetsAt.getTime() > now)));
 }
 
-/** Local/cache first, then direct endpoint, then the CLI transport; no model prompts are sent. */
+/**
+ * Local/cache first, then direct endpoint, then the CLI transport; no model prompts are sent. While `known` is still
+ * fresh only the free local source is read, and only a newer local reading replaces it: the active account is then
+ * followed as closely as the local source allows without calling the endpoint more often.
+ */
 export async function fetchAutoUsage(options: {
   provider: 'claude' | 'codex'; known?: LiveUsage; intervalMs: number; now?: () => number;
   local: () => Promise<LiveResult>; api: () => Promise<LiveResult>; cli: () => Promise<LiveResult>;
   apiSpacing: CallSpacing; cliSpacing: CallSpacing; budget?: CallSpacing;
 }): Promise<LiveResult> {
   const now = (options.now ?? Date.now)();
-  if (options.known && isFreshUsage(options.known, options.provider, options.intervalMs, now)) {
-    return { kind: 'ok', usage: options.known };
-  }
+  const known = options.known && isFreshUsage(options.known, options.provider, options.intervalMs, now) ? options.known : undefined;
   let last: LiveResult = { kind: 'unavailable', provider: options.provider, reason: 'No fresh usage source is available.' };
   for (const source of ['local', 'api', 'cli'] as const) {
+    if (known && source !== 'local') return { kind: 'ok', usage: known };
     if (source !== 'local') {
       const spacing = source === 'api' ? options.apiSpacing : options.cliSpacing;
       if (spacing.nextAllowedAt(now) > now || (options.budget && options.budget.nextAllowedAt(now) > now)) continue;
@@ -148,6 +151,7 @@ export async function fetchAutoUsage(options: {
       message: error instanceof Error ? error.message : String(error), transient: true }; }
     if (last.kind === 'ok') {
       if (isFreshUsage(last.usage, options.provider, options.intervalMs, (options.now ?? Date.now)())) {
+        if (known && last.usage.fetchedAt.getTime() <= known.fetchedAt.getTime()) return { kind: 'ok', usage: known };
         return { kind: 'ok', usage: { ...last.usage, source: source === 'local'
           ? options.provider === 'claude' ? 'accountFile' : 'sessionLog' : source } };
       }
@@ -563,7 +567,9 @@ function runClaudeUsageCommand(cli: string, env: NodeJS.ProcessEnv, cwd?: string
 }
 
 function firstMeaningfulLine(output: string): string | undefined {
-  const line = output.split(/\r?\n/).map((value) => value.trim()).find(Boolean);
+  // Colour codes would show up as raw escapes in a notification.
+  const plain = output.replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, '');
+  const line = plain.split(/\r?\n/).map((value) => value.trim()).find(Boolean);
   return line ? line.slice(0, 200) : undefined;
 }
 

@@ -3,7 +3,7 @@ const test = require('node:test');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { ProfileStore, validateName } = require('../out/profileStore');
+const { ProfileStore, validateName, activationMessage, importOutcome, MAX_PROFILES } = require('../out/profileStore');
 
 const claudeLogin = (token) => ({ claudeAiOauth: { accessToken: token, refreshToken: `r-${token}`, expiresAt: 9999999999999 } });
 const codexLogin = (account) => ({ auth_mode: 'chatgpt', tokens: { access_token: `t-${account}`, refresh_token: `r-${account}`, account_id: account }, last_refresh: '2026-09-29T00:00:00Z' });
@@ -339,4 +339,408 @@ test('a new profile may go to a declared project folder, which gets the file, mo
   assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).profiles.length, 2);
   // A second save does not touch .gitignore again, nor does a file in an ignored subfolder.
   assert.equal(notices.length, 1);
+});
+
+/** A store over the fixture's native files whose identity lookup is `identityOf`. */
+const storeWith = (f, identityOf, options) => new ProfileStore(path.join(f.root, 'profiles.json'), (message) => f.logs.push(message), identityOf, options);
+
+test('activation messages say what the user has to do per provider, for automatic and manual switches', () => {
+  assert.equal(activationMessage('claude', 'Work', false), 'Claude switched to “Work”. Chats and CLI sessions use it from their next turn.');
+  assert.equal(activationMessage('claude', 'Work', true), 'Claude automatically rotated to account “Work”. Chats and CLI sessions use it from their next turn.');
+  assert.equal(activationMessage('codex', 'Pro', false), 'Codex switched to “Pro”. New Codex CLI sessions use it now; the Codex VS Code extension needs an extension restart.');
+  assert.equal(activationMessage('codex', 'Pro', true), 'Codex automatically rotated to account “Pro”. New Codex CLI sessions use it now; the Codex VS Code extension needs an extension restart.');
+  assert.equal(activationMessage('codex', 'Pro', false, true), 'Codex switched to “Pro”. Codex chats and new CLI sessions use it from their next turn.');
+  assert.equal(activationMessage('codex', 'Pro', true, true), 'Codex automatically rotated to account “Pro”. Codex chats and new CLI sessions use it from their next turn.');
+});
+
+test('a profiles.json that is truncated, garbage or of the wrong shape lists nothing, and its valid entries and size are bounded', async (t) => {
+  const f = fixture(t);
+  const file = path.join(f.root, 'profiles.json');
+  for (const text of ['', '{"version":1,"claude":{"profiles":[{"id":"x","na', 'not json at all', 'null', '[]', '{"claude":5,"codex":{"profiles":"no"}}']) {
+    fs.writeFileSync(file, text);
+    assert.deepEqual(f.store.profiles('claude'), [], JSON.stringify(text));
+    assert.deepEqual(f.store.profiles('codex'), []);
+    assert.equal(f.store.activeProfileId('claude'), undefined);
+    assert.equal(fs.readFileSync(file, 'utf8'), text, 'reading never rewrites the file');
+  }
+  // Entries without an id or name are dropped; an active id that is not a string is ignored.
+  const entry = (id, name) => ({ id, name, createdAt: 'x', updatedAt: 'x', credential: claudeLogin(id) });
+  fs.writeFileSync(file, JSON.stringify({ version: 1, claude: { activeProfileId: 7, profiles: [entry('a', 'A'), { name: 'no id' }, { id: 'b' }, null, 'text', entry('c', 'C')] }, codex: { profiles: [] } }));
+  assert.deepEqual(f.store.profiles('claude').map((profile) => profile.id), ['a', 'c']);
+  assert.equal(f.store.activeProfileId('claude'), undefined);
+  // No more than MAX_PROFILES per provider are read, whatever the file holds.
+  fs.writeFileSync(file, JSON.stringify({ version: 1, claude: { profiles: Array.from({ length: MAX_PROFILES + 5 }, (_, i) => entry(`p${i}`, `P${i}`)) }, codex: { profiles: [] } }));
+  assert.equal(f.store.profiles('claude').length, MAX_PROFILES);
+});
+
+// A corrupt private file is read as "no profiles" and then replaced by the next save, taking every stored login with
+// it. Setting the unreadable file aside (as the project profile file is left alone) is the safer behavior; todo
+// until the store does that. See the report on the bug.
+test('a corrupt profiles.json is kept as a copy before the next profile is saved over it', async (t) => {
+  const f = fixture(t);
+  const file = path.join(f.root, 'profiles.json');
+  const corrupt = '{"version":1,"claude":{"profiles":[{"id":"x","name":"Precious","credential":{"claudeAiOauth":{"accessToken":"valuable"';
+  fs.writeFileSync(file, corrupt);
+  await f.store.saveNative('claude', { name: 'Fresh' }).catch(() => undefined);
+  const kept = fs.readdirSync(f.root).filter((name) => name.startsWith('profiles.json') && name !== 'profiles.json');
+  const holdsOriginal = fs.readFileSync(file, 'utf8') === corrupt || kept.some((name) => fs.readFileSync(path.join(f.root, name), 'utf8') === corrupt);
+  assert.ok(holdsOriginal, 'the unreadable file survives somewhere');
+});
+
+test('many concurrent imports are all saved through atomic writes that leave a valid private file and no temporary files', async (t) => {
+  const f = fixture(t);
+  const names = Array.from({ length: 12 }, (_, i) => `Profile ${i}`);
+  const outcomes = await Promise.all(names.map((name, i) => f.store.importCredential('claude', name, claudeLogin(`token-${i}`))));
+  assert.ok(outcomes.every((outcome) => outcome.status === 'saved'));
+  const file = path.join(f.root, 'profiles.json');
+  const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.deepEqual(parsed.claude.profiles.map((profile) => profile.name), names, 'saved in request order, none lost');
+  assert.equal(new Set(parsed.claude.profiles.map((profile) => profile.id)).size, 12);
+  assert.deepEqual(fs.readdirSync(f.root).filter((name) => name.startsWith('profiles.json')), ['profiles.json']);
+  if (process.platform !== 'win32') { assert.equal(fs.statSync(file).mode & 0o777, 0o600); }
+  // The same login imported concurrently under different names is kept once.
+  const twins = await Promise.all(['Twin A', 'Twin B', 'Twin C'].map((name) => f.store.importCredential('claude', name, claudeLogin('twin'))));
+  assert.deepEqual(twins.map((outcome) => outcome.status).sort(), ['duplicate', 'duplicate', 'saved']);
+  assert.equal(f.store.profileCount('claude'), 13);
+});
+
+test('a private file that cannot be written fails the save without touching the native login or listing the profile', { skip: process.platform === 'win32' || process.getuid?.() === 0 }, async (t) => {
+  const f = fixture(t);
+  const work = await f.store.saveNative('claude', { name: 'Work' });
+  const backup = await f.store.importCredential('claude', 'Backup', claudeLogin('b'));
+  const before = fs.readFileSync(path.join(f.root, 'profiles.json'), 'utf8');
+  const nativeBefore = fs.readFileSync(f.nativeClaude, 'utf8');
+  // The store's directory is read-only: the temporary file for the atomic write cannot be created.
+  t.after(() => { try { fs.chmodSync(f.root, 0o700); } catch { /* Already removed. */ } });
+  fs.chmodSync(f.root, 0o500);
+  await assert.rejects(f.store.importCredential('claude', 'Third', claudeLogin('c')), /EACCES|permission/i);
+  await assert.rejects(f.store.activateProfile('claude', backup.profile.id), /EACCES|permission/i);
+  fs.chmodSync(f.root, 0o700);
+  assert.equal(fs.readFileSync(path.join(f.root, 'profiles.json'), 'utf8'), before, 'the stored profiles are unchanged');
+  assert.deepEqual(f.store.profiles('claude').map((profile) => profile.name), ['Work', 'Backup']);
+  assert.equal(f.store.activeProfileId('claude'), work.profile.id, 'the failed switch did not move the active profile');
+  // The native login is written before the profile state, so a failed state write leaves them disagreeing until
+  // the service follows the native file again; the profile that holds it is found by its token.
+  assert.equal(f.readNative(f.nativeClaude).claudeAiOauth.accessToken, 'b');
+  assert.notEqual(fs.readFileSync(f.nativeClaude, 'utf8'), nativeBefore);
+  assert.equal(await f.store.followNative('claude'), true);
+  assert.equal(f.store.activeProfileId('claude'), backup.profile.id);
+});
+
+test('an activation that cannot write the native login says so and keeps the previous profile active', async (t) => {
+  const f = fixture(t);
+  const work = await f.store.saveNative('claude', { name: 'Work' });
+  const backup = await f.store.importCredential('claude', 'Backup', claudeLogin('b'));
+  // The native path is a directory, which no write can replace.
+  fs.rmSync(f.nativeClaude);
+  fs.mkdirSync(f.nativeClaude);
+  await assert.rejects(f.store.activateProfile('claude', backup.profile.id), /^Error: Could not activate “Backup”: /);
+  assert.equal(f.store.activeProfileId('claude'), work.profile.id);
+  assert.equal(await f.store.matchesNative('claude', work.profile.id), false, 'an unreadable native login matches nothing');
+  assert.equal(await f.store.followNative('claude'), false);
+});
+
+test('activating a profile without a usable login or that no longer exists fails before the native file is touched', async (t) => {
+  const f = fixture(t);
+  const work = await f.store.saveNative('claude', { name: 'Work' });
+  const hollow = await f.store.importCredential('claude', 'Hollow', claudeLogin('b'));
+  const file = path.join(f.root, 'profiles.json');
+  const stored = JSON.parse(fs.readFileSync(file, 'utf8'));
+  stored.claude.profiles.find((profile) => profile.id === hollow.profile.id).credential = { claudeAiOauth: {} };
+  fs.writeFileSync(file, JSON.stringify(stored));
+  const nativeBefore = fs.readFileSync(f.nativeClaude, 'utf8');
+  assert.equal(f.store.hasCredential('claude', hollow.profile.id), false);
+  await assert.rejects(f.store.activateProfile('claude', hollow.profile.id), /The login of “Hollow” is missing or invalid/);
+  await assert.rejects(f.store.activateProfile('claude', 'nope'), /The profile no longer exists/);
+  assert.equal(fs.readFileSync(f.nativeClaude, 'utf8'), nativeBefore);
+  assert.equal(f.store.activeProfileId('claude'), work.profile.id);
+  assert.equal(await f.store.credential('claude', hollow.profile.id), undefined);
+  assert.equal(await f.store.credential('claude', 'nope'), undefined);
+});
+
+test('a verifier that throws leaves the switch done and reported as unconfirmed', async (t) => {
+  const f = fixture(t);
+  await f.store.saveNative('claude', { name: 'Work' });
+  const backup = await f.store.importCredential('claude', 'Backup', claudeLogin('b'));
+  f.store.verifyActivation = async () => { throw new Error('app-server did not start'); };
+  const outcome = await f.store.activateProfile('claude', backup.profile.id);
+  assert.equal(outcome.level, 'warning');
+  assert.equal(outcome.verification.detail, 'app-server did not start');
+  assert.match(outcome.message, /switched to “Backup”, but the login could not be confirmed: app-server did not start/);
+  assert.equal(f.store.activeProfileId('claude'), backup.profile.id);
+  assert.equal(f.readNative(f.nativeClaude).claudeAiOauth.accessToken, 'b');
+});
+
+test('switching away from the active profile first captures the tokens its own CLI refreshed, and survives a missing native file', async (t) => {
+  const f = fixture(t);
+  const work = await f.store.saveNative('claude', { name: 'Work' });
+  const backup = await f.store.importCredential('claude', 'Backup', claudeLogin('b'));
+  // The CLI refreshed the access token of the active login: same refresh token, new access token.
+  const refreshed = { claudeAiOauth: { accessToken: 'a-new', refreshToken: 'r-a', expiresAt: 9999999999999 } };
+  fs.writeFileSync(f.nativeClaude, JSON.stringify(refreshed));
+  await f.store.activateProfile('claude', backup.profile.id);
+  assert.equal((await f.store.credential('claude', work.profile.id)).claudeAiOauth.accessToken, 'a-new');
+  assert.ok(f.logs.some((line) => /captured refreshed tokens for profile "Work"/.test(line)));
+  // Another owner's login in the native file is never taken for the active profile.
+  fs.writeFileSync(f.nativeClaude, JSON.stringify(claudeLogin('stranger')));
+  await f.store.activateProfile('claude', work.profile.id);
+  assert.equal((await f.store.credential('claude', backup.profile.id)).claudeAiOauth.accessToken, 'b');
+  // A missing native file does not stop the switch.
+  fs.rmSync(f.nativeClaude);
+  const outcome = await f.store.activateProfile('claude', backup.profile.id);
+  assert.equal(outcome.level, 'info');
+  assert.equal(f.readNative(f.nativeClaude).claudeAiOauth.accessToken, 'b');
+});
+
+test('a refreshed token for an inactive, unknown or meanwhile-changed profile is written only where it belongs', async (t) => {
+  const f = fixture(t);
+  await f.store.saveNative('claude', { name: 'Work' });
+  const backup = await f.store.importCredential('claude', 'Backup', claudeLogin('b'));
+  const before = claudeLogin('b');
+  const after = { claudeAiOauth: { accessToken: 'b2', refreshToken: 'r-b2', expiresAt: 9999999999999 } };
+  await f.store.refreshedCredential('claude', 'nope', before, after);
+  assert.equal(f.readNative(f.nativeClaude).claudeAiOauth.accessToken, 'a', 'an unknown profile changes nothing');
+  await f.store.refreshedCredential('claude', backup.profile.id, claudeLogin('other-before'), after);
+  assert.equal((await f.store.credential('claude', backup.profile.id)).claudeAiOauth.accessToken, 'b', 'the stored login changed since it was read');
+  await f.store.refreshedCredential('claude', backup.profile.id, before, after);
+  assert.equal((await f.store.credential('claude', backup.profile.id)).claudeAiOauth.accessToken, 'b2');
+  assert.equal(f.readNative(f.nativeClaude).claudeAiOauth.accessToken, 'a', 'an inactive profile never touches the native login');
+  // The active profile's native file is unreadable: the stored copy is left alone.
+  const work = f.store.resolve('claude', 'Work');
+  fs.rmSync(f.nativeClaude);
+  await f.store.refreshedCredential('claude', work.id, claudeLogin('a'), claudeLogin('a3'));
+  assert.equal((await f.store.credential('claude', work.id)).claudeAiOauth.accessToken, 'a');
+});
+
+test('identity lookups that fail or say nothing never break saving, and later fill in what a profile lacks', async (t) => {
+  const f = fixture(t);
+  let mode = 'throw';
+  const store = storeWith(f, async (provider, credential) => {
+    if (mode === 'throw') throw new Error('offline');
+    if (mode === 'empty') return {};
+    return { email: `${credential.claudeAiOauth.accessToken}@example.com`, accountId: `acc-${credential.claudeAiOauth.accessToken}` };
+  });
+  assert.deepEqual(await store.identity('claude', claudeLogin('a')), {});
+  assert.equal(await store.duplicateOf('claude', claudeLogin('a')), undefined);
+  const saved = await store.importCredential('claude', 'Anon', claudeLogin('a'));
+  assert.equal(saved.status, 'saved');
+  assert.equal(saved.profile.email, undefined);
+  assert.equal((await store.duplicateOf('claude', claudeLogin('a'))).name, 'Anon', 'the same login is recognized by its credential');
+  assert.deepEqual(store.activeIdentity('claude'), { email: undefined, accountId: undefined });
+  await store.backfillEmails('claude');
+  assert.equal(store.profile('claude', saved.profile.id).email, undefined, 'a failed lookup leaves the profile as it was');
+  mode = 'empty';
+  await store.backfillEmails('claude');
+  assert.equal(store.profile('claude', saved.profile.id).email, undefined);
+  mode = 'ok';
+  await store.backfillEmails('claude');
+  assert.deepEqual([store.profile('claude', saved.profile.id).email, store.profile('claude', saved.profile.id).accountId], ['a@example.com', 'acc-a']);
+  const stamp = store.profile('claude', saved.profile.id).updatedAt;
+  await store.backfillEmails('claude');
+  assert.equal(store.profile('claude', saved.profile.id).updatedAt, stamp, 'nothing is rewritten when the identity is unchanged');
+  fs.writeFileSync(f.nativeClaude, JSON.stringify(claudeLogin('a')));
+  await store.saveNative('claude', { id: saved.profile.id });
+  assert.deepEqual(store.activeIdentity('claude'), { email: 'a@example.com', accountId: 'acc-a' });
+});
+
+test('saving the native login into an existing profile updates it, and a vanished profile is refused', async (t) => {
+  const f = fixture(t);
+  const work = await f.store.saveNative('claude', { name: 'Work' });
+  const backup = await f.store.importCredential('claude', 'Backup', claudeLogin('b'));
+  const outcome = await f.store.saveNative('claude', { id: backup.profile.id });
+  assert.equal(outcome.status, 'updated');
+  assert.equal(outcome.profile.id, backup.profile.id);
+  assert.equal(f.store.activeProfileId('claude'), backup.profile.id, 'the profile now holding the native login is the active one');
+  assert.equal((await f.store.credential('claude', backup.profile.id)).claudeAiOauth.accessToken, 'a');
+  assert.equal((await f.store.credential('claude', work.profile.id)).claudeAiOauth.accessToken, 'a');
+  await assert.rejects(f.store.saveNative('claude', { id: 'gone' }), /selected profile no longer exists/);
+  await assert.rejects(f.store.replaceCredential('claude', 'gone', claudeLogin('z')), /The profile no longer exists/);
+});
+
+test('names, limits and vanished profiles are refused for save, rename, reorder, delete and import', async (t) => {
+  const f = fixture(t);
+  await assert.rejects(f.store.importCredential('claude', '', claudeLogin('x')), /Enter a profile name/);
+  await assert.rejects(f.store.importCredential('claude', 'x'.repeat(61), claudeLogin('x')), /60 characters or fewer/);
+  const first = await f.store.importCredential('claude', 'First', claudeLogin('t0'));
+  const second = await f.store.importCredential('claude', 'Second', claudeLogin('t1'));
+  assert.throws(() => f.store.rename('claude', first.profile.id, ' '), /Enter a profile name/);
+  assert.throws(() => f.store.rename('claude', 'gone', 'New'), /The profile no longer exists/);
+  assert.throws(() => f.store.rename('claude', first.profile.id, 'SECOND'), /already exists/);
+  assert.equal(f.store.rename('claude', first.profile.id, 'FIRST').name, 'FIRST', 'a profile may take another case of its own name');
+  assert.throws(() => f.store.reorder('claude', 'gone', 1), /The profile no longer exists/);
+  assert.throws(() => f.store.delete('claude', 'gone'), /The profile no longer exists/);
+  for (let i = 2; i < MAX_PROFILES; i++) await f.store.importCredential('claude', `Profile ${i}`, claudeLogin(`t${i}`));
+  assert.equal(f.store.profileCount('claude'), MAX_PROFILES);
+  await assert.rejects(f.store.importCredential('claude', 'One too many', claudeLogin('extra')), /already has the maximum of 20 saved profiles/);
+  assert.equal(f.store.profileCount('claude'), MAX_PROFILES);
+  assert.equal(f.store.delete('claude', second.profile.id).wasActive, false);
+  assert.equal((await f.store.importCredential('claude', 'One more', claudeLogin('extra'))).status, 'saved', 'a freed slot can be used');
+});
+
+test('an import that would exceed the profile limit is refused whole, and an export names profiles whose login is missing', async (t) => {
+  const f = fixture(t);
+  const source = fixture(t);
+  const sources = [];
+  for (let i = 0; i < 3; i++) sources.push(await source.store.importCredential('claude', `Src ${i}`, claudeLogin(`s${i}`)));
+  for (let i = 0; i < MAX_PROFILES - 2; i++) await f.store.importCredential('claude', `Own ${i}`, claudeLogin(`o${i}`));
+  const { entries } = source.store.exportEntries();
+  assert.equal(entries.length, 3);
+  const plans = f.store.planImport(entries);
+  await assert.rejects(f.store.applyImport(plans), /Claude has room for 2 more profiles \(20 at most\), but 3 new ones were chosen/);
+  assert.equal(f.store.profileCount('claude'), MAX_PROFILES - 2, 'nothing was added');
+  // Export honors a selection and reports a profile without a usable login instead of failing.
+  const file = path.join(source.root, 'profiles.json');
+  const stored = JSON.parse(fs.readFileSync(file, 'utf8'));
+  stored.claude.profiles[1].credential = {};
+  fs.writeFileSync(file, JSON.stringify(stored));
+  const all = source.store.exportEntries();
+  assert.deepEqual(all.entries.map((entry) => entry.name), ['Src 0', 'Src 2']);
+  assert.deepEqual(all.missing, ['Claude “Src 1”']);
+  const chosen = source.store.exportEntries([{ provider: 'claude', id: sources[2].profile.id }]);
+  assert.deepEqual(chosen.entries.map((entry) => entry.name), ['Src 2']);
+  assert.deepEqual(chosen.missing, []);
+});
+
+test('an import asks the vendor only about profiles whose exported metadata lacks an identity', async (t) => {
+  const f = fixture(t);
+  const lookups = [];
+  const store = storeWith(f, async (provider, credential) => { lookups.push(credential.claudeAiOauth.accessToken); return { email: `${credential.claudeAiOauth.accessToken}@example.com`, accountId: `acc-${credential.claudeAiOauth.accessToken}` }; });
+  const stamp = '2026-09-01T00:00:00.000Z';
+  const entry = (id, name, token, identity = {}) => ({ provider: 'claude', id, name, createdAt: stamp, updatedAt: stamp, credential: claudeLogin(token), ...identity });
+  const outcome = await store.applyImport(store.planImport([entry('i1', 'Known', 'k', { email: 'k@example.com', accountId: 'acc-k' }), entry('i2', 'Unknown', 'u')]));
+  assert.deepEqual(lookups, ['u']);
+  assert.deepEqual(store.profiles('claude').map((profile) => [profile.name, profile.email]), [['Known', 'k@example.com'], ['Unknown', 'u@example.com']]);
+  assert.ok(outcome);
+});
+
+test('project profile files that are unreadable, missing or odd are skipped and never overwritten, and .gitignore is only edited when it should be', async (t) => {
+  const f = fixture(t);
+  const { store, notices } = projectStore(f);
+  const repo = path.join(f.root, 'repo');
+  const missing = path.join(f.root, 'not-there');
+  fs.mkdirSync(path.join(repo, '.git'), { recursive: true });
+  const file = path.join(repo, '.ai-usage.profiles.json');
+  fs.writeFileSync(file, '{ this is not json');
+  store.setProjectFolders([repo, missing]);
+  assert.deepEqual(store.profiles('claude'), [], 'neither the broken file nor the missing folder lists anything or throws');
+  assert.ok(f.logs.some((line) => line.includes(`project profiles in ${file} were not loaded`)));
+  // Saving a profile into the folder with the unreadable file must not replace the file.
+  const saved = await store.saveNative('claude', { name: 'Client', folder: repo });
+  assert.equal(saved.status, 'saved');
+  assert.equal(fs.readFileSync(file, 'utf8'), '{ this is not json', 'the user has to fix or remove the file');
+  assert.equal(fs.existsSync(path.join(repo, '.gitignore')), false, 'nothing was written, so nothing is ignored');
+  assert.deepEqual(notices, []);
+  // The user fixes the file: it is read again, and the profile can be saved.
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  fs.writeFileSync(file, JSON.stringify({ aiUsageProfiles: 1, profiles: [] }));
+  assert.equal((await store.importCredential('claude', 'Mended', claudeLogin('m'), false, repo)).status, 'saved');
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')).profiles.map((profile) => profile.name), ['Mended']);
+  assert.equal(fs.existsSync(path.join(repo, '.gitignore')), false, 'the file existed already, so it is not for this write to ignore');
+  assert.equal(fs.statSync(file).isFile(), true);
+});
+
+test('a project profile file is added to .gitignore once, joined to an existing last line, and left alone when it is already ignored or lies outside the folder', async (t) => {
+  const cases = [
+    { ignore: undefined, expected: '# AI Usage project profiles hold login tokens\n.ai-usage.profiles.json\n' },
+    { ignore: 'dist', expected: 'dist\n# AI Usage project profiles hold login tokens\n.ai-usage.profiles.json\n' },
+    { ignore: 'dist\r\n.ai-usage.profiles.json\r\n', expected: 'dist\r\n.ai-usage.profiles.json\r\n' },
+    { ignore: '/.ai-usage.profiles.json\n', expected: '/.ai-usage.profiles.json\n' },
+    { ignore: 'config/\n', file: 'config/profiles.json', expected: 'config/\n' },
+    { ignore: '/config\n', file: 'config/profiles.json', expected: '/config\n' },
+    { ignore: 'config/other.json\n', file: 'config/profiles.json', expected: 'config/other.json\n# AI Usage project profiles hold login tokens\nconfig/profiles.json\n' }
+  ];
+  for (const { ignore, expected, file = '.ai-usage.profiles.json' } of cases) {
+    const f = fixture(t);
+    const { store, notices } = projectStore(f, { file });
+    const repo = path.join(f.root, 'repo');
+    fs.mkdirSync(path.join(repo, '.git'), { recursive: true });
+    if (ignore !== undefined) fs.writeFileSync(path.join(repo, '.gitignore'), ignore);
+    store.setProjectFolders([repo]);
+    await store.importCredential('claude', 'P', claudeLogin('p'), false, repo);
+    const actual = fs.existsSync(path.join(repo, '.gitignore')) ? fs.readFileSync(path.join(repo, '.gitignore'), 'utf8') : undefined;
+    assert.equal(actual, expected, JSON.stringify({ ignore, file }));
+    assert.equal(notices.length, expected === ignore ? 0 : 1);
+  }
+  // A folder that is not a Git repository gets no .gitignore, and a file path outside the folder is not the repository's to ignore.
+  const f = fixture(t);
+  const plain = path.join(f.root, 'plain');
+  fs.mkdirSync(plain);
+  const outside = path.join(f.root, 'elsewhere', 'profiles.json');
+  const { store: plainStore, notices: plainNotices } = projectStore(f);
+  plainStore.setProjectFolders([plain]);
+  await plainStore.importCredential('claude', 'P', claudeLogin('p'), false, plain);
+  assert.equal(fs.existsSync(path.join(plain, '.gitignore')), false);
+  const repo = path.join(f.root, 'repo2');
+  fs.mkdirSync(path.join(repo, '.git'), { recursive: true });
+  const { store: outsideStore, notices: outsideNotices } = projectStore(f, { file: outside });
+  outsideStore.setProjectFolders([repo]);
+  await outsideStore.importCredential('claude', 'Q', claudeLogin('q'), false, repo);
+  assert.equal(fs.existsSync(outside), true, 'an absolute file name is used as it is');
+  assert.equal(fs.existsSync(path.join(repo, '.gitignore')), false);
+  assert.deepEqual([...plainNotices, ...outsideNotices], []);
+});
+
+test('an import plan is described by what applying it would do', () => {
+  const plan = (kind, target, name = 'Imported') => ({ kind, target, entry: { name } });
+  assert.equal(importOutcome(plan('new')), 'new profile');
+  assert.equal(importOutcome(plan('restore', { name: 'Imported' })), 'restores the missing login');
+  assert.equal(importOutcome(plan('restore', { name: 'Saved' })), 'restores the missing login of “Saved”');
+  assert.equal(importOutcome(plan('replace', { name: 'Imported' })), 'replaces the saved login');
+  assert.equal(importOutcome(plan('replace', { name: 'Saved' })), 'replaces the saved login of “Saved”');
+  assert.equal(importOutcome(plan('same', { name: 'Imported' })), 'already saved');
+  assert.equal(importOutcome(plan('same', { name: 'Saved' })), 'already saved as “Saved”');
+});
+
+test('the native login is matched to its profile by account id or e-mail when the refresh token was rotated, and by nothing else', async (t) => {
+  const f = fixture(t);
+  const work = await f.store.saveNative('claude', { name: 'Work' });
+  const rotated = (access) => JSON.stringify({ claudeAiOauth: { accessToken: access, refreshToken: 'r-rotated', expiresAt: 9999999999999 } });
+  fs.writeFileSync(f.nativeClaude, rotated('a'));
+  assert.equal(await f.store.matchesNative('claude', work.profile.id), true, 'the token still belongs to the saved account id');
+  fs.writeFileSync(f.nativeClaude, rotated('b'));
+  assert.equal(await f.store.matchesNative('claude', work.profile.id), false, 'another account id');
+  fs.writeFileSync(f.nativeClaude, rotated('unknown'));
+  assert.equal(await f.store.matchesNative('claude', work.profile.id), false, 'a token nobody can identify');
+  // A profile known only by e-mail matches case-insensitively; one with no identity at all matches only by token.
+  const file = path.join(f.root, 'profiles.json');
+  const edit = (change) => { const stored = JSON.parse(fs.readFileSync(file, 'utf8')); change(stored.claude.profiles[0]); fs.writeFileSync(file, JSON.stringify(stored)); };
+  edit((profile) => { delete profile.accountId; profile.email = 'A@EXAMPLE.COM'; });
+  fs.writeFileSync(f.nativeClaude, rotated('a'));
+  assert.equal(await f.store.matchesNative('claude', work.profile.id), true);
+  edit((profile) => { delete profile.email; });
+  assert.equal(await f.store.matchesNative('claude', work.profile.id), false);
+  assert.equal(await f.store.matchesNative('claude', 'gone'), false);
+});
+
+test('a Codex login whose tokens differ from the saved ones is still followed to the profile that holds its account id', async (t) => {
+  const f = fixture(t);
+  const saved = await f.store.importCredential('codex', 'Pro', { auth_mode: 'chatgpt', tokens: { access_token: 't', refresh_token: 'r-saved' } });
+  const file = path.join(f.root, 'profiles.json');
+  const stored = JSON.parse(fs.readFileSync(file, 'utf8'));
+  stored.codex.profiles[0].accountId = 'acc-z';
+  fs.writeFileSync(file, JSON.stringify(stored));
+  assert.equal(f.store.activeProfileId('codex'), undefined);
+  fs.writeFileSync(f.nativeCodex, JSON.stringify(codexLogin('acc-z')));
+  assert.equal(await f.store.followNative('codex'), true);
+  assert.equal(f.store.activeProfileId('codex'), saved.profile.id);
+  assert.equal(f.store.nativeIsUnsaved('codex'), false);
+  fs.writeFileSync(f.nativeCodex, JSON.stringify({ auth_mode: 'chatgpt', tokens: { access_token: 'x', refresh_token: 'r-other' } }));
+  assert.equal(await f.store.followNative('codex'), false);
+  assert.equal(f.store.nativeIsUnsaved('codex'), true, 'a login with no account id and no matching token belongs to no profile');
+});
+
+test('a profile list that changes while a new profile is being checked is rechecked before the save is committed', async (t) => {
+  const f = fixture(t);
+  const file = path.join(f.root, 'profiles.json');
+  const entry = (name, i) => ({ id: `p${i}`, name, createdAt: 'x', updatedAt: 'x', credential: claudeLogin(`o${i}`) });
+  const write = (claude) => fs.writeFileSync(file, JSON.stringify({ version: 1, claude: { profiles: claude }, codex: { profiles: [] } }));
+  let during;
+  const store = storeWith(f, async () => { during?.(); return {}; });
+  // A profile with the same name appears while the identity is looked up.
+  during = () => write([entry('Racer', 1)]);
+  await assert.rejects(store.importCredential('claude', 'racer', claudeLogin('new')), /A Claude profile named “racer” already exists/);
+  // The list fills up meanwhile.
+  during = () => write(Array.from({ length: MAX_PROFILES }, (_, i) => entry(`Full ${i}`, i)));
+  await assert.rejects(store.importCredential('claude', 'Late', claudeLogin('new2')), /already has the maximum of 20 saved profiles/);
+  assert.equal(store.profileCount('claude'), MAX_PROFILES);
 });

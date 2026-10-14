@@ -26,7 +26,8 @@ export function deserializeUsageState(state: UsageStateView): UsageState {
 export function usageSettings(config: ServiceConfig, provider: ProviderId): { source: UsageSource; checkIntervalMs: number; apiCheckIntervalMs: number } {
   const own = config[provider];
   const apiCheckIntervalMs = Math.max(provider === 'claude' ? 0.25 : 1, own.checkIntervalMinutes) * 60_000;
-  return { source: own.source, apiCheckIntervalMs, checkIntervalMs: provider === 'claude' && ['both', 'accountFile'].includes(own.source)
+  // `auto` reads the free local account file this often too, so rotation sees the active account within seconds.
+  return { source: own.source, apiCheckIntervalMs, checkIntervalMs: provider === 'claude' && ['auto', 'both', 'accountFile'].includes(own.source)
     ? Math.max(5, config.claude.accountFile.checkIntervalSeconds) * 1000 : apiCheckIntervalMs };
 }
 function hash(value: unknown): string { return createHash('sha256').update(JSON.stringify(value)).digest('hex'); }
@@ -114,6 +115,10 @@ export class UsageMonitor {
           (this.options.now ?? Date.now)() + settings.checkIntervalMs, result.usage.fetchedAt.getTime() + settings.apiCheckIntervalMs));
         const reset = result.usage.windows.map(w => w.resetsAt?.getTime()).filter((time): time is number => time !== undefined && time > now).sort((a,b) => a-b)[0];
         if (reset) this.nextCheck.set(key, Math.min(this.nextCheck.get(key) ?? now + settings.checkIntervalMs, reset + 1000));
+        // Auto hands back the reading it already had while no newer one exists; that is nothing new to publish.
+        if (result.usage === lastGood && previous?.result.kind === 'ok') {
+          const state = { identity, result, lastGood }; this.states.set(key, state); return state;
+        }
         if (provider !== 'copilot') await this.options.observe?.(provider, result.usage,
           !(provider === 'codex' && (['both', 'sessionLog'].includes(settings.source) ||
             (settings.source === 'auto' && (!result.usage.source || result.usage.source === 'sessionLog')))), identity);
@@ -141,7 +146,9 @@ export class UsageMonitor {
         cli: () => provider === 'claude' ? fetchClaudeUsageCli(config.claude.cliPath) : fetchCodexUsageCli(config.codex.cliPath),
         apiSpacing: this.fallbacks[provider], cliSpacing: this.cliFallbacks[provider],
         budget: provider === 'claude' ? this.options.budget : undefined });
-      if (result.kind === 'error' && result.transient) {
+      // Only an endpoint's rate signal blocks it further; the spacing above already paces every other retry, and a
+      // local source's transient error (read every few seconds) would otherwise keep pushing the endpoint out.
+      if (result.kind === 'error' && result.transient && (result.status === 429 || result.retryAfterMs !== undefined)) {
         const retryAfterMs = result.retryAfterMs ?? Math.max(60_000, apiCheckIntervalMs);
         this.fallbacks[provider].observe({ retryAfterMs }, (this.options.now ?? Date.now)());
         this.cliFallbacks[provider].observe({ retryAfterMs }, (this.options.now ?? Date.now)());

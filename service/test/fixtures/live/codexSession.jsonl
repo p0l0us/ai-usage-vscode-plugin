@@ -1,0 +1,6 @@
+{"timestamp":"2026-10-11T08:00:00.000Z","type":"session_meta","payload":{"id":"sess-1","cwd":"/work/app"}}
+{"timestamp":"2026-10-11T08:01:00.000Z","type":"event_msg","payload":{"type":"token_count","info":null,"rate_limits":{"primary":{"used_percent":10.0,"window_minutes":300,"resets_at":1791730800},"secondary":{"used_percent":3.0,"window_minutes":10080,"resets_at":1792250400},"plan_type":"pro"}}}
+{"timestamp":"2026-10-11T08:05:00.000Z","type":"event_msg","payload":{"type":"token_count","info":null,"rate_limits":{"primary":{"used_percent":22.0,"window_minutes":300,"resets_at":1791730800},"secondary":{"used_percent":4.0,"window_minutes":10080,"resets_at":1792250400},"plan_type":"pro"}}}
+{"timestamp":"2026-10-11T08:06:00.000Z","type":"event_msg","payload":{"type":"token_count","info":null,"rate_limits":{"primary":null,"secondary":null}}}
+{"timestamp":"2026-10-11T08:07:00.000Z","type":"event_msg","payload":{"type":"agent_message","message":"mentions \"rate_limits\" in prose"}}
+{"timestamp":"2026-10-11T08:08:00.000Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"primary":{"used_pe

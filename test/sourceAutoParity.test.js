@@ -37,15 +37,17 @@ for (const mode of ['background', 'embedded']) {
         const rows = fs.readFileSync(file, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse).filter(row => row.provider === provider);
         const attempts = rows.map(row => row.source);
         assert.ok(rows.length > 0);
-        for (const request of new Set(rows.map(row => row.request))) {
-          assert.deepEqual(rows.filter(row => row.request === request).map(row => row.source), scenario.attempts);
-        }
+        // The forced read walks the sources in cost order; background polls only re-read the free local source.
+        const requests = [...new Set(rows.map(row => row.request))].map(request => rows.filter(row => row.request === request).map(row => row.source));
+        assert.deepEqual(requests[0], scenario.attempts);
+        for (const later of requests.slice(1)) assert.ok([JSON.stringify(scenario.attempts), '["local"]'].includes(JSON.stringify(later)), JSON.stringify(later));
         if (scenario.source) {
           assert.equal(view.result.kind, 'ok'); assert.equal(view.result.usage.source, scenario.source);
           assert.equal(Date.parse(view.result.usage.fetchedAt), JSON.parse(fs.readFileSync(path.join(f.home, 'fixture.json'), 'utf8')).now - 1000);
           await client.liveUsage(provider, true);
           const after = fs.readFileSync(file, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse).filter(row => row.provider === provider);
-          assert.equal(after.length, attempts.length, 'fresh engine cache avoids all source calls');
+          assert.deepEqual([...new Set(after.slice(attempts.length).map(row => row.source))].filter(source => source !== 'local'), [],
+            'fresh engine cache avoids every endpoint and CLI call');
         } else { assert.equal(view.result.kind, 'error'); assert.equal(view.result.status, 429); }
       }
     }

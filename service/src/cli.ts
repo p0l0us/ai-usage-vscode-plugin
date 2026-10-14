@@ -442,7 +442,7 @@ export async function main(argv: string[], io?: CliOutput): Promise<number> {
       }
       case 'keepalive': case 'keep-alive': case 'ka': {
         const service = provider(rest[0]);
-        return withClient(home, [], async (client) => {
+        return withClient(home, ['keepAliveProgress', 'waiting'], async (client) => {
           const view = await client.list(service);
           const targets = flags.all || !rest[1] ? view.profiles : view.profiles.filter((candidate) => matches(candidate, rest.slice(1).join(' ')));
           if (!targets.length) { throw new UsageError(rest[1] ? `No ${TITLES[service]} profile matches "${rest.slice(1).join(' ')}".` : `No ${TITLES[service]} profiles are saved.`); }
@@ -516,9 +516,12 @@ export async function main(argv: string[], io?: CliOutput): Promise<number> {
           printJson(result.length === 1 ? result[0] : result); return 0;
         }, flags);
       }
-      case 'rotation-weights': return withClient(home, [], async client => {
-        printJson(await client.call('rotation.diagnostics', { provider: provider(rest[0]) })); return 0;
-      }, flags);
+      case 'rotation-weights': {
+        const service = provider(rest[0]);
+        return withClient(home, [], async client => {
+          printJson(await client.call('rotation.diagnostics', { provider: service })); return 0;
+        }, flags);
+      }
       case 'config': case 'set': case 'get': {
         const args = command === 'config' ? rest : command === 'set' ? ['set', ...rest] : ['get', ...rest];
         const verb = args[0] === 'set' || args[0] === 'get' || args[0] === 'list' ? args.shift() : undefined;

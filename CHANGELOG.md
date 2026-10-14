@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.4.2 (2026-10-14)
+
+- Claude rotation with the default `auto` usage source now sees the active account approach its limit within seconds instead of up to `checkIntervalMinutes` (10) later. `auto` re-reads Claude Code's local usage cache every `aiUsage.claude.accountFile.checkIntervalSeconds` (15 s), as `both` and `accountFile` already did. A busy session could previously go from below the 5-hour threshold to the limit between two readings without a switch. The usage endpoint is still called no more often than before, and a local read that fails no longer delays that endpoint fallback.
+- A `profiles.json` that cannot be parsed is no longer silently replaced by an empty store on the next save: a copy (`profiles.json.corrupt-<time>`, mode 0600) is kept beside it first, so the saved logins in it are not lost.
+- `ai-usage keepalive` prints its progress again (it never subscribed to the service's progress events), and `ai-usage rotation-weights` names a wrong service before it connects, like the other commands.
+- Colour codes in the output of the Claude CLI no longer appear as raw escape sequences in the usage error message.
+- Internal: the status bar, chip, details and notice logic moved out of `extension.ts` into separately tested modules, with about 400 new tests, a real VS Code end-to-end smoke test (`npm run test:e2e`), a coverage ratchet (`npm run coverage`) and optional mutation testing (`npm run mutation`); see [docs/TESTING.md](docs/TESTING.md).
+
 ## 1.4.0 (2026-10-11)
 
 - Rotation is no longer held up by keep-alives. It chooses the next account from the readings the service already stores (a window whose reset time has passed counts as fresh), makes no call to the provider for the candidate and no longer sends a keep-alive before switching. Keep-alives stay a separate periodic update. A keep-alive that failed for a reason other than a login problem (a CLI error, no credits) no longer excludes an account from rotation; an expired or revoked login still does.

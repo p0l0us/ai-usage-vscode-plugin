@@ -9,12 +9,24 @@ let enabled = true;
 class Definition {
   constructor(label, command, args, env, version) { Object.assign(this, { label, command, args, env, version }); }
 }
+// What registerMcpProvider hands to the editor, so a test can drive the provider the way the editor would.
+const registrations = []; let configListener;
+class Emitter {
+  constructor() { this.listeners = []; this.event = listener => { this.listeners.push(listener); return { dispose: () => { this.listeners = this.listeners.filter(entry => entry !== listener); } }; }; }
+  fire() { for (const listener of [...this.listeners]) listener(); }
+  dispose() { this.disposed = true; }
+}
+const vscodeMock = {
+  workspace: { getConfiguration: () => ({ get: () => enabled }), onDidChangeConfiguration: listener => { configListener = listener; return { dispose() {} }; } },
+  lm: { registerMcpServerDefinitionProvider: (id, provider) => { registrations.push({ id, provider }); return { dispose() {} }; } },
+  EventEmitter: Emitter, McpStdioServerDefinition: Definition, Uri: { file: value => value }
+};
 const originalLoad = Module._load;
 Module._load = function(name, parent, isMain) {
-  if (name === 'vscode') return { workspace: { getConfiguration: () => ({ get: () => enabled }) }, McpStdioServerDefinition: Definition, Uri: { file: value => value } };
+  if (name === 'vscode') return vscodeMock;
   return originalLoad.call(this, name, parent, isMain);
 };
-const { mcpServerDefinition } = require('../out/mcpProvider');
+const { mcpServerDefinition, registerMcpProvider, mcpEnabled, MCP_PROVIDER_ID } = require('../out/mcpProvider');
 Module._load = originalLoad;
 
 test('the editor offers its bundled stdio adapter without service installation', t => {
@@ -30,6 +42,70 @@ test('the editor offers its bundled stdio adapter without service installation',
   assert.equal(server.env.AI_USAGE_HOME, home);
   enabled = false;
   assert.equal(mcpServerDefinition(home).server, undefined);
+});
+
+test('the editor offers nothing, and says why, while the setting is off or no adapter can be found', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-mcp-provider-'));
+  const emptyExtension = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-mcp-extension-'));
+  t.after(() => { fs.rmSync(home, { recursive: true, force: true }); fs.rmSync(emptyExtension, { recursive: true, force: true }); });
+  enabled = false;
+  assert.equal(mcpEnabled(), false);
+  assert.deepEqual(mcpServerDefinition(home, emptyExtension), { reason: 'aiUsage.mcp.enabled is off' });
+  enabled = true;
+  assert.equal(mcpEnabled(), true);
+  assert.deepEqual(mcpServerDefinition(home, emptyExtension), { reason: 'the bundled MCP adapter is missing' });
+  const bundled = path.join(emptyExtension, 'service', 'bin');
+  fs.mkdirSync(bundled, { recursive: true });
+  fs.writeFileSync(path.join(bundled, 'ai-usage.js'), '');
+  const { server, reason } = mcpServerDefinition(home, emptyExtension);
+  assert.equal(reason, undefined);
+  assert.equal(server.label, 'AI Usage accounts');
+  assert.equal(server.cwd, home);
+  assert.equal(server.version, undefined, 'without an installed service there is no version to pin');
+  assert.equal(server.args[0], path.join(bundled, 'ai-usage.js'));
+});
+
+test('the provider offers the server only while it is enabled, starts the service before an agent uses it, and refreshes on settings and installs', async t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-mcp-provider-'));
+  const extension = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-mcp-extension-'));
+  t.after(() => { fs.rmSync(home, { recursive: true, force: true }); fs.rmSync(extension, { recursive: true, force: true }); });
+  registrations.length = 0;
+  const logs = []; let ensured = 0; let installed;
+  const services = { home, ensure: async () => { ensured++; }, onDidInstall: listener => { installed = listener; return { dispose() {} }; } };
+  const context = { extensionPath: extension, subscriptions: [] };
+  registerMcpProvider(context, services, message => logs.push(message));
+  assert.equal(registrations.length, 1);
+  assert.equal(registrations[0].id, MCP_PROVIDER_ID);
+  assert.equal(MCP_PROVIDER_ID, 'aiUsage.accounts');
+  assert.equal(context.subscriptions.length, 4, 'the emitter, the provider, the settings listener and the install listener are all disposed with the extension');
+  const { provider } = registrations[0];
+  // Off: nothing is offered and nothing is logged.
+  enabled = false;
+  assert.deepEqual(provider.provideMcpServerDefinitions(), []);
+  assert.deepEqual(logs, []);
+  // On, but no adapter is available: nothing is offered and the reason is logged.
+  enabled = true;
+  assert.deepEqual(provider.provideMcpServerDefinitions(), []);
+  assert.deepEqual(logs, ['mcp: no server is offered to agents: the bundled MCP adapter is missing']);
+  // On with an adapter.
+  fs.mkdirSync(path.join(extension, 'service', 'bin'), { recursive: true });
+  fs.writeFileSync(path.join(extension, 'service', 'bin', 'ai-usage.js'), '');
+  const [server] = provider.provideMcpServerDefinitions();
+  assert.equal(server.label, 'AI Usage accounts');
+  assert.equal(logs.length, 1);
+  assert.equal(ensured, 0);
+  assert.equal(await provider.resolveMcpServerDefinition(server), server);
+  assert.equal(ensured, 1, 'the service is running before the agent starts the adapter');
+  // The editor is told to ask again when the MCP or service settings change, or the service is installed.
+  let refreshed = 0;
+  provider.onDidChangeMcpServerDefinitions(() => refreshed++);
+  configListener({ affectsConfiguration: section => section === 'aiUsage.mcp' });
+  configListener({ affectsConfiguration: section => section === 'aiUsage.accountService' });
+  assert.equal(refreshed, 2);
+  configListener({ affectsConfiguration: section => section === 'aiUsage.other' });
+  assert.equal(refreshed, 2, 'unrelated settings leave the offer alone');
+  installed();
+  assert.equal(refreshed, 3);
 });
 
 const readline = require('node:readline');

@@ -751,3 +751,117 @@ for (const initialized of [true, false]) test(`rapid disable/re-enable revokes p
   io.send({ jsonrpc: '2.0', id: 4, method: 'resources/subscribe', params: { uri } }); assert.deepEqual((await io.next()).result, {});
   client.advance(); assert.equal((await io.next()).method, 'notifications/resources/updated', 'explicit new subscription receives events');
 });
+
+test('status resource requests with a malformed or foreign URI are refused with the right JSON-RPC error and touch nothing', async t => {
+  const client = statusClient(); const mcp = server(client); t.after(() => mcp.close());
+  const refused = [
+    [undefined, -32602, /status resource URI is required/], [null, -32602, /required/], [[], -32602, /required/], ['ai-usage://status', -32602, /required/],
+    [{}, -32602, /required/], [{ uri: 5 }, -32602, /required/], [{ uri: 'ai-usage://status', extra: true }, -32602, /required/],
+    [{ uri: `ai-usage://status?${'x'.repeat(1100)}` }, -32602, /required/],
+    [{ uri: 'not a uri' }, -32602, /Invalid resource URI/],
+    [{ uri: 'http://status' }, -32002, /Unknown status resource/], [{ uri: 'ai-usage://elsewhere' }, -32002, /Unknown status resource/],
+    [{ uri: 'ai-usage://status/extra' }, -32002, /Unknown status resource/], [{ uri: 'ai-usage://status#frag' }, -32002, /Unknown/],
+    [{ uri: 'ai-usage://user@status' }, -32002, /Unknown/], [{ uri: 'ai-usage://status:80' }, -32002, /Unknown/],
+    [{ uri: 'ai-usage://status?provider=codex&other=1' }, -32602, /Invalid resource filters/],
+    [{ uri: 'ai-usage://status?provider=other' }, -32602, /Invalid resource filters/],
+    [{ uri: `ai-usage://status?provider=codex&account=${'a'.repeat(129)}` }, -32602, /Invalid resource filters/],
+    [{ uri: 'ai-usage://status?provider=codex&account=' }, -32602, /Invalid resource filters/],
+    [{ uri: 'ai-usage://status?provider=codex&account=a%20b' }, -32602, /canonical/]
+  ];
+  for (const method of ['resources/read', 'resources/subscribe']) {
+    for (const [params, code, message] of refused) {
+      const response = await call(mcp, 3, method, params);
+      assert.equal(response.error?.code, code, `${method} ${JSON.stringify(params)?.slice(0, 80)}`);
+      assert.match(response.error.message, message);
+    }
+  }
+  assert.deepEqual(client.calls, [], 'a refused request never reaches the engine');
+});
+
+test('envelopes and notifications: non-objects are invalid, unknown methods are not found, other notifications are ignored, and a failing notification is silent', async t => {
+  const mcp = server(fakeClient()); t.after(() => mcp.close());
+  for (const message of [null, 5, 'ping', []]) assert.deepEqual(await mcp.handle(message), { jsonrpc: '2.0', id: null, error: { code: -32600, message: 'Invalid request.' } });
+  assert.equal((await call(mcp, 1, 'no/such/method')).error.code, -32601);
+  assert.match((await call(mcp, 1, 'no/such/method')).error.message, /Method not found: no\/such\/method\./);
+  assert.deepEqual(await call(mcp, 2, 'notifications/anything'), { jsonrpc: '2.0', id: 2, result: {} });
+  assert.equal(await mcp.handle({ jsonrpc: '2.0', method: 'tools/call', params: { name: 'nothing' } }), undefined, 'a notification is never answered, even with an error');
+  assert.equal(await mcp.handle({ jsonrpc: '2.0', method: 'no/such/method' }), undefined);
+});
+
+test('a status subscription can be repeated without cost, at most eight are kept, and a refused one leaves no reservation', async t => {
+  const client = statusClient(); const mcp = server(client); t.after(() => mcp.close());
+  const uri = index => `ai-usage://status?provider=codex&account=a${index}`;
+  assert.deepEqual((await call(mcp, 1, 'resources/subscribe', { uri: uri(0) })).result, {});
+  const before = client.calls.length;
+  assert.deepEqual((await call(mcp, 2, 'resources/subscribe', { uri: uri(0) })).result, {}, 'the same URI again is accepted');
+  assert.equal(client.listenerCount('event'), 1, 'one listener serves every subscription');
+  assert.ok(client.calls.length >= before);
+  for (let index = 1; index < 8; index++) assert.deepEqual((await call(mcp, 10 + index, 'resources/subscribe', { uri: uri(index) })).result, {});
+  const ninth = await call(mcp, 20, 'resources/subscribe', { uri: uri(8) });
+  assert.equal(ninth.error.code, -32602);
+  assert.match(ninth.error.message, /At most 8 status subscriptions/);
+  assert.deepEqual((await call(mcp, 21, 'resources/unsubscribe', { uri: uri(7) })).result, {});
+  assert.deepEqual((await call(mcp, 22, 'resources/subscribe', { uri: uri(8) })).result, {}, 'a freed slot can be taken');
+});
+
+test('when the engine is back but MCP is turned off, the reconnect drops every subscription and announces nothing', { timeout: 6000 }, async t => {
+  const first = statusClient(), second = statusClient(); second.config.mcp.enabled = false;
+  let connections = 0;
+  const io = stdio({ connect: async () => connections++ ? second : first, version: 'test' }); t.after(() => io.end());
+  io.send({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18' } }); await io.next();
+  io.send({ jsonrpc: '2.0', method: 'notifications/initialized' });
+  io.send({ jsonrpc: '2.0', id: 2, method: 'resources/subscribe', params: { uri: 'ai-usage://status' } }); await io.next();
+  first.close();
+  await until(() => connections === 2);
+  await pause(1500);
+  assert.equal(io.lines.length, 0, 'no resource update is sent for a server that is turned off');
+  assert.equal(second.listenerCount('event'), 0, 'nothing keeps listening to the new connection');
+  io.send({ jsonrpc: '2.0', id: 3, method: 'resources/read', params: { uri: 'ai-usage://status' } });
+  const read = await io.next();
+  assert.match(read.error.message, /turned off/);
+});
+
+test('a failed notification flush reconnects and the subscriber is still told about the change', { timeout: 6000 }, async t => {
+  const client = statusClient(); const original = client.getConfig; let failing = false;
+  client.getConfig = async function(...args) { if (failing) { failing = false; throw new Error('engine hiccup'); } return original.apply(this, args); };
+  const io = stdio({ connect: async () => client, version: 'test' }); t.after(() => io.end());
+  io.send({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18' } }); await io.next();
+  io.send({ jsonrpc: '2.0', method: 'notifications/initialized' });
+  io.send({ jsonrpc: '2.0', id: 2, method: 'resources/subscribe', params: { uri: 'ai-usage://status' } }); await io.next();
+  failing = true;
+  client.advance();
+  await pause(300);
+  assert.equal(io.lines.length, 0, 'the failed flush sent nothing');
+  const notification = await io.next();
+  assert.deepEqual([notification.method, notification.params], ['notifications/resources/updated', { uri: 'ai-usage://status' }]);
+});
+
+test('stdio closes the connection on an oversized message, an unwritable output and a response backlog, and says so', async t => {
+  // A line that never ends is answered once and the connection closes.
+  const logs = [];
+  const client = fakeClient();
+  const huge = stdio({ connect: async () => client, version: 'test', log: message => logs.push(message) });
+  huge.send('x'.repeat(8 * 1024 * 1024 + 1).slice(0, -1));
+  const refused = await huge.next();
+  assert.deepEqual([refused.id, refused.error.code, refused.error.message], [null, -32600, 'Message too large.']);
+  assert.equal(await huge.end(), 0);
+
+  // An output that throws ends the server without an unhandled error.
+  const input = new PassThrough(), output = new PassThrough();
+  output.write = () => { throw new Error('EPIPE'); };
+  const done = runMcpStdio({ connect: async () => fakeClient(), version: 'test', input, output });
+  input.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' }) + '\n');
+  assert.equal(await Promise.race([done, pause(2000).then(() => 'hung')]), 0);
+
+  // A reader that never drains: one frame is in flight and 64 queue up, then the connection is closed.
+  const slowInput = new PassThrough(), callbacks = [], frames = [];
+  const slow = new Writable({ highWaterMark: 1, write(chunk, encoding, callback) { frames.push(JSON.parse(String(chunk))); callbacks.push(callback); } });
+  const backlog = runMcpStdio({ connect: async () => fakeClient(), version: 'test', input: slowInput, output: slow, log: message => logs.push(message) });
+  t.after(() => { slowInput.end(); for (const callback of callbacks.splice(0)) callback(); });
+  slowInput.write(JSON.stringify({ jsonrpc: '2.0', id: 0, method: 'ping' }) + '\n');
+  await until(() => callbacks.length);
+  for (let id = 1; id <= 70; id++) { slowInput.write(JSON.stringify({ jsonrpc: '2.0', id, method: 'ping' }) + '\n'); await pause(1); }
+  assert.equal(await Promise.race([backlog, pause(3000).then(() => 'hung')]), 0);
+  assert.ok(logs.includes('MCP output queue limit exceeded; closing this connection.'), logs.join('\n'));
+  assert.equal(frames.length, 1, 'only the frame already handed to the reader was written');
+});

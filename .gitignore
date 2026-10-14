@@ -5,3 +5,6 @@ out/
 
 # Generated from the shared bridge sources by the build.
 service/bridge/
+coverage/
+reports/
+.stryker-tmp/

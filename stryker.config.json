@@ -1,0 +1,21 @@
+{
+  "$schema": "./node_modules/@stryker-mutator/core/schema/stryker-schema.json",
+  "_comment": "Mutates the compiled service files (service/out); run `npm run compile` first. The command runner is used because StrykerJS has no node:test runner; it runs the three test files once per mutant, so coverage analysis is off. Narrow a run with --mutate service/out/configStore.js.",
+  "testRunner": "command",
+  "commandRunner": {
+    "command": "node scripts/run-tests.js --skip-build service/test/accountAutomation.test.js service/test/configStore.test.js service/test/accountService.test.js"
+  },
+  "mutate": ["service/out/accountAutomation.js", "service/out/configStore.js"],
+  "coverageAnalysis": "off",
+  "concurrency": 2,
+  "incremental": true,
+  "incrementalFile": "reports/mutation/stryker-incremental.json",
+  "reporters": ["clear-text", "progress", "html", "json"],
+  "htmlReporter": { "fileName": "reports/mutation/index.html" },
+  "jsonReporter": { "fileName": "reports/mutation/mutation.json" },
+  "tempDirName": ".stryker-tmp",
+  "cleanTempDir": true,
+  "timeoutMS": 60000,
+  "ignorePatterns": ["coverage", "reports", ".vscode-test", "*.vsix", "docs", "ai", "media", "images"],
+  "thresholds": { "high": 80, "low": 60, "break": null }
+}

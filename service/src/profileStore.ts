@@ -62,8 +62,25 @@ export function fileProfileBackend(file: string): PrivateProfileBackend {
   return {
     kind: 'service',
     read: () => { try { return JSON.parse(fs.readFileSync(file, 'utf8')) as Partial<ProfileFile>; } catch { return undefined; } },
-    write: (state) => writeJsonAtomically(file, state)
+    write: (state) => { keepUnreadableCopy(file); writeJsonAtomically(file, state); }
   };
+}
+
+/**
+ * A profiles.json that exists but does not parse reads as an empty store, so the next write would replace it with
+ * one and every saved login in it would be gone. Keep a copy of such a file (mode 0600) beside it first.
+ */
+function keepUnreadableCopy(file: string): void {
+  let text: string;
+  try { text = fs.readFileSync(file, 'utf8'); } catch { return; }
+  try {
+    const parsed: unknown = JSON.parse(text);
+    if (parsed !== null && typeof parsed === 'object') { return; }
+  } catch { /* unreadable: keep a copy */ }
+  try {
+    const copy = `${file}.corrupt-${new Date().toISOString().replace(/[:.]/g, '-')}`;
+    fs.writeFileSync(copy, text, { mode: 0o600 });
+  } catch { /* best effort: the write goes on, as it did before */ }
 }
 
 export type ProfileStoreOptions = {

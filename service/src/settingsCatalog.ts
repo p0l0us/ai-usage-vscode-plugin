@@ -152,7 +152,7 @@ export const SETTINGS_CATALOG = [
     "type": "number",
     "min": 5,
     "default": 15,
-    "description": "How often (seconds) the account file is re-read, when `#aiUsage.claude.source#` is `accountFile` or `both`. It is a local file read with no rate limit of its own, so this can be much shorter than `#aiUsage.claude.checkIntervalMinutes#`; to actually see updates this often, also lower `#aiUsage.updateIntervalMinutes#` (it accepts fractional minutes, e.g. 0.25 for 15 seconds)."
+    "description": "How often (seconds) the account file is re-read, when `#aiUsage.claude.source#` is `auto`, `accountFile` or `both`; with `auto` this is how quickly rotation sees the active account approach its limit. It is a local file read with no rate limit of its own, so this can be much shorter than `#aiUsage.claude.checkIntervalMinutes#`; to actually see updates this often, also lower `#aiUsage.updateIntervalMinutes#` (it accepts fractional minutes, e.g. 0.25 for 15 seconds)."
   },
   {
     "key": "claude.api.minIntervalSeconds",

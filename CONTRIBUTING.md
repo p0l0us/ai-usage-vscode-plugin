@@ -51,3 +51,9 @@ Be kind and constructive. Assume good intent. Disagreements are about code, not 
 ## License
 
 By contributing you agree that your contributions are licensed under GPL-3.0-only, the same license as the project.
+
+## Testing and coverage
+
+`npm test` builds and runs the suite in an isolated home (never `~/.ai-usage`). `npm run coverage` adds V8 coverage with a
+ratchet (`coverage-thresholds.json`), `npm run test:e2e` runs a smoke test in a real VS Code and `npm run mutation` runs
+mutation testing on the core service files. Details and the test-writing guidance are in [docs/TESTING.md](docs/TESTING.md).

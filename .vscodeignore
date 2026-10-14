@@ -16,3 +16,11 @@ service/src/**
 service/test/**
 service/tsconfig.json
 service/node_modules/**
+coverage/**
+reports/**
+.stryker-tmp/**
+.vscode-test/**
+coverage-thresholds.json
+stryker.config.json
+.github/**
+CLAUDE.md

@@ -2,7 +2,7 @@
   "name": "ai-usage-vscode-plugin",
   "displayName": "AI subscription management and usage",
   "description": "Manage your Claude Code, Codex and GitHub Copilot subscriptions and see what is left of them: switch between saved accounts without signing in again, keep them warm, rotate on exhaustion, and read live 5h/7d windows, premium requests and org billing in the status bar and chat input. Open source, contributions welcome.",
-  "version": "1.4.0",
+  "version": "1.4.2",
   "publisher": "p0l0us",
   "license": "GPL-3.0-only",
   "repository": {
@@ -7113,7 +7113,7 @@
             "scope": "machine",
             "minimum": 5,
             "order": 3.5,
-            "markdownDescription": "How often (seconds) the account file is re-read, when `#aiUsage.claude.source#` is `accountFile` or `both`. It is a local file read with no rate limit of its own, so this can be much shorter than `#aiUsage.claude.checkIntervalMinutes#`; to actually see updates this often, also lower `#aiUsage.updateIntervalMinutes#` (it accepts fractional minutes, e.g. 0.25 for 15 seconds)."
+            "markdownDescription": "How often (seconds) the account file is re-read, when `#aiUsage.claude.source#` is `auto`, `accountFile` or `both`; with `auto` this is how quickly rotation sees the active account approach its limit. It is a local file read with no rate limit of its own, so this can be much shorter than `#aiUsage.claude.checkIntervalMinutes#`; to actually see updates this often, also lower `#aiUsage.updateIntervalMinutes#` (it accepts fractional minutes, e.g. 0.25 for 15 seconds)."
           },
           "aiUsage.claude.api.minIntervalSeconds": {
             "type": "number",
@@ -20371,11 +20371,16 @@
     "publish:all": "node scripts/publish.js --ovsx",
     "publish:dry": "node scripts/publish.js --dry-run",
     "compile:service": "tsc -p service",
-    "watch:service": "tsc -watch -p service"
+    "watch:service": "tsc -watch -p service",
+    "coverage": "node scripts/coverage.js",
+    "test:e2e": "node test/e2e/runTest.js",
+    "mutation": "stryker run"
   },
   "devDependencies": {
+    "@stryker-mutator/core": "^10.0.0",
     "@types/node": "^24.4.0",
     "@types/vscode": "^1.137.0",
+    "@vscode/test-electron": "^3.1.0",
     "typescript": "^5.9.2"
   },
   "extensionKind": [

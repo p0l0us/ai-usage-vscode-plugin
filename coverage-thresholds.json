@@ -1,0 +1,16 @@
+{
+  "_comment": "Line-coverage floors in percent, enforced by scripts/coverage.js. Raise them (npm run coverage -- --update) after coverage improves; never lower them to make a run pass.",
+  "areas": {
+    "service": 84,
+    "extension": 75,
+    "bridge": 95
+  },
+  "files": {
+    "service/out/accountAutomation.js": 95,
+    "service/out/configStore.js": 95,
+    "service/out/accountService.js": 90,
+    "service/out/accountProbe.js": 90,
+    "service/out/usageHistory.js": 92,
+    "service/out/rotationDiagnostics.js": 100
+  }
+}

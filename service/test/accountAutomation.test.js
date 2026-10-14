@@ -27,12 +27,16 @@ function fixture(t, options = {}) {
     checkIntervalMs: 600000, home: directory, cliPath: provider, model: '', ...options.settings?.[provider]
   }]));
   const profiles = {
-    profiles: () => (options.ids ?? ['a', 'b', 'c']).map(id => ({ id, name: id })),
+    profiles: () => {
+      if (options.profilesThrow) throw new Error(options.profilesThrow);
+      return (options.ids ?? ['a', 'b', 'c']).map(id => ({ id, name: id }));
+    },
     activeProfileId: provider => active[provider],
-    credential: async (provider, id) => ({ id }),
+    credential: async (provider, id) => options.credential ? options.credential(provider, id) : ({ id }),
     refreshedCredential: async (...args) => refreshed.push(args),
     matchesNative: async () => options.matchesNative !== false,
     activateProfile: async (provider, id, automatic) => {
+      if (options.activateFails) return false;
       active[provider] = id;
       switches.push([provider, id, automatic]);
       return true;
@@ -1258,4 +1262,231 @@ test('a candidate whose keep-alive failed for a non-login reason is not blocked,
   await f.service.tick();
   assert.deepEqual(f.switches, [['codex', 'b', true]]);
   assert.deepEqual(f.calls, []);
+});
+
+test('a lock-free reading cannot be replaced by an older one, and a non-finite window never scores', () => {
+  const now = Date.now();
+  const clean = usage('claude', [['5h', 10, 1], ['7d', 20, 100]], now);
+  const noisy = usage('claude', [['5h', 10, 1], ['7d', 20, 100]], now);
+  noisy.windows.push({ label: '7d Opus', usedPercent: Number.NaN, resetsAt: new Date(now + 3 * HOUR) });
+  const limits = { fiveHourThresholdPercent: 99.5, weeklyThresholdPercent: 99.5 };
+  for (const strategy of ['soonestReset', 'evenPace', 'leastWaste']) {
+    assert.equal(rotationScore(strategy, noisy, now, limits), rotationScore(strategy, clean, now, limits), strategy);
+  }
+});
+
+test('observe keeps a newer stored reading when an older one arrives late', t => {
+  const f = fixture(t);
+  f.observe('claude', [30, 30], 'b');
+  const stored = f.service.usage('claude', 'b');
+  f.service.observe('claude', 'b', usage('claude', [90, 90], Date.now() - 5 * 60_000));
+  assert.deepEqual(f.service.usage('claude', 'b').windows.map(window => window.usedPercent), [30, 30]);
+  assert.equal(f.service.usage('claude', 'b').fetchedAt.getTime(), stored.fetchedAt.getTime());
+});
+
+test('requests to a stopped, held or unknown account are refused with the reason, and a stopped service cancels paused work', async t => {
+  const f = fixture(t);
+  await assert.rejects(f.service.sendKeepAliveNow('claude', 'zzz'), /selected account no longer exists/);
+  f.service.hold('claude', 'a sign-in is in progress', 60_000);
+  await assert.rejects(f.service.readUsageNow('claude', 'b'), /^Error: A sign-in is in progress; account checks wait until it finishes\.$/);
+  f.service.resume('claude');
+  assert.deepEqual(f.calls, []);
+  const stopping = f.make();
+  stopping.dispose();
+  await assert.rejects(stopping.rotateNow('claude'), /no longer running/);
+  await assert.rejects(stopping.sendKeepAliveNow('claude', 'b'), /no longer running/);
+  await assert.rejects(stopping.readUsageNow('claude', 'b'), /no longer running/);
+  await assert.rejects(stopping.withPaused(async () => 'ran'), /Cancelled: the account service is stopping/);
+  await stopping.tick();
+  assert.deepEqual(f.calls, []);
+});
+
+test('work paused for a manual request stops ticks and sweeps until it ends, and rotation reports the service as busy', async t => {
+  const f = fixture(t, { settings: { codex: { enabled: true } } });
+  f.observeAll('codex');
+  f.settings.codex.autoRotate = true; // after the readings, which would otherwise start a sweep at once
+  const seen = await f.service.withPaused(async () => {
+    await f.service.tick();
+    return f.service.rotateNow('codex');
+  });
+  assert.deepEqual(seen, { switched: false, reason: 'the service is busy' });
+  assert.deepEqual(f.calls, []);
+  assert.deepEqual(f.switches, []);
+  await f.service.tick();
+  assert.deepEqual(f.switches, [['codex', 'b', true]], 'the next tick runs normally');
+});
+
+test('a failure inside one provider\'s checks is logged and does not stop the tick', async t => {
+  const f = fixture(t, { settings: { codex: { enabled: true } }, profilesThrow: 'profile list unreadable' });
+  await f.service.tick();
+  assert.ok(f.messages.some(message => /codex: account automation failed: profile list unreadable/.test(message)), f.messages.join('\n'));
+  await f.service.tick();
+});
+
+test('a check of an account whose credential is missing or whose probe throws records an error and keeps the active login', async t => {
+  const f = fixture(t, { settings: { claude: { enabled: true } }, credential: async (provider, id) => id === 'b' ? undefined : { id } });
+  const missing = await f.service.readUsageNow('claude', 'b');
+  assert.equal(missing.usage, undefined);
+  assert.equal(missing.usageError, 'Saved credential is missing.');
+  assert.deepEqual(f.calls, [], 'nothing is probed without a credential');
+  assert.deepEqual(f.refreshed, []);
+  const throwing = fixture(t, { beforeProbe: async () => { throw new Error('probe exploded'); } });
+  const failed = await throwing.service.readUsageNow('claude', 'b');
+  assert.equal(failed.usageError, 'probe exploded');
+  assert.deepEqual(throwing.refreshed, [], 'a credential is written back only after a successful probe');
+});
+
+test('a sweep that cannot continue says why: another account is active, the login moved, nothing to compare, or activation failed', async t => {
+  // Fewer than two profiles, no active profile, and a native login that is not the active profile's.
+  const single = fixture(t, { ids: ['a'] });
+  assert.deepEqual(await single.service.rotateNow('codex'), { switched: false, reason: 'fewer than two profiles are saved' });
+  const none = fixture(t);
+  none.active.codex = undefined;
+  assert.deepEqual(await none.service.rotateNow('codex'), { switched: false, reason: 'no saved profile is active' });
+  const foreign = fixture(t, { matchesNative: false });
+  assert.deepEqual(await foreign.service.rotateNow('codex'), { switched: false, reason: "the native login is not the active profile's" });
+  assert.deepEqual(foreign.calls, []);
+  // The login moves while the active account is being read.
+  let moved;
+  moved = fixture(t, { beforeProbe: (provider, credential) => { if (credential.id === 'a') moved.options.matchesNative = false; } });
+  moved.observeAll('codex');
+  moved.service.observe('codex', 'a', usage('codex', [99.5, 10], Date.now() + 1)); // newer than the stored one, so it is kept
+  assert.deepEqual(await moved.service.rotateNow('codex'), { switched: false, reason: 'the active login changed during the sweep' });
+  assert.deepEqual(moved.switches, []);
+  // The store refuses the activation.
+  const refused = fixture(t, { activateFails: true });
+  refused.observeAll('codex');
+  assert.deepEqual(await refused.service.rotateNow('codex'), { switched: false, reason: '"b" could not be activated' });
+  assert.equal(refused.active.codex, 'a');
+  assert.equal(refused.service.accountState('codex', 'rotation-stay').activeId, undefined, 'a refused switch does not start a stay');
+  // A proactive pace comparison needs a weekly window on the active account.
+  const noWeekly = fixture(t, { values: { a: [['5h', 10, 1]] }, settings: { claude: { autoRotate: true, strategy: 'evenPace', trigger: 'proactive' } } });
+  assert.deepEqual(await noWeekly.service.rotateNow('claude'), { switched: false, reason: 'the active account reports no weekly window to compare' });
+});
+
+test('a hold or a stopped rotation that begins during a sweep interrupts it before any switch', async t => {
+  // Hold set while the active account is being read, before the first candidate.
+  let early;
+  early = fixture(t, { beforeProbe: (provider, credential) => {
+    if (credential.id === 'a') early.service.hold('codex', 'a Codex sign-in is in progress', 60_000);
+  } });
+  early.observeAll('codex');
+  assert.deepEqual(await early.service.rotateNow('codex'), { switched: false, reason: 'the sweep was interrupted' });
+  assert.deepEqual(early.switches, []);
+  // Hold set while the candidate's usage is being read, right before the switch.
+  let late;
+  late = fixture(t, { settings: { codex: { updateUsageBeforeRotation: true } }, beforeProbe: (provider, credential) => {
+    if (credential.id === 'b') late.service.hold('codex', 'a Codex sign-in is in progress', 60_000);
+  } });
+  late.observeAll('codex');
+  assert.deepEqual(await late.service.rotateNow('codex'), { switched: false, reason: 'the sweep was interrupted' });
+  assert.deepEqual(late.switches, []);
+  assert.deepEqual(late.calls.filter(call => call[1] === 'b'), [['codex', 'b', false]]);
+  late.service.resume('codex');
+  assert.equal(late.service.heldFor('codex'), undefined);
+});
+
+test('with updateUsageBeforeRotation a candidate whose fresh reading shows a reset within minutes is deferred until it, not switched to', async t => {
+  const f = fixture(t, { ids: ['a', 'b'], values: { a: [99.5, 10], b: [10, 10] },
+    settings: { codex: { resetAware: true, updateUsageBeforeRotation: true } } });
+  f.observeAll('codex');
+  f.settings.codex.autoRotate = true;
+  // The stored reading of b shows nothing imminent; its fresh one does.
+  f.values.b = [['5h', 10, 0.03], ['7d', 10, 100]];
+  await f.service.tick();
+  assert.deepEqual(f.switches, []);
+  assert.deepEqual(f.calls, [['codex', 'b', false]]);
+  const next = f.service.accountState('codex', 'rotation-sweep').nextAllowedAt;
+  assert.ok(next > Date.now() + 100_000 && next < Date.now() + 130_000, 'the next sweep waits for the reset, not a full interval');
+  assert.ok(f.messages.some(message => /codex: the active account is at its limit/.test(message)));
+  f.advance(3 * 60_000);
+  f.values.b = [10, 10];
+  f.observeAll('codex');
+  await f.service.tick();
+  assert.deepEqual(f.switches, [['codex', 'b', true]], 'once the reset has passed the candidate qualifies');
+});
+
+test('diagnostics give the reason rotation is idle, in the order it is decided, and describe every candidate', async t => {
+  const f = fixture(t, { ids: ['a', 'b', 'c'], values: { a: [10, 10], b: [10, 10], c: [10, 10] }, settings: { claude: { strategy: 'evenPace' } } });
+  f.active.claude = undefined;
+  assert.equal(f.service.diagnostics('claude').reason, 'No saved account is active.');
+  f.active.claude = 'a';
+  assert.equal(f.service.diagnostics('claude').reason, 'Automatic rotation is disabled; the selected account is kept.');
+  f.settings.claude.autoRotate = true;
+  f.service.hold('claude', 'a sign-in is in progress', 60_000);
+  assert.equal(f.service.diagnostics('claude').reason, 'a sign-in is in progress');
+  f.service.resume('claude');
+  assert.equal(f.service.diagnostics('claude').reason, 'Waiting for a current usage reading of the active account.');
+  f.observeAll('claude');
+  // Default trigger: only a limit rotates.
+  assert.equal(f.service.diagnostics('claude').reason, 'The active account is below its rotation thresholds.');
+  f.settings.claude.trigger = 'proactive';
+  f.settings.claude.minStayMs = 60 * 60_000;
+  assert.equal(f.service.diagnostics('claude').reason, 'The active account has not completed its minimum stay.');
+  f.settings.claude.minStayMs = 0;
+  assert.match(f.service.diagnostics('claude').reason, /^No stored reading shows an account better by the required switching margin\.$/);
+  f.values.a = [['5h', 50, 4], ['7d', 90, 24]];
+  f.values.b = [['5h', 5, 4], ['7d', 5, 150]];
+  f.observeAll('claude');
+  const due = f.service.diagnostics('claude');
+  assert.match(due.reason, /^A rotation check is due; the preferred candidate must pass a fresh usage and login check before switching\.$/);
+  assert.match(due.scoreMeaning, /largest gap between used percentage and elapsed weekly percentage/);
+  assert.equal(due.strategy, 'evenPace');
+  assert.equal(due.trigger, 'proactive');
+  const best = due.candidates.find(candidate => candidate.id === 'b');
+  assert.equal(typeof best.rank, 'number');
+  assert.equal(due.candidates.find(candidate => candidate.id === 'a').active, true);
+  assert.match(best.reason, /^Below thresholds; the stored reading decides a switch\.$/);
+  // A throttled sweep names when the next one may run.
+  f.service.rotateNow('claude').catch(() => undefined);
+  await f.service.rotateNow('claude');
+  f.settings.claude.updateUsageBeforeRotation = true;
+  assert.match(f.service.diagnostics('claude').candidates.find(candidate => candidate.id === 'b').reason, /^Below thresholds; its usage is read again before a switch\.$/);
+  const scoreMeanings = {};
+  for (const strategy of ['sequential', 'soonestReset', 'leastWaste']) {
+    f.settings.claude.strategy = strategy;
+    scoreMeanings[strategy] = f.service.diagnostics('claude').scoreMeaning;
+  }
+  assert.match(scoreMeanings.sequential, /^Saved-account order/);
+  assert.match(scoreMeanings.soonestReset, /hours until the binding weekly reset/);
+  assert.match(scoreMeanings.leastWaste, /negative usable percentage per hour/);
+});
+
+test('diagnostics describe an exhausted candidate, a stale reading in either mode, a throttled sweep and the earned resets', async t => {
+  const f = fixture(t, { ids: ['a', 'b', 'c'], values: { a: [99.5, 10], b: [99.5, 10], c: [10, 10] }, credits: { a: 2 },
+    settings: { codex: {} } });
+  f.service.observe('codex', 'c', { ...usage('codex', [10, 10], Date.now() - 2 * HOUR),
+    windows: [{ label: '5h', usedPercent: 10, resetsAt: new Date(Date.now() - HOUR) }, { label: '7d', usedPercent: 10, resetsAt: new Date(Date.now() + 86400000) }] });
+  f.service.observe('codex', 'a', usage('codex', [99.5, 10], Date.now()));
+  f.service.observe('codex', 'b', usage('codex', [99.5, 10], Date.now()));
+  f.settings.codex.autoRotate = true;
+  f.settings.codex.autoReset = true;
+  let d = f.service.diagnostics('codex');
+  assert.match(d.reason, /Earned resets available: unknown; redemption follows the reset and rotation policy\.$/);
+  assert.equal(d.candidates.find(candidate => candidate.id === 'b').reason, 'At a rotation threshold.');
+  assert.equal(d.candidates.find(candidate => candidate.id === 'c').reason, 'A quota reset has passed; the stored reading counts it as fresh.');
+  f.settings.codex.updateUsageBeforeRotation = true;
+  assert.equal(f.service.diagnostics('codex').candidates.find(candidate => candidate.id === 'c').reason, 'A quota reset has passed; it is read again before a switch.');
+  await f.service.rotateNow('codex');
+  f.active.codex = 'a';
+  d = f.service.diagnostics('codex');
+  assert.match(d.reason, / Next check after \d{4}-\d\d-\d\dT[\d:.]+Z\./);
+});
+
+test('an earned reset is spent once no other account can take over, and not when the login moved during the sweep', async t => {
+  const f = fixture(t, { ids: ['a', 'b'], credits: { a: 1 }, values: { a: [['5h', 100, 10], ['7d', 10, 100]], b: [99.5, 10] },
+    settings: { codex: { autoRotate: true, autoReset: true } } });
+  f.observe('codex', [['5h', 100, 10], ['7d', 10, 100]], 'b');
+  await f.service.tick();
+  assert.deepEqual(f.switches, [], 'b is at its limit too');
+  assert.equal(f.resets.length, 1, 'with nobody to rotate to, the earned reset is used');
+  assert.equal(f.credits.a, 0);
+  // The native login changes while the active account is read: nothing is redeemed for an account that is no longer in use.
+  let moved;
+  moved = fixture(t, { ids: ['a'], credits: { a: 1 }, values: { a: [['5h', 100, 10], ['7d', 10, 100]] },
+    settings: { codex: { autoReset: true } },
+    beforeProbe: () => { moved.options.matchesNative = false; } });
+  await moved.service.tick();
+  assert.deepEqual(moved.resets, []);
+  assert.equal(moved.credits.a, 1);
 });

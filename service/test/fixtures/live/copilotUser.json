@@ -1,0 +1,12 @@
+{
+  "login": "user1",
+  "copilot_plan": "business",
+  "access_type_sku": "copilot_for_business_seat",
+  "organization_login_list": ["acme-example"],
+  "quota_reset_date": "2026-11-01",
+  "quota_snapshots": {
+    "premium_interactions": { "percent_remaining": 80.5, "entitlement": 300, "remaining": 241.5, "unlimited": false },
+    "chat": { "unlimited": true, "percent_remaining": 100 },
+    "completions": { "percent_remaining": 60, "unlimited": false }
+  }
+}

@@ -21,10 +21,19 @@ for (const provider of ['claude', 'codex']) {
   test(`${provider}: auto retains fresh cache and local timestamps without network`, async () => {
     const calls = []; const local = reading(provider, 1000);
     const cached = await fetchAutoUsage({ ...options(provider, { local }, calls), known: local.usage });
-    assert.equal(cached.usage, local.usage); assert.deepEqual(calls, []);
+    assert.equal(cached.usage, local.usage); assert.deepEqual(calls, ['local']); calls.length = 0;
     const result = await fetchAutoUsage(options(provider, { local, api: reading(provider) }, calls));
     assert.deepEqual(calls, ['local']); assert.equal(result.usage.fetchedAt, local.usage.fetchedAt);
     assert.equal(result.usage.source, provider === 'claude' ? 'accountFile' : 'sessionLog');
+  });
+  test(`${provider}: a fresh known reading still follows newer local readings but never calls an endpoint`, async () => {
+    const known = reading(provider, 60000).usage;
+    for (const local of [reading(provider, 1000), missing(provider), reading(provider, 120000), new Error('fixture read failure')]) {
+      const calls = [];
+      const result = await fetchAutoUsage({ ...options(provider, { local, api: reading(provider), cli: reading(provider) }, calls), known });
+      assert.deepEqual(calls, ['local']); assert.equal(result.kind, 'ok');
+      assert.equal(result.usage.fetchedAt, local.kind === 'ok' && local.usage.fetchedAt > known.fetchedAt ? local.usage.fetchedAt : known.fetchedAt);
+    }
   });
   test(`${provider}: unavailable, failed, stale and invalid sources fall through in cost order`, async () => {
     for (const local of [missing(provider), new Error('fixture read failure'), reading(provider, intervalMs),
@@ -58,7 +67,9 @@ test('monitor auto respects minute policy, deduplicates and preserves conservati
   const f = isolateHomes(t); const config = defaultConfig(); config.codex.source = config.claude.source = 'auto';
   config.codex.checkIntervalMinutes = config.claude.checkIntervalMinutes = 30;
   config.claude.accountFile.checkIntervalSeconds = 5;
-  assert.equal(usageSettings(config, 'claude').checkIntervalMs, intervalMs);
+  assert.equal(usageSettings(config, 'claude').checkIntervalMs, 5000);
+  assert.equal(usageSettings(config, 'claude').apiCheckIntervalMs, intervalMs);
+  assert.equal(usageSettings(config, 'codex').checkIntervalMs, intervalMs);
   const observed = []; let source = 'sessionLog'; let reads = 0;
   const monitor = new UsageMonitor({ directory: f.home, config: () => config,
     budget: new ApiCallBudget(path.join(f.home, 'budget.json'), () => 0, () => now), now: () => now,
@@ -98,4 +109,20 @@ test('monitor expires nearly old local readings and accepts readings completed a
   t.after(() => monitor.dispose()); assert.equal((await monitor.read('codex')).result.kind, 'ok');
   clock += 2 * 60000;
   assert.equal((await monitor.read('codex')).result.kind, 'ok'); assert.equal(reads, 2);
+});
+test('monitor auto rereads the Claude account file within seconds and publishes only newer readings', async t => {
+  const f = isolateHomes(t); const config = defaultConfig(); config.claude.source = 'auto'; config.claude.checkIntervalMinutes = 30;
+  config.claude.accountFile.checkIntervalSeconds = 15;
+  let clock = now; let reads = 0; let next = reading('claude'); const observed = [];
+  const monitor = new UsageMonitor({ directory: f.home, config: () => config,
+    budget: new ApiCallBudget(path.join(f.home, 'budget.json'), () => 0, () => clock), now: () => clock,
+    identity: () => 'synthetic', log: () => {}, fetch: async (provider, context, known) => { reads++; return next.kind === 'ok' && known && next.usage.fetchedAt <= known.fetchedAt ? { kind: 'ok', usage: known } : next; },
+    observe: async (provider, usage) => observed.push(usage.windows[0].usedPercent) });
+  t.after(() => monitor.dispose());
+  await monitor.read('claude'); assert.deepEqual(observed, [20]);
+  clock += 10000; await monitor.read('claude'); assert.equal(reads, 1);
+  clock += 6000; await monitor.read('claude'); assert.equal(reads, 2); assert.deepEqual(observed, [20]);
+  clock += 15000; next = { kind: 'ok', usage: { ...reading('claude').usage, fetchedAt: new Date(clock), windows: [{ label: '5h', usedPercent: 96, resetsAt: new Date(now + intervalMs) }] } };
+  const state = await monitor.read('claude'); assert.equal(reads, 3); assert.deepEqual(observed, [20, 96]);
+  assert.equal(state.result.usage.windows[0].usedPercent, 96);
 });
