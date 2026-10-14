@@ -10,8 +10,9 @@ const {
   readClaudeSettingAssignments
 } = require('../out/claudeSettings');
 
-const SUBAGENTS = { ...CLAUDE_SETTINGS[0], value: 50 };
-const WORKFLOW = { ...CLAUDE_SETTINGS[1], value: 32 };
+const byEnv = (env) => CLAUDE_SETTINGS.find((setting) => setting.env === env);
+const SUBAGENTS = { ...byEnv('CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS'), value: 50 };
+const WORKFLOW = { ...byEnv('CLAUDE_CODE_WORKFLOW_MAX_CONCURRENT_AGENTS'), value: 32 };
 
 test('an empty file gains an env object with string values', () => {
   assert.equal(applyClaudeSettings('', [SUBAGENTS]), '{\n  "env": {\n    "CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS": "50"\n  }\n}\n');
@@ -41,11 +42,12 @@ test('a file that is not a JSON object, or a non-object env, is refused', () => 
 test('only set, valid settings become assignments', () => {
   const values = {
     'aiUsage.claudeConfig.env.maxConcurrentSubagents': 50,
+    'aiUsage.claudeConfig.env.maxSubagentSpawnDepth': 10,
     'aiUsage.claudeConfig.env.workflowMaxConcurrentAgents': 300
   };
   const invalid = [];
   const assignments = readClaudeSettingAssignments((id) => values[id], (setting, value) => invalid.push([setting.env, value]));
-  assert.deepEqual(assignments.map((a) => [a.env, a.value]), [['CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS', 50]]);
+  assert.deepEqual(assignments.map((a) => [a.env, a.value]), [['CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS', 50], ['CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH', 10]]);
   assert.deepEqual(invalid, [['CLAUDE_CODE_WORKFLOW_MAX_CONCURRENT_AGENTS', 300]]);
   assert.deepEqual(readClaudeSettingAssignments(() => null), []);
 });

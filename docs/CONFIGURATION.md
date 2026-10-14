@@ -335,9 +335,11 @@ variables in the `env` object of Claude Code's user settings (`settings.json` in
 | Setting | `settings.json` entry | Claude Code default |
 |---|---|---|
 | `aiUsage.claudeConfig.env.maxConcurrentSubagents` | `env.CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS` (Claude Code 2.1.217+) | 20 |
+| `aiUsage.claudeConfig.env.maxSubagentSpawnDepth` | `env.CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH` | |
 | `aiUsage.claudeConfig.env.workflowMaxConcurrentAgents` | `env.CLAUDE_CODE_WORKFLOW_MAX_CONCURRENT_AGENTS` (Claude Code 2.1.269+, at most 256) | 16, fewer on machines with few CPUs |
 
-Every setting defaults to empty (`null`), which leaves the file alone. A set value is written as a string when
+AI Usage sets `maxConcurrentSubagents` to 40 and `maxSubagentSpawnDepth` to 10 by default; the other settings default
+to empty (`null`), which leaves the file alone. A set value is written as a string when
 AI Usage starts and whenever the setting changes. Claude Code reads it when a session starts, so running sessions
 keep the old value until they are restarted. Other keys and `env` entries are kept, and the file is written with
 its own indentation. A file that is not valid JSON is not touched, and the problem is noted in the AI Usage log.
@@ -356,8 +358,8 @@ by editing the file:
 | `aiUsage.codexConfig.agents.maxDepth` | `[agents] max_depth` |
 | `aiUsage.codexConfig.agents.jobMaxRuntimeSeconds` | `[agents] job_max_runtime_seconds` |
 
-Every setting defaults to empty (`null`), which leaves the file alone. A set value is written when AI Usage starts
-and whenever the setting changes; Codex reads `config.toml` when a chat starts, so chats started afterwards use it.
+AI Usage sets `maxConcurrentThreadsPerSession` to 40 and `maxDepth` to 10 by default; `jobMaxRuntimeSeconds`
+defaults to empty (`null`), which leaves the file alone. A set value is written when AI Usage starts and whenever the setting changes; Codex reads `config.toml` when a chat starts, so chats started afterwards use it.
 Only that one `key = value` line changes (a trailing comment on it is kept, the rest of the file is untouched); a
 missing `[agents]` table is added, and a root-level `agents.<key> = …` line is updated in place. Clearing a setting
 later does not remove the value from the file, and a manual edit of the key is overwritten the next time AI Usage

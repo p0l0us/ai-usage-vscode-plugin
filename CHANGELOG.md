@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.4.4 (unreleased)
+
+- Subagent limits now have defaults: Claude Code runs up to 40 subagents at once (`aiUsage.claudeConfig.env.maxConcurrentSubagents`, was unset) and Codex up to 40 agent threads per session (`aiUsage.codexConfig.agents.maxConcurrentThreadsPerSession`, was unset). Subagents may nest 10 levels deep in both: Codex through `aiUsage.codexConfig.agents.maxDepth` (was unset), Claude Code through the new `aiUsage.claudeConfig.env.maxSubagentSpawnDepth` (`env.CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH`). The values are written to `~/.claude/settings.json` and `~/.codex/config.toml` and apply to sessions started afterwards. Set a setting to empty (`null`) to keep the files' own values.
+
 ## 1.4.3 (2026-10-14)
 
 - The account service no longer crashes when a `codex app-server` used for a Codex usage or login check closes its input early. The unhandled `write EPIPE` ended the whole service every few minutes, which failed every check in progress at that moment ("Request failed: timed out", "codex app-server did not answer in time", "Network error") and greyed the status bar until it restarted. The check now fails on its own with "codex app-server closed its input".

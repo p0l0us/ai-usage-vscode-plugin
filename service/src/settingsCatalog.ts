@@ -274,8 +274,16 @@ export const SETTINGS_CATALOG = [
     "type": "integer",
     "min": 1,
     "nullable": true,
-    "default": null,
-    "description": "Maximum number of subagents (Agent tool) Claude Code runs at the same time; Claude Code defaults to 20. Written as `env.CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS` in Claude Code user settings (`settings.json` in `$CLAUDE_CONFIG_DIR`, default `~/.claude`) when AI Usage starts and whenever this setting changes. New Claude Code sessions use it; running sessions keep the old value until restarted. Needs Claude Code 2.1.217 or later. A higher cap does not raise your account usage limit. Leave empty (`null`) to keep whatever `settings.json` already says; clearing the setting later does not remove the value from the file."
+    "default": 40,
+    "description": "Maximum number of subagents (Agent tool) Claude Code runs at the same time; AI Usage sets 40 by default; Claude Code itself defaults to 20. Written as `env.CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS` in Claude Code user settings (`settings.json` in `$CLAUDE_CONFIG_DIR`, default `~/.claude`) when AI Usage starts and whenever this setting changes. New Claude Code sessions use it; running sessions keep the old value until restarted. Needs Claude Code 2.1.217 or later. A higher cap does not raise your account usage limit. Leave empty (`null`) to keep whatever `settings.json` already says; clearing the setting later does not remove the value from the file."
+  },
+  {
+    "key": "claudeConfig.env.maxSubagentSpawnDepth",
+    "type": "integer",
+    "min": 1,
+    "nullable": true,
+    "default": 10,
+    "description": "How deep Claude Code subagents may nest (a subagent spawning its own subagents). AI Usage sets 10 by default. Written as `env.CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH` in Claude Code user settings (`settings.json` in `$CLAUDE_CONFIG_DIR`, default `~/.claude`) when AI Usage starts and whenever this setting changes. New Claude Code sessions use it; running sessions keep the old value until restarted. Leave empty (`null`) to keep whatever `settings.json` already says; clearing the setting later does not remove the value from the file."
   },
   {
     "key": "claudeConfig.env.workflowMaxConcurrentAgents",
@@ -464,16 +472,16 @@ export const SETTINGS_CATALOG = [
     "type": "integer",
     "min": 1,
     "nullable": true,
-    "default": null,
-    "description": "Maximum number of agent threads (the main chat plus its subagents) Codex runs at the same time in one session. Written to `[agents] max_concurrent_threads_per_session` in `config.toml` in the Codex home (`$CODEX_HOME`, default `~/.codex`) when AI Usage starts and whenever this setting changes; Codex reads it when a chat starts. Leave empty (`null`) to keep whatever Codex's `config.toml` already says; clearing the setting later does not remove the value from the file."
+    "default": 40,
+    "description": "Maximum number of agent threads (the main chat plus its subagents) Codex runs at the same time in one session. AI Usage sets 40 by default. Written to `[agents] max_concurrent_threads_per_session` in `config.toml` in the Codex home (`$CODEX_HOME`, default `~/.codex`) when AI Usage starts and whenever this setting changes; Codex reads it when a chat starts. Leave empty (`null`) to keep whatever Codex's `config.toml` already says; clearing the setting later does not remove the value from the file."
   },
   {
     "key": "codexConfig.agents.maxDepth",
     "type": "integer",
     "min": 1,
     "nullable": true,
-    "default": null,
-    "description": "How deep Codex subagents may nest (a subagent spawning its own subagents). Written to `[agents] max_depth` in Codex's `config.toml`. Leave empty (`null`) to keep whatever Codex's `config.toml` already says; clearing the setting later does not remove the value from the file."
+    "default": 10,
+    "description": "How deep Codex subagents may nest (a subagent spawning its own subagents). AI Usage sets 10 by default. Written to `[agents] max_depth` in Codex's `config.toml`. Leave empty (`null`) to keep whatever Codex's `config.toml` already says; clearing the setting later does not remove the value from the file."
   },
   {
     "key": "codexConfig.agents.jobMaxRuntimeSeconds",

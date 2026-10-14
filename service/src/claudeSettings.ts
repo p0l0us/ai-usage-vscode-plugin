@@ -21,6 +21,7 @@ export type ClaudeSetting = {
 
 export const CLAUDE_SETTINGS: readonly ClaudeSetting[] = [
   { setting: 'aiUsage.claudeConfig.env.maxConcurrentSubagents', env: 'CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS', minimum: 1 },
+  { setting: 'aiUsage.claudeConfig.env.maxSubagentSpawnDepth', env: 'CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH', minimum: 1 },
   { setting: 'aiUsage.claudeConfig.env.workflowMaxConcurrentAgents', env: 'CLAUDE_CODE_WORKFLOW_MAX_CONCURRENT_AGENTS', minimum: 1, maximum: 256 }
 ];
 

@@ -2,7 +2,7 @@
   "name": "ai-usage-vscode-plugin",
   "displayName": "AI subscription management and usage",
   "description": "Manage your Claude Code, Codex and GitHub Copilot subscriptions and see what is left of them: switch between saved accounts without signing in again, keep them warm, rotate on exhaustion, and read live 5h/7d windows, premium requests and org billing in the status bar and chat input. Open source, contributions welcome.",
-  "version": "1.4.3",
+  "version": "1.4.4",
   "publisher": "p0l0us",
   "license": "GPL-3.0-only",
   "repository": {
@@ -7272,11 +7272,22 @@
               "integer",
               "null"
             ],
-            "default": null,
+            "default": 40,
             "minimum": 1,
             "scope": "machine",
-            "markdownDescription": "Maximum number of subagents (Agent tool) Claude Code runs at the same time; Claude Code defaults to 20. Written as `env.CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS` in Claude Code user settings (`settings.json` in `$CLAUDE_CONFIG_DIR`, default `~/.claude`) when AI Usage starts and whenever this setting changes. New Claude Code sessions use it; running sessions keep the old value until restarted. Needs Claude Code 2.1.217 or later. A higher cap does not raise your account usage limit. Leave empty (`null`) to keep whatever `settings.json` already says; clearing the setting later does not remove the value from the file.",
+            "markdownDescription": "Maximum number of subagents (Agent tool) Claude Code runs at the same time; AI Usage sets 40 by default; Claude Code itself defaults to 20. Written as `env.CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS` in Claude Code user settings (`settings.json` in `$CLAUDE_CONFIG_DIR`, default `~/.claude`) when AI Usage starts and whenever this setting changes. New Claude Code sessions use it; running sessions keep the old value until restarted. Needs Claude Code 2.1.217 or later. A higher cap does not raise your account usage limit. Leave empty (`null`) to keep whatever `settings.json` already says; clearing the setting later does not remove the value from the file.",
             "order": 1
+          },
+          "aiUsage.claudeConfig.env.maxSubagentSpawnDepth": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "default": 10,
+            "minimum": 1,
+            "scope": "machine",
+            "markdownDescription": "How deep Claude Code subagents may nest (a subagent spawning its own subagents). AI Usage sets 10 by default. Written as `env.CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH` in Claude Code user settings (`settings.json` in `$CLAUDE_CONFIG_DIR`, default `~/.claude`) when AI Usage starts and whenever this setting changes. New Claude Code sessions use it; running sessions keep the old value until restarted. Leave empty (`null`) to keep whatever `settings.json` already says; clearing the setting later does not remove the value from the file.",
+            "order": 2
           },
           "aiUsage.claudeConfig.env.workflowMaxConcurrentAgents": {
             "type": [
@@ -7288,7 +7299,7 @@
             "maximum": 256,
             "scope": "machine",
             "markdownDescription": "Maximum number of workflow agents Claude Code runs at the same time (at most 256); Claude Code defaults to 16, or fewer on machines with few CPUs. Written as `env.CLAUDE_CODE_WORKFLOW_MAX_CONCURRENT_AGENTS` in Claude Code user settings. Needs Claude Code 2.1.269 or later. Leave empty (`null`) to keep whatever `settings.json` already says; clearing the setting later does not remove the value from the file.",
-            "order": 2
+            "order": 3
           }
         }
       },
@@ -7526,10 +7537,10 @@
               "integer",
               "null"
             ],
-            "default": null,
+            "default": 40,
             "minimum": 1,
             "scope": "machine",
-            "markdownDescription": "Maximum number of agent threads (the main chat plus its subagents) Codex runs at the same time in one session. Written to `[agents] max_concurrent_threads_per_session` in `config.toml` in the Codex home (`$CODEX_HOME`, default `~/.codex`) when AI Usage starts and whenever this setting changes; Codex reads it when a chat starts. Leave empty (`null`) to keep whatever Codex's `config.toml` already says; clearing the setting later does not remove the value from the file.",
+            "markdownDescription": "Maximum number of agent threads (the main chat plus its subagents) Codex runs at the same time in one session. AI Usage sets 40 by default. Written to `[agents] max_concurrent_threads_per_session` in `config.toml` in the Codex home (`$CODEX_HOME`, default `~/.codex`) when AI Usage starts and whenever this setting changes; Codex reads it when a chat starts. Leave empty (`null`) to keep whatever Codex's `config.toml` already says; clearing the setting later does not remove the value from the file.",
             "order": 1
           },
           "aiUsage.codexConfig.agents.maxDepth": {
@@ -7537,10 +7548,10 @@
               "integer",
               "null"
             ],
-            "default": null,
+            "default": 10,
             "minimum": 1,
             "scope": "machine",
-            "markdownDescription": "How deep Codex subagents may nest (a subagent spawning its own subagents). Written to `[agents] max_depth` in Codex's `config.toml`. Leave empty (`null`) to keep whatever Codex's `config.toml` already says; clearing the setting later does not remove the value from the file.",
+            "markdownDescription": "How deep Codex subagents may nest (a subagent spawning its own subagents). AI Usage sets 10 by default. Written to `[agents] max_depth` in Codex's `config.toml`. Leave empty (`null`) to keep whatever Codex's `config.toml` already says; clearing the setting later does not remove the value from the file.",
             "order": 2
           },
           "aiUsage.codexConfig.agents.jobMaxRuntimeSeconds": {
