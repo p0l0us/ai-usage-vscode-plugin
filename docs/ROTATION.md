@@ -79,8 +79,8 @@ at 92% weekly is neither kept as the active account nor switched to. The remaini
 **Example: no account qualifies.** A (active) reaches 5h 95%, B has 7d at 99.7% and C has 5h at 98%. The active login
 is kept, the AI Usage log names the window that reached its threshold (`5h 95% ≥ 95%`), and a notification says once
 that no account is available. It is shown again only after a switch, or after the active account has been below its
-thresholds again. Another sweep runs after `aiUsage.<provider>.checkIntervalMinutes`, so C qualifies again once its
-5-hour window resets.
+thresholds again. The next sweep runs when C's 5-hour window resets, or after `aiUsage.<provider>.checkIntervalMinutes`
+if that is sooner, so C takes over right after its reset.
 
 **Model-scoped windows.** `autoRotate.modelLimits` (Claude) decides whether `7d Fable` counts at all:
 
@@ -96,6 +96,18 @@ Code set to Sonnet, an account at `7d Fable` 100% and `7d` 30% is a normal candi
 - A reading of the active account that reaches a threshold starts a sweep at once, without waiting for the
   one-minute scheduler. A reading at most 2 minutes old counts as the active account's current reading, so the
   rate-limited usage endpoint is not asked again.
+- **The active account is read the sooner the faster it spends.** From its earlier readings the service measures
+  how fast each window of the active account is being used (against a reading at least three minutes older in the
+  same window, since readings are whole percents). Its next reading is due after half the time the fastest counted
+  window needs to reach its threshold: never sooner than a minute, never later than `checkIntervalMinutes`. A 5-hour
+  window is assumed to go at least 1 % a minute even while it looks idle, so an account sitting at 90 % is looked at
+  every 2.5 minutes. The other saved accounts keep the regular interval, and each round reads the active account
+  first.
+- **Expected usage counts.** The active account is at its limit not only when its reading is at a threshold but also
+  when, at its measured rate, it will be there within 90 seconds, which is sooner than it can be read again. Such a
+  switch is logged with both figures (`5h 93% (96% expected within 90 s) ≥ 95%`); the history keeps the real
+  reading. Claude Code's local usage cache (the `auto` source) is still read every 15 seconds, but Claude Code
+  refreshes it only now and then, mostly after a login change, so rotation no longer depends on it.
 - The service's Codex live collector can read session logs, which do not name an account, so their figures are never stored
   as a profile's reading. When they show a threshold reached, the next sweep reads the active account itself instead
   of trusting its stored reading, which may be hours old.
@@ -106,7 +118,10 @@ Code set to Sonnet, an account at `7d Fable` 100% and `7d` 30% is a normal candi
 
 Every sweep first needs a successful current reading of the active account. If that reading turns out to be below
 every threshold, nothing is switched (with the `proactive` trigger, the sweep goes on to look for a
-[clearly better account](#proactive-switching)). Sweeps are spaced by the provider's check interval.
+[clearly better account](#proactive-switching)). Sweeps are spaced by the provider's check interval, with one
+exception: an active account whose current reading is at its limit is rotated at once, whatever the last sweep did,
+unless that sweep already found this very account at its limit and no candidate. Then the next sweep is due when the
+first candidate's limiting window resets, or at the next regular slot if that is sooner.
 
 ## Choosing the next account
 

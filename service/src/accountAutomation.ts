@@ -68,14 +68,21 @@ export interface AutomationProfiles {
   activateProfile(provider: AuthProvider, id: string, automatic?: boolean): Promise<boolean>;
 }
 
+/** One past reading of an account: when it was taken and what each window showed, kept to measure usage rates. */
+export type UsageSample = { at: number; windows: Array<{ label: string; usedPercent: number; resetsAt?: number }> };
+
 export type AccountState = CacheEntry & {
   lastKeepAliveAt?: number;
   checkedAt?: number;
   keepAliveError?: string;
   /** Fingerprint of the credential and problem last announced, so each broken login is reported once. */
   problemNotified?: string;
-  /** Rotation bookkeeping only: the account `checkedAt` started counting the stay of. */
+  /** Rotation bookkeeping only: the account `checkedAt` started counting the stay of, or the account a sweep ran for. */
   activeId?: string;
+  /** Sweep record only: the sweep found the active account at (or about to reach) its limit and made no switch. */
+  waitAtLimit?: boolean;
+  /** Earlier readings of this account, newest last, to measure how fast each window is being used. */
+  samples?: UsageSample[];
   /** Reused if a redemption response is lost, so a retry cannot spend a second credit. */
   resetAttemptKey?: string;
   /** Largest available-credit count seen during the current continuous availability episode. */
@@ -178,6 +185,21 @@ const RESET_GUARD_MS = 5 * 60_000;
 const HOLD_MAX_MS = 20 * 60_000;
 /** How much better a candidate must score before proactive rotation leaves a working account. */
 const SWITCH_MARGIN: Record<Exclude<RotationStrategy, 'sequential'>, number> = { soonestReset: 3, evenPace: 5, leastWaste: 0.1 };
+/** How many earlier readings an account keeps for its usage rates, and how old they may be. */
+const SAMPLE_KEEP = 30;
+const SAMPLE_MAX_AGE_MS = 60 * 60_000;
+/** A rate is measured against a reading at least this much older when there is one: readings are whole percents. */
+const RATE_BASELINE_MS = 3 * 60_000;
+/** Otherwise against the oldest reading at least this much older; anything closer is rounding noise. */
+const RATE_MIN_BASELINE_MS = 45_000;
+/** Readings of one window report its reset a second or so apart; further apart, it is another window. */
+const SAME_WINDOW_MS = 5 * 60_000;
+/** The active account is never read more often than this while it approaches a threshold. */
+export const ACTIVE_READ_FLOOR_MS = 60_000;
+/** Spending assumed of a short window (1 % a minute) when the measured rate is lower, so a nearly used-up window is still watched. */
+const ASSUMED_SHORT_RATE = 1 / 60_000;
+/** How far ahead rotation looks: the active account cannot be read again sooner than this after a reading. */
+export const PROJECTION_LEAD_MS = 90_000;
 
 /**
  * Lower is better. A window whose reset has already passed counts as fresh, so an old cached reading ranks an
@@ -219,6 +241,83 @@ export function rotationScore(strategy: RotationStrategy, usage: LiveUsage, now:
 export function nextAccounts(profiles: Profile[], activeId: string): Profile[] {
   const index = profiles.findIndex((profile) => profile.id === activeId);
   return index < 0 ? [] : [...profiles.slice(index + 1), ...profiles.slice(0, index)];
+}
+
+/** `samples` with `usage` added as the newest; older ones beyond the kept count or age are dropped. */
+export function addSample(samples: UsageSample[] | undefined, usage: LiveUsage): UsageSample[] {
+  const at = usage.fetchedAt.getTime();
+  const kept = (samples ?? []).filter((sample) => sample.at < at && at - sample.at <= SAMPLE_MAX_AGE_MS);
+  kept.push({ at, windows: usage.windows.filter((window) => Number.isFinite(window.usedPercent)).map((window) =>
+    ({ label: window.label, usedPercent: window.usedPercent, ...(window.resetsAt ? { resetsAt: window.resetsAt.getTime() } : {}) })) });
+  return kept.slice(-SAMPLE_KEEP);
+}
+
+/**
+ * How fast each window of `usage` is being used, in percent per millisecond, measured against the account's earlier
+ * readings of the same window (the same reset time): the newest reading at least `RATE_BASELINE_MS` older, or else
+ * the oldest at least `RATE_MIN_BASELINE_MS` older. A window without such a reading has no rate. Usage only rises
+ * within a window, so a rate is never negative.
+ */
+export function usageRates(samples: UsageSample[] | undefined, usage: LiveUsage): Map<string, number> {
+  const rates = new Map<string, number>();
+  const at = usage.fetchedAt.getTime();
+  for (const window of usage.windows) {
+    if (!Number.isFinite(window.usedPercent)) { continue; }
+    const reset = window.resetsAt?.getTime();
+    const earlier: Array<{ at: number; usedPercent: number }> = [];
+    for (const sample of samples ?? []) {
+      if (sample.at >= at) { continue; }
+      const same = sample.windows.find((candidate) => candidate.label === window.label &&
+        (reset === undefined ? candidate.resetsAt === undefined : candidate.resetsAt !== undefined && Math.abs(candidate.resetsAt - reset) <= SAME_WINDOW_MS));
+      if (same) { earlier.push({ at: sample.at, usedPercent: same.usedPercent }); }
+    }
+    earlier.sort((a, b) => b.at - a.at);
+    const baseline = earlier.find((sample) => at - sample.at >= RATE_BASELINE_MS) ?? [...earlier].reverse().find((sample) => at - sample.at >= RATE_MIN_BASELINE_MS);
+    if (!baseline) { continue; }
+    rates.set(window.label, Math.max(0, window.usedPercent - baseline.usedPercent) / (at - baseline.at));
+  }
+  return rates;
+}
+
+/** `usage` as it will read `leadMs` later if every measured rate holds; a window without a rate is unchanged. */
+export function projectUsage(usage: LiveUsage, rates: Map<string, number>, leadMs: number): LiveUsage {
+  return { ...usage, windows: usage.windows.map((window) => {
+    const rate = rates.get(window.label);
+    return rate ? { ...window, usedPercent: Math.min(100, window.usedPercent + rate * leadMs) } : window;
+  }) };
+}
+
+/**
+ * How long after `usage` the active account should be read again: half the time its fastest counted window needs to
+ * reach its threshold, never under `ACTIVE_READ_FLOOR_MS` nor over the check interval. A short window is assumed to
+ * go at least `ASSUMED_SHORT_RATE`, so a window that is nearly used up is watched even while it sits idle. A window
+ * already at its threshold does not shorten the interval: rotation decides about it, not another reading.
+ */
+export function activeReadDelayMs(usage: LiveUsage, rates: Map<string, number>, settings: RotationLimits & { checkIntervalMs: number }): number {
+  let delay = settings.checkIntervalMs;
+  for (const window of counted(usage, settings)) {
+    if (!Number.isFinite(window.usedPercent)) { continue; }
+    const headroom = windowThreshold(window.label, settings) - window.usedPercent;
+    if (headroom <= 0) { continue; }
+    const rate = Math.max(rates.get(window.label) ?? 0, windowKind(window.label) === 'short' ? ASSUMED_SHORT_RATE : 0);
+    if (rate <= 0) { continue; }
+    delay = Math.min(delay, headroom / rate / 2);
+  }
+  return Math.max(ACTIVE_READ_FLOOR_MS, Math.min(settings.checkIntervalMs, delay));
+}
+
+/** The counted windows of `projected` at or over their threshold, with what `current` reads now. */
+function reachedWindows(current: LiveUsage, projected: LiveUsage, limits: RotationLimits): Array<{ label: string; usedPercent: number; projectedPercent: number; threshold: number }> {
+  return counted(projected, limits).filter((window) => window.usedPercent >= windowThreshold(window.label, limits)).map((window) => ({
+    label: window.label, usedPercent: current.windows.find((now) => now.label === window.label)?.usedPercent ?? window.usedPercent,
+    projectedPercent: window.usedPercent, threshold: windowThreshold(window.label, limits) }));
+}
+
+/** "5h 93% (96% expected within 90 s) ≥ 95%" for every window at or heading over its threshold. */
+function describeReached(current: LiveUsage, projected: LiveUsage, limits: RotationLimits): string {
+  return reachedWindows(current, projected, limits).map((window) => `${window.label} ${window.usedPercent}%` +
+    (window.projectedPercent > window.usedPercent ? ` (${Math.round(window.projectedPercent)}% expected within ${Math.round(PROJECTION_LEAD_MS / 1000)} s)` : '') +
+    ` ≥ ${window.threshold}%`).join(', ');
 }
 
 /** Plain Node service: persistent per-account statistics, keep-alives and bounded rotation. */
@@ -335,6 +434,16 @@ export class AccountAutomation {
   stayed(provider: AuthProvider, active: string): number | undefined {
     const state = this.read(provider, 'rotation-stay');
     return state.activeId === active && state.checkedAt !== undefined ? this.now() - state.checkedAt : undefined;
+  }
+
+  /** How fast each window of `usage` is being used, from the account's earlier readings. */
+  private rates(provider: AuthProvider, id: string, usage: LiveUsage): Map<string, number> {
+    return usageRates(this.read(provider, id).samples, usage);
+  }
+
+  /** `usage` at a threshold now, or before the account can be read again at the rate it is being used. */
+  private reachesLimit(provider: AuthProvider, id: string, usage: LiveUsage, settings: AutomationSettings): boolean {
+    return atLimit(projectUsage(usage, this.rates(provider, id, usage), PROJECTION_LEAD_MS), settings);
   }
 
   /** An account as the history names it: id, name and email, never its login. */
@@ -467,11 +576,12 @@ export class AccountAutomation {
     if (previous && previous.fetchedAt > usage.fetchedAt) { return; }
     const counted = this.countResetCredits(provider, state, usage);
     this.write(provider, id, { ...state, usage: this.serialize(counted.usage), resetCreditTotal: counted.total,
-      checkedAt: usage.fetchedAt.getTime(), lastError: undefined });
+      checkedAt: usage.fetchedAt.getTime(), lastError: undefined, samples: addSample(state.samples, counted.usage) });
     this.history?.reading(provider, this.account(provider, id), usage, 'status', true);
-    // A reading that reaches a threshold starts rotation now, not on the next minute's tick.
+    // A reading that reaches a threshold, or will before the account can be read again, starts rotation now, not on
+    // the next minute's tick.
     const settings = this.settings(provider);
-    if ((settings.autoRotate || settings.autoReset) && this.profiles.activeProfileId(provider) === id && atLimit(usage, settings)) { void this.tick(); }
+    if ((settings.autoRotate || settings.autoReset) && this.profiles.activeProfileId(provider) === id && this.reachesLimit(provider, id, counted.usage, settings)) { void this.tick(); }
   }
 
   /**
@@ -513,7 +623,10 @@ export class AccountAutomation {
   async refreshUsage(provider: AuthProvider, force = false): Promise<void> {
     if (this.disposed || this.paused || this.holds.has(provider) || this.locks.has(provider)) return;
     await this.withAccountLock(provider, async () => {
-      for (const profile of this.profiles.profiles(provider)) {
+      // The active account first: it is the one rotation watches, and a round of the others takes a while.
+      const active = this.profiles.activeProfileId(provider);
+      const profiles = [...this.profiles.profiles(provider)].sort((a, b) => Number(b.id === active) - Number(a.id === active));
+      for (const profile of profiles) {
         if (this.disposed || this.paused || this.holds.has(provider)) break;
         const settings = this.settings(provider);
         const state = this.read(provider, profile.id);
@@ -521,7 +634,9 @@ export class AccountAutomation {
         const now = this.now();
         const resetSinceCheck = usage?.windows.some(window => window.resetsAt &&
           window.resetsAt.getTime() <= now && window.resetsAt.getTime() > (state.checkedAt ?? 0));
-        if (!force && state.checkedAt !== undefined && now - state.checkedAt < settings.checkIntervalMs && !resetSinceCheck) continue;
+        // The active account is read the sooner the faster it approaches a threshold, so the limit is seen before it is hit.
+        const interval = profile.id === active && usage ? activeReadDelayMs(usage, usageRates(state.samples, usage), settings) : settings.checkIntervalMs;
+        if (!force && state.checkedAt !== undefined && now - state.checkedAt < interval && !resetSinceCheck) continue;
         await this.checkAccount(provider, profile.id, settings, false);
       }
     });
@@ -689,6 +804,7 @@ export class AccountAutomation {
       (beforeCredits !== undefined && (credited.usage.resetCredits?.availableCount ?? beforeCredits) < beforeCredits));
     this.write(provider, id, { ...state, checkedAt: this.now(),
       usage: credited ? this.serialize(credited.usage) : state.usage,
+      samples: credited ? addSample(state.samples, credited.usage) : state.samples,
       resetCreditTotal: credited ? credited.total : state.resetCreditTotal,
       resetAttemptKey: resetConfirmed ? undefined : state.resetAttemptKey,
       nextAllowedAt: result.kind === 'error' && result.transient
@@ -752,7 +868,7 @@ export class AccountAutomation {
     const usage = active ? this.usage(provider, active) : undefined;
     const ranked = active ? this.ranked(provider, active, settings) : [];
     const own = usage ? rotationScore(strategy, usage, now, settings) : undefined;
-    const exhausted = !!usage && atLimit(usage, settings);
+    const exhausted = active !== undefined && !!usage && this.reachesLimit(provider, active, usage, settings);
     const recovery = usage && (settings.resetAware || settings.autoReset)
       ? (exhausted ? imminentRecovery(usage, now, settings) : imminentReset(usage, now, settings)) : undefined;
     let reason: string;
@@ -962,7 +1078,9 @@ export class AccountAutomation {
     const hinted = this.limitHint.has(provider) || forced || Boolean(settings.autoReset &&
       (!usage || this.now() - usage.fetchedAt.getTime() >= settings.checkIntervalMs));
     if (!usage && !hinted) { return 'the active account has no stored reading yet'; }
-    if (!hinted && !atLimit(usage!, settings)) {
+    // At a threshold by the stored reading, or expected there before the account can be read again.
+    const limitNow = usage !== undefined && this.reachesLimit(provider, active, usage, settings);
+    if (!hinted && !limitNow) {
       // The stretch with every account at its limit ends as soon as the active account reads below its thresholds
       // again, so the next one is reported again and the history records when this one ended.
       this.clearExhausted(provider, active, 'reset');
@@ -978,9 +1096,14 @@ export class AccountAutomation {
     const rotationId = 'rotation-sweep';
     const sweep = this.read(provider, rotationId);
     const retryAt = sweep.nextAllowedAt ?? (sweep.checkedAt !== undefined ? sweep.checkedAt + settings.checkIntervalMs : undefined);
-    if (!forced && !(this.resetDecision?.approved && this.resetApprovalScope.getStore() === this.resetDecision.view.id) && retryAt !== undefined && this.now() < retryAt) { return `the last sweep was less than ${Math.round(settings.checkIntervalMs / 60_000)} minutes ago`; }
+    // An active account whose current reading is at its limit is rotated at once; only when the last sweep already
+    // found this very account there and could not switch is another sweep pointless before the next slot. A reading
+    // with a reset behind it says nothing yet: it is read again on the regular schedule.
+    const spaced = retryAt !== undefined && this.now() < retryAt &&
+      !(limitNow && !usageHasExpiredReset(usage!, this.now()) && !(sweep.waitAtLimit && sweep.activeId === active));
+    if (!forced && !(this.resetDecision?.approved && this.resetApprovalScope.getStore() === this.resetDecision.view.id) && spaced) { return `the last sweep was less than ${Math.round(settings.checkIntervalMs / 60_000)} minutes ago`; }
     const sweepStart = this.now();
-    this.write(provider, rotationId, { checkedAt: sweepStart, nextAllowedAt: sweepStart + settings.checkIntervalMs });
+    this.write(provider, rotationId, { checkedAt: sweepStart, nextAllowedAt: sweepStart + settings.checkIntervalMs, activeId: active, waitAtLimit: limitNow });
     this.limitHint.delete(provider);
     /** Endpoint calls this sweep spends, recorded with its outcome. */
     let calls = 0;
@@ -1001,14 +1124,18 @@ export class AccountAutomation {
       if (readableAt !== undefined) { this.write(provider, rotationId, { checkedAt: sweepStart, nextAllowedAt: readableAt }); }
       return `the active account could not be read: ${activeCheck.usageError ?? 'usage unavailable'}`;
     }
-    const exhausted = atLimit(current, settings);
+    // At a threshold now, or expected there before the account can be read again at its measured usage rate.
+    const projected = projectUsage(current, this.rates(provider, active, current), PROJECTION_LEAD_MS);
+    const exhaustedNow = atLimit(current, settings);
+    const exhausted = atLimit(projected, settings);
+    if (exhausted !== limitNow) { this.write(provider, rotationId, { ...this.read(provider, rotationId), waitAtLimit: exhausted }); }
     if (!exhausted) { this.clearExhausted(provider, active, 'reset'); }
     if ((settings.resetAware || settings.autoReset) && !forced) {
       // An exhausted account can recover only after its last limiting window resets. A proactive switch can
       // wait for any imminent window reset and compare the new readings on the next scheduler tick.
-      const reset = exhausted ? imminentRecovery(current, this.now(), settings) : imminentReset(current, this.now(), settings);
+      const reset = exhaustedNow ? imminentRecovery(current, this.now(), settings) : imminentReset(current, this.now(), settings);
       if (reset && reset.getTime() > this.now() && reset.getTime() - this.now() <= RESET_GUARD_MS) {
-        this.write(provider, rotationId, { checkedAt: sweepStart, nextAllowedAt: reset.getTime() + 1000 });
+        this.write(provider, rotationId, { ...this.read(provider, rotationId), nextAllowedAt: reset.getTime() + 1000 });
         return `waiting for the active account's usage reset in ${formatResetRemaining(reset, new Date(this.now()))}`;
       }
     }
@@ -1149,7 +1276,8 @@ export class AccountAutomation {
           const stayedMs = this.stayed(provider, active);
           this.write(provider, 'rotation-stay', { activeId: candidate.id, checkedAt: this.now() });
           this.clearExhausted(provider, candidate.id, 'switch');
-          this.log(`${provider}: automatically rotated to "${candidate.name}" (${strategy}, ${modelFallback ? 'general quota fallback; model limit remains' : exhausted ? 'active account at its limit' : 'better account available'})`);
+          this.log(`${provider}: automatically rotated to "${candidate.name}" (${strategy}, ${modelFallback ? 'general quota fallback; model limit remains'
+            : exhaustedNow ? 'active account at its limit' : exhausted ? `active account about to reach its limit: ${describeReached(current, projected, settings)}` : 'better account available'})`);
           this.history?.record({ type: 'switch', provider, from: this.account(provider, active), to: this.account(provider, candidate.id),
             reason: exhausted ? 'limit' : 'proactive', automatic: true, ...(stayedMs !== undefined ? { stayedMs } : {}),
             fromUsage: usageSnapshot(current), toUsage: usageSnapshot(candidateUsage!), settings: snapshot, candidates: evaluated, calls });
@@ -1160,24 +1288,29 @@ export class AccountAutomation {
       }
     }
     if (deferredUntil) {
-      this.write(provider, rotationId, { checkedAt: sweepStart, nextAllowedAt: deferredUntil.getTime() + 1000 });
+      this.write(provider, rotationId, { ...this.read(provider, rotationId), nextAllowedAt: deferredUntil.getTime() + 1000 });
     }
     if (canRedeem && deferredUntil && (creditExpiresAt === undefined || creditExpiresAt * 1000 > deferredUntil.getTime())) {
       return `waiting for another account's usage reset in ${formatResetRemaining(deferredUntil, new Date(this.now()))}`;
     }
     if (canRedeem) { return this.redeemReset(active, settings, current, 'no eligible account to rotate to'); }
     if (exhausted) {
-      const over = counted(current, settings).filter((window) => window.usedPercent >= windowThreshold(window.label, settings));
-      const reached = over.map((window) => `${window.label} ${window.usedPercent}% ≥ ${windowThreshold(window.label, settings)}%`).join(', ');
-      const detail = `the active account is at its limit (${reached}), but no other saved account is below its rotation thresholds in every usage window` +
+      const over = reachedWindows(current, projected, settings);
+      const detail = `the active account is ${exhaustedNow ? 'at' : 'about to reach'} its limit (${describeReached(current, projected, settings)}), but no other saved account is below its rotation thresholds in every usage window` +
         (limited.length ? `; still at their limit by their last reading: ${limited.join(', ')}` : '') +
         (skipped.length ? `; left out for a failed last check: ${skipped.join(', ')}` : '');
       this.log(`${provider}: ${detail}; keeping the active account`);
+      // The next sweep is due when the first candidate's limiting window resets, when that is sooner than the regular slot.
+      const nextCandidateAt = evaluated.map((entry) => entry.limitedUntil).filter((value): value is string => Boolean(value)).sort()[0];
+      const record = this.read(provider, rotationId);
+      if (nextCandidateAt && record.nextAllowedAt !== undefined && new Date(nextCandidateAt).getTime() + 1000 < record.nextAllowedAt) {
+        this.write(provider, rotationId, { ...record, nextAllowedAt: new Date(nextCandidateAt).getTime() + 1000 });
+      }
       if (this.read(provider, 'rotation-exhausted').checkedAt === undefined) {
         this.write(provider, 'rotation-exhausted', { checkedAt: this.now() });
-        const nextCandidateAt = evaluated.map((entry) => entry.limitedUntil).filter((value): value is string => Boolean(value)).sort()[0];
         this.history?.record({ type: 'exhausted', provider, active: this.account(provider, active), usage: usageSnapshot(current),
-          reached: over.map((window) => ({ label: window.label, usedPercent: window.usedPercent, threshold: windowThreshold(window.label, settings) })),
+          reached: over.map((window) => ({ label: window.label, usedPercent: window.usedPercent, threshold: window.threshold,
+            ...(window.projectedPercent > window.usedPercent ? { projectedPercent: Math.round(window.projectedPercent) } : {}) })),
           settings: snapshot, candidates: evaluated, ...(nextCandidateAt ? { nextCandidateAt } : {}) });
         this.onNoCandidate?.(provider, detail);
       } else {

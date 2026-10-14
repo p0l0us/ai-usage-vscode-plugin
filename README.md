@@ -165,7 +165,9 @@ account rotation** (`aiUsage.<service>.autoRotate.enabled`) are set in Settings,
   reads account limits through its CLI. Its model is configurable; an empty model setting uses the CLI default.
 - Both collect usage for inactive accounts. The authentication profile list shows each account's last usage,
   check time and errors. Model calls consume subscription usage and run while the shared runtime is running.
-- Automatic rotation switches as soon as the active account's usage reaches a threshold (usage ≥ threshold).
+- Automatic rotation switches as soon as the active account's usage reaches a threshold (usage ≥ threshold), or
+  would at its measured usage rate before the account can be read again; the active account is read the more often
+  the faster it approaches a threshold.
   Claude has two: **95%** for the 5-hour window and **99.5%** for the weekly windows (all models, and `7d Fable` when it
   counts). Codex's weekly threshold is **99%**; a reported Codex 5-hour window rotates only once used up. The
   account switched to must be below the thresholds in every window. Both services offer soonest reset, even pace,

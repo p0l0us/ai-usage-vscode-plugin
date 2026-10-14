@@ -3,7 +3,7 @@ const test = require('node:test');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { AccountAutomation, atLimit, eligibleAccount, modelWindowFilter, rotationScore } = require('../out/accountAutomation');
+const { AccountAutomation, atLimit, eligibleAccount, modelWindowFilter, rotationScore, addSample, usageRates, projectUsage, activeReadDelayMs } = require('../out/accountAutomation');
 const { UsageHistory } = require('../out/usageHistory');
 
 const HOUR = 3600000;
@@ -90,7 +90,7 @@ function fixture(t, options = {}) {
     /** Cache every account's configured reading, as a keep-alive sweep would. */
     observeAll: provider => Object.entries(values).forEach(([id, percents]) =>
       percents && service.observe(provider, id, usage(provider, percents, now))),
-    advance: ms => { now += ms; } };
+    advance: ms => { now += ms; }, now: () => now };
 }
 
 test('99.5% default threshold preserves precision and checks both periods', () => {
@@ -1489,4 +1489,183 @@ test('an earned reset is spent once no other account can take over, and not when
   await moved.service.tick();
   assert.deepEqual(moved.resets, []);
   assert.equal(moved.credits.a, 1);
+});
+
+const near = (actual, expected, message) => assert.ok(Math.abs(actual - expected) < 1e-9, message ?? `${actual} is not ${expected}`);
+
+test('usage rates are measured against a reading at least three minutes older in the same window, and project ahead', () => {
+  const now = Date.now();
+  const reset = now + 3 * HOUR;
+  const read = (at, five, seven) => ({ provider: 'claude', title: 'claude', fetchedAt: new Date(at), windows: [
+    { label: '5h', usedPercent: five, resetsAt: new Date(reset) }, { label: '7d', usedPercent: seven, resetsAt: new Date(now + 100 * HOUR) }] });
+  let samples = addSample(undefined, read(now - 10 * 60000, 55, 40));
+  samples = addSample(samples, read(now - 60000, 73, 42));
+  const current = read(now, 75, 42);
+  const rates = usageRates(samples, current);
+  // 55 → 75 over ten minutes, not 73 → 75 over one: readings are whole percents, so a short baseline is noise.
+  near(rates.get('5h') * 60000, 2);
+  near(rates.get('7d') * 60000, 0.2);
+  const projected = projectUsage(current, rates, 90000);
+  near(projected.windows[0].usedPercent, 78);
+  near(projected.windows[1].usedPercent, 42.3);
+  assert.equal(projectUsage(current, new Map(), 90000).windows[0].usedPercent, 75, 'no rate, no change');
+  // Only a reading of the same window (the same reset) is a baseline; a newer reading never is.
+  const otherWindow = addSample(undefined, { ...read(now - 10 * 60000, 10, 40), windows: [{ label: '5h', usedPercent: 10, resetsAt: new Date(reset - 5 * HOUR) }] });
+  assert.equal(usageRates(otherWindow, current).get('5h'), undefined);
+  assert.equal(usageRates(addSample(undefined, read(now + 60000, 90, 42)), current).get('5h'), undefined);
+  // Under 45 seconds of baseline is rounding noise; a lower earlier reading means no spending, never a negative rate.
+  assert.equal(usageRates(addSample(undefined, read(now - 30000, 74, 42)), current).get('5h'), undefined);
+  assert.equal(usageRates(addSample(undefined, read(now - 5 * 60000, 80, 42)), current).get('5h'), 0);
+  // The kept readings are bounded in number and age.
+  let many;
+  for (let i = 0; i < 40; i++) { many = addSample(many, read(now - (40 - i) * 60000, i, 40)); }
+  assert.equal(many.length, 30);
+  assert.equal(addSample([{ at: now - 2 * HOUR, windows: [] }], current).length, 1, 'a reading from two hours ago is dropped');
+});
+
+test('the active account is read the sooner the faster its window approaches the threshold, between a minute and the check interval', () => {
+  const limits = { fiveHourThresholdPercent: 95, weeklyThresholdPercent: 99.5, checkIntervalMs: 10 * 60000 };
+  const now = Date.now();
+  const current = { provider: 'claude', title: 'claude', fetchedAt: new Date(now), windows: [
+    { label: '5h', usedPercent: 75, resetsAt: new Date(now + 3 * HOUR) }, { label: '7d', usedPercent: 50, resetsAt: new Date(now + 100 * HOUR) }] };
+  const perMinute = value => new Map([['5h', value / 60000]]);
+  // 20 points of headroom at 2 a minute: ten minutes to the threshold, read again halfway there.
+  assert.equal(activeReadDelayMs(current, perMinute(2), limits), 5 * 60000);
+  assert.equal(activeReadDelayMs(current, perMinute(0.5), limits), 10 * 60000, 'never later than the check interval');
+  assert.equal(activeReadDelayMs(current, perMinute(40), limits), 60000, 'never sooner than a minute');
+  // Without a measured rate the 5-hour window is assumed to go at 1 % a minute: an idle account at 85 % is read every five minutes.
+  const high = { ...current, windows: [{ ...current.windows[0], usedPercent: 85 }, current.windows[1]] };
+  assert.equal(activeReadDelayMs(high, new Map(), limits), 5 * 60000);
+  assert.equal(activeReadDelayMs(high, perMinute(0), limits), 5 * 60000, 'a measured idle rate does not switch the watch off');
+  // A weekly window only counts with a measured rate, and a window that does not count at all is ignored.
+  assert.equal(activeReadDelayMs({ ...current, windows: [{ ...current.windows[1], usedPercent: 98 }] }, new Map(), limits), 10 * 60000);
+  assert.equal(activeReadDelayMs({ ...current, windows: [{ ...current.windows[1], usedPercent: 98 }] }, new Map([['7d', 1 / 60000]]), limits), 60000, 'a weekly window with a measured rate counts, down to the floor');
+  assert.equal(activeReadDelayMs(high, new Map(), { ...limits, countsWindow: label => label !== '5h' }), 10 * 60000);
+  // At or over the threshold already, rotation decides; no sooner reading.
+  assert.equal(activeReadDelayMs({ ...current, windows: [{ ...current.windows[0], usedPercent: 96 }, current.windows[1]] }, perMinute(2), limits), 10 * 60000);
+});
+
+test('an active account burning through its 5-hour window is read more often and rotated before the limit, not ten minutes later', async t => {
+  const f = fixture(t, { history: true, settings: { claude: { autoRotate: true, fiveHourThresholdPercent: 95, strategy: 'leastWaste', trigger: 'limit' } } });
+  const reset = f.now() + 3 * HOUR;
+  const left = () => (reset - f.now()) / HOUR;
+  const a = five => { f.values.a = [['5h', five, left()], ['7d', 40, 100]]; };
+  f.values.b = [0, 50];
+  f.values.c = [0, 60];
+  a(55);
+  f.observeAll('claude');
+  await f.service.tick();
+  const reads = () => f.calls.filter(call => call[1] === 'a').length;
+  assert.deepEqual(f.calls, [], 'a fresh reading with 40 points of headroom needs no earlier look');
+  // Ten minutes later the regular check reads a at 75 % (first, before the other accounts): 2 points a minute, so
+  // the threshold is ten minutes away.
+  f.advance(10 * 60000); a(75);
+  await f.service.refreshUsage('claude'); await f.service.tick();
+  assert.deepEqual(f.calls.map(call => call[1]), ['a', 'b', 'c']);
+  // Four minutes on nothing is read yet; after five (half the way to the threshold) a is read again, at 85 %.
+  f.advance(4 * 60000); a(83);
+  await f.service.refreshUsage('claude'); await f.service.tick();
+  assert.equal(reads(), 1);
+  f.advance(60000); a(85);
+  await f.service.refreshUsage('claude'); await f.service.tick();
+  assert.equal(reads(), 2);
+  assert.deepEqual(f.switches, []);
+  // 91 % three minutes later is still 4 points short, even 90 seconds ahead; 93 % a minute after that is not.
+  f.advance(3 * 60000); a(91);
+  await f.service.refreshUsage('claude'); await f.service.tick();
+  assert.equal(reads(), 3);
+  assert.deepEqual(f.switches, []);
+  f.advance(60000); a(93);
+  await f.service.refreshUsage('claude'); await f.service.tick();
+  assert.equal(reads(), 4);
+  assert.deepEqual(f.switches, [['claude', 'b', true]], 'b has the most weekly allowance left per hour');
+  assert.equal(f.calls.length, 6, 'the other accounts were read once, on their regular schedule');
+  assert.ok(f.calls.every(call => !call[2]), 'no keep-alive was sent');
+  assert.ok(f.messages.some(message => /about to reach its limit: 5h 93% \(96% expected within 90 s\) ≥ 95%/.test(message)), f.messages.join('\n'));
+  const switched = f.events().find(event => event.type === 'switch');
+  assert.equal(switched.reason, 'limit');
+  assert.equal(switched.fromUsage.windows[0].usedPercent, 93, 'the history keeps the real reading');
+});
+
+test('an idle account that sits near its threshold is still looked at, and a status-bar reading heading over the threshold rotates at once', async t => {
+  const f = fixture(t, { settings: { claude: { autoRotate: true, fiveHourThresholdPercent: 95 } } });
+  const reset = f.now() + 3 * HOUR;
+  const left = () => (reset - f.now()) / HOUR;
+  f.values.a = [['5h', 90, left()], ['7d', 40, 100]];
+  f.observeAll('claude');
+  // No rate is known: at 90 % the assumed 1 % a minute gives five minutes to the threshold, so a is read after half of that.
+  f.advance(2 * 60000);
+  await f.service.refreshUsage('claude');
+  assert.deepEqual(f.calls, []);
+  f.advance(30000);
+  f.values.a = [['5h', 90, left()], ['7d', 40, 100]];
+  await f.service.refreshUsage('claude');
+  assert.deepEqual(f.calls.map(call => call[1]), ['a']);
+  // Measured idle, the assumed rate still applies: the next look is 2.5 minutes later, not 10.
+  f.advance(2 * 60000 + 30000);
+  await f.service.refreshUsage('claude');
+  assert.equal(f.calls.length, 2);
+  // The status bar then reads 93 % after four more minutes: 0.75 a minute measured over the window, 94 % expected,
+  // not at the threshold. Two minutes on it reads 95 % and rotation runs without waiting for the scheduler.
+  f.advance(4 * 60000);
+  f.observe('claude', [['5h', 93, left()], ['7d', 40, 100]]);
+  await f.service.tick();
+  assert.deepEqual(f.switches, []);
+  f.advance(2 * 60000);
+  f.observe('claude', [['5h', 95, left()], ['7d', 40, 100]]);
+  await f.service.tick();
+  assert.deepEqual(f.switches, [['claude', 'b', true]]);
+});
+
+test('after a rotation, the new active account reaching its limit is rotated at once, not after the sweep spacing', async t => {
+  const f = fixture(t, { values: { a: [99.5, 10], b: [10, 10], c: [20, 20] }, settings: { codex: { autoRotate: true } } });
+  f.observeAll('codex');
+  await f.service.tick();
+  assert.deepEqual(f.switches, [['codex', 'b', true]]);
+  // Three minutes later b is at its limit too (the status bar reads it): c takes over now, not when the spacing ends.
+  f.advance(3 * 60000);
+  f.values.b = [99.5, 10];
+  f.observe('codex', [99.5, 10], 'b');
+  await f.service.tick();
+  assert.deepEqual(f.switches, [['codex', 'b', true], ['codex', 'c', true]]);
+  assert.deepEqual(f.calls, [], 'the stored readings decide; nothing is read');
+});
+
+test('an account reaching its limit shortly after a proactive sweep found nothing better is rotated at once', async t => {
+  const f = fixture(t, { values: { a: [10, 50], b: [10, 55], c: [10, 60] }, settings: { claude: { autoRotate: true, strategy: 'leastWaste', trigger: 'proactive', minStayMs: 0 } } });
+  f.observeAll('claude');
+  // a's stored reading shows b and c better by the margin, so a sweep reads a; its fresh reading is better than
+  // the stored one, and nothing is clearly better.
+  f.observe('claude', [10, 70]);
+  f.advance(3 * 60000);
+  await f.service.tick();
+  assert.deepEqual(f.calls.map(call => call[1]), ['a']);
+  assert.deepEqual(f.switches, []);
+  // Four minutes later a's status-bar reading is at the 5-hour threshold: the sweep spacing does not hold the switch.
+  f.advance(4 * 60000);
+  f.observe('claude', [99.5, 70]);
+  await f.service.tick();
+  assert.deepEqual(f.switches, [['claude', 'b', true]]);
+});
+
+test('with every account at its limit, the next sweep is due when the first candidate window resets, within the spacing', async t => {
+  const f = fixture(t, { ids: ['a', 'b'], values: { a: [99.5, 10], b: [10, 10] }, settings: { codex: { autoRotate: true } } });
+  // b's 5-hour window is at the threshold and resets in three minutes.
+  f.observe('codex', [['5h', 99.5, 0.05], ['7d', 10, 48]], 'b');
+  f.observe('codex', [99.5, 10]);
+  await f.service.tick();
+  assert.deepEqual(f.switches, []);
+  f.advance(2 * 60000);
+  await f.service.tick();
+  assert.deepEqual(f.switches, [], 'before the reset, the sweep is still spaced');
+  f.advance(60000 + 2000);
+  await f.service.tick();
+  assert.deepEqual(f.switches, [['codex', 'b', true]]);
+});
+
+test('a usage refresh reads the active account before the others', async t => {
+  const f = fixture(t, { values: { a: [10, 10], b: [10, 10], c: [10, 10] } });
+  f.active.claude = 'c';
+  await f.service.refreshUsage('claude', true);
+  assert.deepEqual(f.calls.map(call => call[1]), ['c', 'a', 'b']);
 });

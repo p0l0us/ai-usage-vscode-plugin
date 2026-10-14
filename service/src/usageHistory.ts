@@ -96,7 +96,8 @@ export type ExhaustedEvent = {
   provider: AuthProvider;
   active: HistoryAccount;
   usage: HistoryUsage;
-  reached: Array<{ label: string; usedPercent: number; threshold: number }>;
+  /** `projectedPercent`: the window was not at its threshold yet but expected there before the next reading. */
+  reached: Array<{ label: string; usedPercent: number; projectedPercent?: number; threshold: number }>;
   settings?: RotationSnapshot;
   candidates?: HistoryCandidate[];
   /** When the first blocked candidate's window resets, if any is known. */

@@ -85,6 +85,8 @@ ai-usage rotation-weights codex         # scores and selection explanation as JS
 
 The service checks for due live reads every five seconds. The chosen source's interval controls actual reads;
 Claude's local-file interval remains independently configurable. Known quota reset times can bring a read forward.
+The one-minute automation scheduler reads the saved accounts on the check interval, the active account first and
+sooner the faster its usage approaches a rotation threshold (see [ROTATION.md](ROTATION.md#what-starts-a-rotation)).
 A manual refresh respects provider backoff and endpoint spacing. Checks using the same login share the account
 lock, so a native status check cannot refresh credentials concurrently with a saved-account check. Identity and
 source changes during a read discard its result. Codex session logs remain unattributable to saved accounts: a
