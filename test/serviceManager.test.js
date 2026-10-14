@@ -194,7 +194,7 @@ test('without the background service one window hosts the service, the others us
   assert.deepEqual((await second.connected.list('codex')).profiles.map((profile) => profile.name), ['Codex 1']);
 });
 
-test('declining the background service offers it once and still gives the window a working service', async (t) => {
+test('an unanswered background service offer is shown once at first and still gives the window a working service', async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-windows-'));
   const previous = process.env.AI_USAGE_HOME;
   process.env.AI_USAGE_HOME = path.join(root, 'home');
@@ -675,39 +675,63 @@ test('the workspace folders and session directories are declared on connecting a
   await s.manager.declareFolders(undefined).catch(() => assert.fail('no client is a no-op'));
 });
 
-test('the install offer: asked once, "Install" installs, "Don\'t ask again" turns the background setting off, "Not now" does nothing', async (t) => {
+test('the install offer: "Install" installs, "No" turns the background setting off, an unanswered offer is asked again', async (t) => {
   const s = scenario(t, { background: true });
   settings.set('aiUsage.accountService.background', true);
+  const offers = () => informationMessages.filter((message) => /run its account service in the background/.test(message)).length;
   let installs = 0;
   s.manager.install = async () => { installs++; return true; };
   informationResponses.push('Install');
   assert.ok(await s.manager.ensure({ promptInstall: true }), 'a service is hosted while the offer is open');
   await until(() => installs === 1);
-  assert.equal(informationMessages.filter((message) => /run its account service in the background/.test(message)).length, 1);
+  assert.equal(offers(), 1);
   assert.match(informationMessages[0], /It goes to ~\/\.ai-usage and is registered to start when you sign in\.$/);
-  // Offered once per window: another attempt does not ask again.
+  // Answered: another attempt in the same window does not ask again.
+  s.manager.offerRepeatMs = 20;
+  assert.ok(await s.manager.ensure({ promptInstall: true }));
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(offers(), 1);
   await s.manager.stop();
+
+  // Closed or ignored: asked again on every repeat until answered, and never while one window's offer is open twice.
   const again = s.open();
+  again.offerRepeatMs = 30;
   again.install = async () => { installs++; return true; };
-  informationResponses.push('Not now');
+  const before = offers();
   assert.ok(await again.ensure({ promptInstall: true }));
-  await until(() => informationMessages.length >= 2);
-  assert.equal(installs, 1, '"Not now" installs nothing');
+  await until(() => offers() >= before + 3);
+  assert.equal(installs, 1, 'an unanswered offer installs nothing');
   assert.equal(settings.get('aiUsage.accountService.background'), true);
-  await again.stop();
-  const third = s.open();
-  informationResponses.push("Don't ask again");
-  assert.ok(await third.ensure({ promptInstall: true }));
+  informationResponses.push('No');
   await until(() => settings.get('aiUsage.accountService.background') === false);
   await until(() => informationMessages.some((message) => /nothing runs in the background/.test(message)));
   assert.match(informationMessages.at(-1), /^AI Usage: accounts keep working while VS Code is open; nothing runs in the background\. Turn aiUsage\.accountService\.background on to install the service later\.$/);
+  const answered = offers();
+  await new Promise((resolve) => setTimeout(resolve, 120));
+  assert.equal(offers(), answered, '"No" stops the repeats');
+  assert.equal(installs, 1, '"No" installs nothing');
+  assert.equal(again.hosting, true, 'the window keeps hosting the service itself');
+  await again.stop();
+
+  // Another window that answered elsewhere stops asking once the background setting is off or the service is installed.
+  settings.set('aiUsage.accountService.background', true);
+  const other = s.open();
+  other.offerRepeatMs = 30;
+  const start = offers();
+  assert.ok(await other.ensure({ promptInstall: true }));
+  await until(() => offers() >= start + 1);
+  settings.set('aiUsage.accountService.background', false);
+  const stopped = offers();
+  await new Promise((resolve) => setTimeout(resolve, 120));
+  assert.equal(offers(), stopped);
+  await other.stop();
+
   // Without promptInstall (a reconnect) nobody is asked.
   const quiet = s.open();
   settings.set('aiUsage.accountService.background', true);
-  const before = informationMessages.length;
-  await third.stop();
+  const quietBefore = informationMessages.length;
   assert.ok(await quiet.ensure());
-  assert.equal(informationMessages.length, before);
+  assert.equal(informationMessages.length, quietBefore);
 });
 
 test('install: copies the bundled package, starts it, connects, reports the outcome; upgrade follows the bundled version', async (t) => {

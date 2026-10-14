@@ -16,6 +16,8 @@ for (const [key, name] of Object.entries({ HOME: 'home', AI_USAGE_HOME: 'service
 }
 // Windows and GitHub tooling can otherwise resolve a second, real home or token.
 env.USERPROFILE = env.HOME;
+// Claude Code keeps its macOS login in the Keychain, which a temporary HOME does not isolate.
+env.AI_USAGE_CLAUDE_KEYCHAIN = 'off';
 delete env.GH_TOKEN;
 delete env.GITHUB_TOKEN;
 

@@ -2,7 +2,7 @@
   "name": "ai-usage-vscode-plugin",
   "displayName": "AI subscription management and usage",
   "description": "Manage your Claude Code, Codex and GitHub Copilot subscriptions and see what is left of them: switch between saved accounts without signing in again, keep them warm, rotate on exhaustion, and read live 5h/7d windows, premium requests and org billing in the status bar and chat input. Open source, contributions welcome.",
-  "version": "1.4.6",
+  "version": "1.4.7",
   "publisher": "p0l0us",
   "license": "GPL-3.0-only",
   "repository": {
@@ -7068,7 +7068,7 @@
             "type": "boolean",
             "default": true,
             "scope": "machine",
-            "description": "Show live Claude Code rate-limit usage in the status bar when a Claude Code login is found (~/.claude/.credentials.json or $CLAUDE_CONFIG_DIR).",
+            "description": "Show live Claude Code rate-limit usage in the status bar when a Claude Code login is found (the macOS Keychain, ~/.claude/.credentials.json, or the same file in $CLAUDE_CONFIG_DIR).",
             "order": 1
           },
           "aiUsage.claude.statusBar.accountNumber": {

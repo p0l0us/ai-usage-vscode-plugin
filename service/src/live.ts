@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { claudeAccountFile } from './accountIdentity';
+import { readNativeCredential } from './authFiles';
 
 /**
  * Live usage readers for locally installed AI CLIs and GitHub Copilot. This module must stay free of
@@ -310,8 +311,14 @@ type ClaudeCredentials = {
   rateLimitTier?: string;
 };
 
+/** The native home's login may be in the macOS Keychain; a profile's own home keeps it in its file. */
 function readClaudeCredentials(home = claudeConfigDir()): ClaudeCredentials | undefined {
-  const data = readJson(path.join(home, '.credentials.json')) as { claudeAiOauth?: Record<string, unknown> } | undefined;
+  let data: { claudeAiOauth?: Record<string, unknown> } | undefined;
+  if (path.resolve(home) === path.resolve(claudeConfigDir())) {
+    try { data = readNativeCredential('claude') as typeof data; } catch { data = undefined; }
+  } else {
+    data = readJson(path.join(home, '.credentials.json')) as typeof data;
+  }
   const oauth = data?.claudeAiOauth;
   if (!oauth || typeof oauth.accessToken !== 'string' || !oauth.accessToken) {
     return undefined;

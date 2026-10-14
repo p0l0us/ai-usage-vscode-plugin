@@ -6,7 +6,9 @@
 use the authenticated socket contract. `src/usageClient.ts` only decodes returned values and renders rotation
 diagnostics. See [SERVICE_ARCHITECTURE.md](SERVICE_ARCHITECTURE.md) for configuration authority and deployment modes.
 
-- **Claude Code**: reads the OAuth token from `~/.claude/.credentials.json` (or `$CLAUDE_CONFIG_DIR`) and calls
+- **Claude Code**: reads the OAuth token where Claude Code keeps it: on macOS the login Keychain item
+  `Claude Code-credentials` (with `-<first 8 hex of sha256(config dir)>` appended when `CLAUDE_CONFIG_DIR` is set),
+  otherwise, or when that item does not exist, `~/.claude/.credentials.json` (or `$CLAUDE_CONFIG_DIR`). It calls
   Anthropic's `/api/oauth/usage` endpoint, the same data shown by `/usage` inside Claude Code. The `accountFile`
   source instead reads `cachedUsageUtilization` from `~/.claude.json`, the reading Claude Code itself last fetched
   from that endpoint. The `cli` source runs `claude --print /usage` and then reads that same key: `/usage` is one of
@@ -155,7 +157,8 @@ switch is reported to the user as unconfirmed with the reason. The service then 
 re-reading the native credential each time so a token refreshed in the meantime is used, backing off to at least any
 `Retry-After` and giving up after ten attempts.
 
-Claude Code re-reads `.credentials.json` on its request path, so a switch reaches chats and CLI sessions that were
+A switch writes the login to the Keychain item when one exists (Claude Code ignores the file then), otherwise to the
+file. Claude Code re-reads its login on its request path (from the Keychain at most every 30 s), so a switch reaches chats and CLI sessions that were
 already running, from their next turn: verified 2026-09-18 against 2.1.276, where a chat process started 13s before
 a switch recorded the newly activated account 15s after it. Claude therefore has no stale-process warning; only
 Codex, whose app-server fails the turn instead, offers an extension-host restart. Only an actual account change

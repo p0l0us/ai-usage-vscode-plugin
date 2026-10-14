@@ -1,7 +1,8 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { randomUUID } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
+import { spawnSync } from 'child_process';
 
 export type AuthProvider = 'claude' | 'codex';
 export type StoredCredential = Record<string, unknown>;
@@ -19,6 +20,93 @@ export function nativeCredentialPath(provider: AuthProvider): string {
     return path.join(process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'), '.credentials.json');
   }
   return path.join(process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), 'auth.json');
+}
+
+/**
+ * The macOS Keychain, where Claude Code keeps its login instead of `.credentials.json` (it reads that file only when
+ * the Keychain holds no login). `read` returns undefined when there is no such item.
+ */
+export type ClaudeKeychain = {
+  read(service: string, account: string): string | undefined;
+  write(service: string, account: string, text: string): void;
+};
+
+/** `security` exits with this when the item does not exist. */
+const SECURITY_ITEM_NOT_FOUND = 44;
+const SECURITY_TIMEOUT_MS = 5000;
+/** Longest `security -i` command line; Claude Code passes longer ones as arguments. */
+const SECURITY_STDIN_LIMIT = 4032;
+
+const macKeychain: ClaudeKeychain = {
+  read(service, account) {
+    const result = spawnSync('security', ['find-generic-password', '-a', account, '-w', '-s', service], { encoding: 'utf8', timeout: SECURITY_TIMEOUT_MS });
+    if (result.status === SECURITY_ITEM_NOT_FOUND) { return undefined; }
+    if (result.status !== 0 || result.error) {
+      throw new Error(`security find-generic-password failed (${result.error?.message ?? `exit ${result.status}`}${result.stderr ? `: ${result.stderr.trim()}` : ''})`);
+    }
+    const text = result.stdout.trim();
+    // `security -w` prints a value that is not plain text as hex.
+    return /^[0-9a-f]+$/i.test(text) && text.length % 2 === 0 ? Buffer.from(text, 'hex').toString('utf8') : text;
+  },
+  write(service, account, text) {
+    // Like Claude Code: the secret goes through stdin rather than the process arguments when it fits.
+    const hex = Buffer.from(text, 'utf8').toString('hex');
+    const command = `add-generic-password -U -a "${account}" -s "${service}" -X "${hex}"\n`;
+    const result = command.length <= SECURITY_STDIN_LIMIT
+      ? spawnSync('security', ['-i'], { input: command, encoding: 'utf8', timeout: SECURITY_TIMEOUT_MS })
+      : spawnSync('security', ['add-generic-password', '-U', '-a', account, '-s', service, '-X', hex], { encoding: 'utf8', timeout: SECURITY_TIMEOUT_MS });
+    if (result.status !== 0 || result.error) {
+      throw new Error(`security add-generic-password failed (${result.error?.message ?? `exit ${result.status}`}${result.stderr ? `: ${result.stderr.trim()}` : ''})`);
+    }
+  }
+};
+
+let keychainOverride: ClaudeKeychain | null | undefined;
+
+/** Replaces the macOS Keychain (tests); null turns it off, undefined restores the platform default. */
+export function setClaudeKeychain(keychain: ClaudeKeychain | null | undefined): void {
+  keychainOverride = keychain;
+}
+
+function claudeKeychain(): ClaudeKeychain | undefined {
+  if (keychainOverride !== undefined) { return keychainOverride ?? undefined; }
+  // The test runner turns it off so no test can read or change the developer's real login.
+  return process.platform === 'darwin' && process.env.AI_USAGE_CLAUDE_KEYCHAIN !== 'off' ? macKeychain : undefined;
+}
+
+/**
+ * The Keychain item Claude Code uses for the native login: `Claude Code-credentials`, with the first 8 hex digits
+ * of the SHA-256 of the config directory appended when `CLAUDE_CONFIG_DIR` (or `CLAUDE_SECURESTORAGE_CONFIG_DIR`)
+ * is set. The account is the user name, as Claude Code writes it.
+ */
+export function claudeKeychainItem(): { service: string; account: string } {
+  const storage = process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR;
+  const defaultDir = storage !== undefined ? !storage : !process.env.CLAUDE_CONFIG_DIR;
+  const dir = (storage !== undefined ? storage : path.dirname(nativeCredentialPath('claude'))).normalize('NFC');
+  const suffix = defaultDir ? '' : `-${createHash('sha256').update(dir).digest('hex').slice(0, 8)}`;
+  let account: string;
+  try { account = process.env.USER || os.userInfo().username; } catch { account = 'claude-code-user'; }
+  if (!/^[a-zA-Z0-9._-]+$/.test(account)) { account = 'claude-code-user'; }
+  return { service: `Claude Code-credentials${suffix}`, account };
+}
+
+/** The native Claude login in the Keychain: its text, or undefined when there is none; `error` when unreadable. */
+function readClaudeKeychain(): { text?: string; error?: string; label: string } | undefined {
+  const keychain = claudeKeychain();
+  if (!keychain) { return undefined; }
+  const item = claudeKeychainItem();
+  const label = `the macOS Keychain (${item.service})`;
+  try { return { text: keychain.read(item.service, item.account), label }; }
+  catch (error) { return { error: error instanceof Error ? error.message : String(error), label }; }
+}
+
+/** Where the native login of a provider is read from, for messages. */
+export function nativeCredentialLocation(provider: AuthProvider): string {
+  const file = nativeCredentialPath(provider);
+  if (provider !== 'claude') { return file; }
+  const keychain = readClaudeKeychain();
+  if (!keychain) { return file; }
+  return keychain.text !== undefined ? keychain.label : `${keychain.label} or ${file}`;
 }
 
 /** Extracts and validates the provider-owned authentication part of a credentials document. */
@@ -59,12 +147,24 @@ export function parseCredentialJson(provider: AuthProvider, text: string): Store
 
 export function readNativeCredential(provider: AuthProvider): StoredCredential {
   const file = nativeCredentialPath(provider);
+  // Claude Code on macOS keeps its login in the Keychain and reads the file only when the Keychain has none.
+  const keychain = provider === 'claude' ? readClaudeKeychain() : undefined;
+  if (keychain?.text !== undefined) {
+    try {
+      return parseCredentialJson(provider, keychain.text);
+    } catch (error) {
+      throw new Error(`${keychain.label}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
   let text: string;
   try {
     text = fs.readFileSync(file, 'utf8');
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     if (code === 'ENOENT') {
+      if (keychain) {
+        throw new Error(`No Claude login was found in ${keychain.label} or at ${file}.${keychain.error ? ` The Keychain could not be read: ${keychain.error}` : ''}`);
+      }
       throw new Error(`No ${provider === 'claude' ? 'Claude' : 'Codex'} login was found at ${file}.`);
     }
     throw new Error(`Could not read ${file}: ${String(error)}`);
@@ -128,19 +228,37 @@ export function writeNativeCredential(provider: AuthProvider, credential: Stored
   const checked = extractCredential(provider, credential);
   const file = nativeCredentialPath(provider);
   if (provider === 'claude') {
-    // Claude also keeps MCP OAuth entries in this file. Never replace those when switching accounts.
-    const document = readJsonObjectIfPresent(file);
-    document.claudeAiOauth = checked.claudeAiOauth;
-    if (nonEmptyString(checked.organizationUuid)) {
-      document.organizationUuid = checked.organizationUuid;
-    } else {
-      // Do not leave the previously selected account's organization attached to the new OAuth token.
-      delete document.organizationUuid;
+    // Claude Code ignores the file while the macOS Keychain holds its login, so a switch goes where it reads.
+    const keychain = readClaudeKeychain();
+    if (keychain?.error && !fs.existsSync(file)) {
+      throw new Error(`Could not read the Claude login in ${keychain.label}: ${keychain.error}`);
     }
-    writeJsonAtomically(file, document);
+    if (keychain?.text !== undefined) {
+      let document: Record<string, unknown> = {};
+      try {
+        const parsed: unknown = JSON.parse(keychain.text);
+        if (isObject(parsed)) { document = parsed; }
+      } catch { /* An unreadable item is replaced as a whole. */ }
+      const item = claudeKeychainItem();
+      claudeKeychain()!.write(item.service, item.account, JSON.stringify(withClaudeLogin(document, checked)));
+      return;
+    }
+    writeJsonAtomically(file, withClaudeLogin(readJsonObjectIfPresent(file), checked));
     return;
   }
   writeJsonAtomically(file, checked);
+}
+
+/** Claude also keeps MCP OAuth entries beside its login. Never replace those when switching accounts. */
+function withClaudeLogin(document: Record<string, unknown>, checked: StoredCredential): Record<string, unknown> {
+  document.claudeAiOauth = checked.claudeAiOauth;
+  if (nonEmptyString(checked.organizationUuid)) {
+    document.organizationUuid = checked.organizationUuid;
+  } else {
+    // Do not leave the previously selected account's organization attached to the new OAuth token.
+    delete document.organizationUuid;
+  }
+  return document;
 }
 
 function nestedString(value: StoredCredential, objectKey: string, key: string): string | undefined {

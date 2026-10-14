@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.4.7 (unreleased)
+
+- On macOS the current Claude login can be saved as a profile. Claude Code keeps it in the login Keychain (`Claude Code-credentials`) rather than in `~/.claude/.credentials.json`, which the account service looked for alone, so "Save current login" failed with "No Claude login was found" and live Claude usage stayed unavailable. The service now reads the Keychain first and the file second, as Claude Code does, and switching profiles writes the login back to the Keychain item (keeping MCP sign-ins stored beside it). Linux, Windows and Remote-SSH hosts keep using the file as before.
+- The offer to install the background account service is shown on first run with two answers: **Install**, or **No**, which keeps the service inside VS Code (`aiUsage.accountService.background` off). An offer that is closed or not answered is shown again every 5 minutes until it is answered or the service is installed elsewhere.
+
 ## 1.4.6 (2026-10-14)
 
 - The account service no longer locks up reading chat token counts. Every VS Code window asks for them every 10 seconds, and for Codex the service opened every saved Codex session (all of `~/.codex/sessions`, often gigabytes) to find the current workspace's chat, then re-read the whole active transcript after each change. With several windows open that kept the service busy full-time, so connections and usage checks timed out ("timed out connecting to the service", "Request failed: timed out", "codex app-server did not answer in time"). It now reads each session's first line only once and only up to its end, checks the newest sessions first, and parses a growing transcript from where it stopped. In a test with 1,300 Codex sessions a read took about 25 ms instead of 2 s.
