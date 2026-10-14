@@ -1,8 +1,10 @@
 # Changelog
 
-## 1.4.5 (unreleased)
+## 1.4.6 (unreleased)
 
 - The account service no longer locks up reading chat token counts. Every VS Code window asks for them every 10 seconds, and for Codex the service opened every saved Codex session (all of `~/.codex/sessions`, often gigabytes) to find the current workspace's chat, then re-read the whole active transcript after each change. With several windows open that kept the service busy full-time, so connections and usage checks timed out ("timed out connecting to the service", "Request failed: timed out", "codex app-server did not answer in time"). It now reads each session's first line only once and only up to its end, checks the newest sessions first, and parses a growing transcript from where it stopped. In a test with 1,300 Codex sessions a read took about 25 ms instead of 2 s.
+- Claude, Codex and Copilot status bar items no longer disappear while their provider is enabled. They used to vanish when the connection to the account service was lost (the readings were cleared as if the active account had changed) and whenever no reading was available. Now an item keeps its last reading greyed out, with the reason in its tooltip. Without any reading it shows a disconnect icon that opens the Account service menu, a spinner while the first reading is on its way, or the reason no reading is available (for example no login on this machine).
+- When the account service cannot be reached, the tooltip says why as precisely as the window can tell: it was stopped manually, it is not running (and is started again within a minute), or it runs (background or inside a VS Code window, with version and pid) but does not answer, and it can be restarted from the Account service menu. It also shows the last connection error with its time and where the log is.
 
 ## 1.4.4 (2026-10-14)
 

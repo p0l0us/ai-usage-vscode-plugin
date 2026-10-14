@@ -3,7 +3,7 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import {
   defaultConfig, AuthProvider, ProviderView, ServiceClient, ServiceConfig, ServiceEvent, ServiceHost, Snapshot, compareVersions, connectService, findNode,
-  installService, launcherDir, logFile, readCurrentInstall, readServiceInfo, restartService, serviceHome, serviceStatus, startService, startServiceHost,
+  installService, launcherDir, logFile, processAlive, readCurrentInstall, readServiceInfo, restartService, serviceHome, serviceStatus, startService, startServiceHost,
   stopService, uninstallService, serviceManuallyStopped, clearManualServiceStop
 } from '../service/out';
 import { ConfigSync, readSeedSettings } from './configSync';
@@ -44,6 +44,8 @@ export class ServiceManager implements vscode.Disposable {
   private readonly stateEmitter = new vscode.EventEmitter<AuthProvider | undefined>();
   private readonly installEmitter = new vscode.EventEmitter<void>();
   private lastAttemptAt = 0;
+  /** Why the latest connection attempt or connection failed, for the status bar; cleared on connect. */
+  private lastFailure?: { at: Date; message: string };
   private offered = false;
   private disposed = false;
   /** The latest view of each provider, refreshed on the service's `stateChanged` events. */
@@ -104,6 +106,36 @@ export class ServiceManager implements vscode.Disposable {
     return `${where} · version ${client.info.version} · Claude and Codex`;
   }
 
+  /**
+   * Why this window has no connection to the account service, as precisely as it can tell without asking it;
+   * `undefined` while connected. Cheap enough for every status bar render: two file reads and a signal-0 probe.
+   */
+  problem(): string | undefined {
+    if (this.connected) { return undefined; }
+    if (this.disposed) { return 'AI Usage is shutting down.'; }
+    if (serviceManuallyStopped(this.home)) { return 'The account service was stopped manually. Use AI Usage: Account Service… → Start to resume it.'; }
+    if (this.connecting && !this.lastFailure) { return 'Connecting to the account service…'; }
+    const lines: string[] = [];
+    const info = readServiceInfo(this.home);
+    if (info && processAlive(info.pid)) {
+      const where = info.embedded || info.mode === 'embedded' ? 'inside a VS Code window' : 'in the background';
+      lines.push(`The account service is running (${where}, version ${info.version}, pid ${info.pid}) but does not answer this window. ` +
+        'It may be busy or stuck; AI Usage: Account Service… → Restart restarts it.');
+    } else if (this.isInstalled() && this.enabled && this.background) {
+      lines.push('The background account service is not running.' + (this.connecting ? '' : ' AI Usage starts it again within a minute.'));
+    } else {
+      lines.push('No account service is running for this window.' + (this.connecting ? '' : ' AI Usage starts one within a minute.'));
+    }
+    if (this.connecting) { lines.push('Connecting now…'); }
+    if (this.lastFailure) { lines.push(`Last attempt (${this.lastFailure.at.toLocaleTimeString()}): ${this.lastFailure.message}`); }
+    lines.push(`Details: Output → AI Usage, and the service log ${logFile(this.home)}.`);
+    return lines.join('\n');
+  }
+
+  private failed(message: string): void {
+    this.lastFailure = { at: new Date(), message };
+  }
+
   get connected(): ServiceClient | undefined {
     return this.client?.connected ? this.client : undefined;
   }
@@ -149,7 +181,9 @@ export class ServiceManager implements vscode.Disposable {
         if (!installed && this.enabled && this.background && options.promptInstall) { void this.offerInstall(); }
         return await this.connectExisting() ?? await this.hostHere();
       } catch (error) {
-        this.log(`service: ${error instanceof Error ? error.message : String(error)}`);
+        const message = error instanceof Error ? error.message : String(error);
+        this.log(`service: ${message}`);
+        this.failed(message);
         return undefined;
       } finally {
         this.connecting = undefined;
@@ -165,7 +199,10 @@ export class ServiceManager implements vscode.Disposable {
       await this.adopt(client);
       if (this.disposed || !client.connected) { client.close(); return undefined; }
       return client;
-    } catch { return undefined; }
+    } catch (error) {
+      this.failed(error instanceof Error ? error.message : String(error));
+      return undefined;
+    }
   }
 
   /** Hosts the service in this window and connects to it; when another window won the race, connects to that one. */
@@ -175,8 +212,11 @@ export class ServiceManager implements vscode.Disposable {
     try {
       host = await startServiceHost({ home: this.home, version: this.bundledVersion(), embedded: true, seedConfig: readSeedSettings(defaultConfig()), onLog: this.log });
     } catch (error) {
-      this.log(`service: not hosted in this window: ${error instanceof Error ? error.message : String(error)}`);
-      return this.connectExisting();
+      const message = error instanceof Error ? error.message : String(error);
+      this.log(`service: not hosted in this window: ${message}`);
+      const client = await this.connectExisting();
+      if (!client) { this.failed(`could not run it in this window (${message}), and no other service answered`); }
+      return client;
     }
     if (this.disposed) { await host.stop(); return undefined; }
     this.host = host;
@@ -221,7 +261,9 @@ export class ServiceManager implements vscode.Disposable {
       if (this.disposed || !client.connected) { client.close(); return undefined; }
       return client;
     } catch (error) {
-      this.log(`service: connection failed: ${error instanceof Error ? error.message : String(error)}`);
+      const message = error instanceof Error ? error.message : String(error);
+      this.log(`service: connection failed: ${message}`);
+      this.failed(message);
       return undefined;
     }
   }
@@ -229,6 +271,7 @@ export class ServiceManager implements vscode.Disposable {
   private async adopt(client: ServiceClient): Promise<void> {
     if (this.disposed) { client.close(); return; }
     this.client = client;
+    this.lastFailure = undefined;
     this.log(`service: connected to version ${client.info.version} (pid ${client.info.pid}, home ${client.info.home})`);
     client.on('event', (event: ServiceEvent) => {
       if (event.event === 'stateChanged') { void this.refreshViews(event.provider); }
@@ -245,6 +288,7 @@ export class ServiceManager implements vscode.Disposable {
       this.client = undefined;
       this.views = {};
       this.log('service: connection closed');
+      this.failed('the connection to the service was closed (it stopped, restarted or crashed)');
       this.stateEmitter.fire(undefined);
       // A service hosted by a window that closed is taken over by another window soon, not after the minute tick.
       if (!this.disposed) {

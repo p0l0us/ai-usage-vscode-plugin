@@ -79,6 +79,7 @@ export function activate(context: vscode.ExtensionContext): void {
   // Saved profiles, keep-alives and rotation live in the account service, a background process this extension
   // installs and manages; see serviceManager.ts. The Accounts menus and the status bar are its clients.
   const services = new ServiceManager(context, log);
+  serviceState = { problem: () => services.problem(), hasView: (id) => Boolean(services.views[id as AuthProvider]) };
   activeServices = services;
   context.subscriptions.push(services);
   configureBridgeService(async () => { const client = await services.ensure(); if (!client) throw new Error('The AI Usage service is unavailable.'); return client; });
@@ -131,7 +132,7 @@ export function activate(context: vscode.ExtensionContext): void {
       }
       try {
         const client = await services.ensure();
-        if (!client) throw new Error('The account service is unavailable; waiting to reconnect.');
+        if (!client) throw new Error(services.problem() ?? 'The account service is unavailable; waiting to reconnect.');
         if (provider.id === 'copilot') await client.usageContext({ accounts: await getGitHubAccounts(), workspaceOwners: await getWorkspaceOwners() });
         const state = await readServiceUsage(client, provider.id, force, config.get<boolean>(`aiUsage.${provider.id}.advanced.rotationDiagnostics`, false));
         if (provider.readingIdentity !== state.identity) { provider.last = undefined; provider.lastGood = undefined; }
@@ -762,8 +763,13 @@ async function updateChipContext(provider: LiveProvider, enabled: boolean): Prom
   );
 }
 
+/** The account service connection as `renderLive` needs it; set on activation. */
+let serviceState: { problem(): string | undefined; hasView(id: ProviderId): boolean } = { problem: () => undefined, hasView: () => false };
+
 function renderLive(provider: LiveProvider): void {
-  if (provider.activeProfileId && provider.readingProfileId !== provider.activeProfileId()) {
+  const serviceProblem = serviceState.problem();
+  // Only a connected service's view can say the active account changed; a lost connection keeps the last readings.
+  if (!serviceProblem && provider.activeProfileId && serviceState.hasView(provider.id) && provider.readingProfileId !== provider.activeProfileId()) {
     provider.last = undefined;
     provider.lastGood = undefined;
   }
@@ -773,7 +779,8 @@ function renderLive(provider: LiveProvider): void {
     labels: statusBarStyle(workspaceConfig()).labels,
     usageStyle: statusBarStyle(workspaceConfig()).usage,
     earnedResetsEnabled: workspaceConfig().get<boolean>(CODEX_EARNED_RESETS_SETTING, true),
-    now
+    now,
+    serviceProblem
   });
   applyStatusItem(provider.status, model, clickCommand(provider.id), vscode, now);
 }

@@ -71,6 +71,8 @@ export type StatusInputs = {
   usageStyle: UsageStyle;
   earnedResetsEnabled: boolean;
   now: Date;
+  /** Why the account service cannot be reached; `undefined` while connected. */
+  serviceProblem?: string;
 };
 
 /** Decides what a provider's status bar item shows: the pure part of `renderLive`. */
@@ -81,6 +83,17 @@ export function statusItemModel(provider: Pick<LiveProvider, 'id' | 'icon' | 'la
   const text = (body: string, title?: string) => statusText(inputs.labels, provider.icon, provider.accountNumber?.(), body, title);
   if (!inputs.barVisible) {
     return { visible: false };
+  }
+  const title = PROVIDER_TITLES[provider.id];
+  // An enabled provider keeps its item: without the service it shows the last reading greyed, or why there is none.
+  if (inputs.serviceProblem && !usage) {
+    return {
+      visible: true,
+      text: text('$(debug-disconnect)', title),
+      tooltip: { kind: 'text', text: `${title}: the account service is not reachable.\n${inputs.serviceProblem}` },
+      command: 'aiUsage.accountService',
+      background: 'warning'
+    };
   }
 
   if ((!result || result.kind === 'unavailable') && !usage) {
@@ -100,9 +113,18 @@ export function statusItemModel(provider: Pick<LiveProvider, 'id' | 'icon' | 'la
       };
     }
     if (provider.diagnostics) {
-      return { visible: true, text: text('$(clock)', PROVIDER_TITLES[provider.id]), tooltip: { kind: 'rotation', diagnostics: provider.diagnostics } };
+      return { visible: true, text: text('$(clock)', title), tooltip: { kind: 'rotation', diagnostics: provider.diagnostics } };
     }
-    return { visible: false };
+    if (!result) {
+      return { visible: true, text: text('$(sync~spin)', title), tooltip: { kind: 'text', text: `${title}\nWaiting for the first usage reading from the account service.` }, background: null };
+    }
+    return {
+      visible: true,
+      text: text('$(circle-slash)', title),
+      tooltip: { kind: 'text', text: `${title}\n${result.reason ?? 'No usage reading is available, for example because no login was found on this machine.'}\nSee Output → AI Usage for details.` },
+      command: 'aiUsage.showDetails',
+      background: null
+    };
   }
 
   if (result?.kind === 'error' && !usage) {
@@ -130,9 +152,9 @@ export function statusItemModel(provider: Pick<LiveProvider, 'id' | 'icon' | 'la
   return {
     visible: true,
     text: text(`${usageLabel}${resetCount ? ` ${resetCount}` : ''}`, usage.title),
-    tooltip: { kind: 'usage', usage, refreshError: result?.kind === 'error' ? result.message : undefined,
+    tooltip: { kind: 'usage', usage, refreshError: inputs.serviceProblem ?? (result?.kind === 'error' ? result.message : undefined),
       activeProfile: provider.activeProfileName?.(), diagnostics: provider.diagnostics },
-    greyed: inputs.now.getTime() - usage.fetchedAt.getTime() >= STALE_AFTER_MS,
+    greyed: Boolean(inputs.serviceProblem) || inputs.now.getTime() - usage.fetchedAt.getTime() >= STALE_AFTER_MS,
     background: worst >= ERROR_PERCENT ? 'error' : worst >= WARNING_PERCENT ? 'warning' : null
   };
 }

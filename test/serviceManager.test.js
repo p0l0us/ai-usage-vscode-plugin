@@ -422,6 +422,7 @@ test('summary and the bundled version describe where the service runs, and requi
   assert.equal(noPackage.bundledVersion(), '0.0.0', 'a missing bundled package reads as 0.0.0');
   assert.equal(noPackage.bundledDir, path.join(s.root, 'empty', 'service'));
   assert.ok(await s.manager.ensure());
+  assert.equal(s.manager.problem(), undefined, 'connected: no problem to explain');
   assert.equal(s.manager.summary(), `inside this VS Code window · version ${s.manager.connected.info.version} · Claude and Codex`);
   assert.equal(s.manager.profileStore(), 'service');
   // A service hosted by another window reads as "inside a VS Code window"; a background one as "background".
@@ -447,6 +448,11 @@ test('a connection failure is logged and retried: tick waits out the retry delay
   assert.equal(s.manager.hosting, false);
   assert.ok(s.logs.some((line) => line.startsWith('service: not hosted in this window: ')), s.logs.join('\n'));
   assert.equal(s.manager.summary(), 'not running');
+  // The status bar explains it: nothing runs, the last attempt's error, and where to read more.
+  const problem = s.manager.problem();
+  assert.match(problem, /^No account service is running for this window\. AI Usage starts one within a minute\.\n/);
+  assert.match(problem, /\nLast attempt \([^)]+\): could not run it in this window \(.+\), and no other service answered\n/);
+  assert.match(problem, /\nDetails: Output → AI Usage, and the service log .+$/);
   // The home becomes usable. A tick right after the failure does nothing; one after the retry delay reconnects.
   fs.rmSync(blocker);
   let attempts = 0;

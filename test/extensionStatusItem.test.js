@@ -25,9 +25,13 @@ test('a hidden status bar hides the item whatever the readings are', () => {
   assert.deepEqual(si.statusItemModel(provider('claude', { last: ok(usage()) }), inputs({ barVisible: false })), { visible: false });
 });
 
-test('no reading and no diagnostics hides a Claude item; with diagnostics it waits with a clock and the rotation tooltip', () => {
-  assert.deepEqual(si.statusItemModel(provider('claude'), inputs()), { visible: false });
-  assert.deepEqual(si.statusItemModel(provider('codex', { last: { kind: 'unavailable', provider: 'codex' } }), inputs()), { visible: false });
+test('an enabled item never hides: no reading waits with a spinner, unavailable says why; with diagnostics a clock and the rotation tooltip', () => {
+  assert.deepEqual(si.statusItemModel(provider('claude'), inputs()), { visible: true, text: '$(claude) $(sync~spin)', background: null,
+    tooltip: { kind: 'text', text: 'Claude\nWaiting for the first usage reading from the account service.' } });
+  assert.deepEqual(si.statusItemModel(provider('codex', { last: { kind: 'unavailable', provider: 'codex', reason: 'No Codex login found.' } }), inputs()), {
+    visible: true, text: '$(openai) $(circle-slash)', command: 'aiUsage.showDetails', background: null,
+    tooltip: { kind: 'text', text: 'Codex\nNo Codex login found.\nSee Output → AI Usage for details.' } });
+  assert.match(si.statusItemModel(provider('codex', { last: { kind: 'unavailable', provider: 'codex' } }), inputs()).tooltip.text, /^Codex\nNo usage reading is available/);
   const diagnostics = { strategy: 's', trigger: 't', reason: 'r', scoreMeaning: 'm', candidates: [] };
   const model = si.statusItemModel(provider('claude', { diagnostics }), inputs({ labels: 'iconAndName' }));
   assert.deepEqual(model, { visible: true, text: '$(claude) Claude $(clock)', tooltip: { kind: 'rotation', diagnostics } });
@@ -45,8 +49,8 @@ test('Copilot without a GitHub sign-in offers to connect; other reasons say n/a 
     visible: true, text: 'Copilot n/a', command: 'aiUsage.showDetails', background: null,
     tooltip: { kind: 'text', text: 'Copilot\nQuota API refused\nSee Output → AI Usage for details.' }
   });
-  assert.deepEqual(si.statusItemModel(provider('copilot', { last: { kind: 'unavailable', provider: 'copilot' } }), inputs()), { visible: false },
-    'unavailable without a reason hides it');
+  assert.equal(si.statusItemModel(provider('copilot', { last: { kind: 'unavailable', provider: 'copilot' } }), inputs()).text, '$(copilot) $(circle-slash)',
+    'unavailable without a reason still shows the item');
 });
 
 test('an error without any earlier reading shows a warning with the message, the rotation lines and a warning background', () => {
@@ -190,4 +194,15 @@ test('applying: warning background, cleared background, untouched background, ov
   assert.equal(untouched.backgroundColor, 'untouched');
   assert.equal(untouched.tooltip.value, '\\TEXT(s / t. r)\n\n\\TEXT(m)\n\n');
   assert.equal(untouched.supportThemeIcons, undefined);
+});
+
+test('without the account service an item shows why: the last reading greyed with the reason, or a disconnect warning', () => {
+  const problem = 'The account service is running (in the background, version 1.4.5, pid 7) but does not answer this window.';
+  const none = si.statusItemModel(provider('codex'), inputs({ serviceProblem: problem }));
+  assert.deepEqual(none, { visible: true, text: '$(openai) $(debug-disconnect)', command: 'aiUsage.accountService', background: 'warning',
+    tooltip: { kind: 'text', text: `Codex: the account service is not reachable.\n${problem}` } });
+  const kept = si.statusItemModel(provider('claude', { last: err('anything'), lastGood: usage({ fetchedAt: NOW }) }), inputs({ serviceProblem: problem }));
+  assert.equal(kept.text, '$(claude) 17% (3h) 26% (3d)');
+  assert.equal(kept.greyed, true, 'a reading the service cannot refresh is greyed even while fresh');
+  assert.equal(kept.tooltip.refreshError, problem);
 });
