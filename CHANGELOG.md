@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.4.3 (unreleased)
+## 1.4.3 (2026-10-14)
 
 - The account service no longer crashes when a `codex app-server` used for a Codex usage or login check closes its input early. The unhandled `write EPIPE` ended the whole service every few minutes, which failed every check in progress at that moment ("Request failed: timed out", "codex app-server did not answer in time", "Network error") and greyed the status bar until it restarted. The check now fails on its own with "codex app-server closed its input".
 - The systemd unit no longer has a start limit (`StartLimitIntervalSec=0`). After a crash, the editors' start attempts plus systemd's own restart could exceed the default limit, and systemd then left the service stopped.
