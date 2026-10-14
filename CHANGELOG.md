@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.5.1 (unreleased)
+
+- Rotation no longer waits for the rest of a usage-refresh round. The round reads the active account first, but when that reading reached a threshold the switch only came after the other due accounts had been read, 30 seconds apart (today: 95% read at 20:50:41, switched at 20:52:12, with the status bar showing the limit meanwhile). The active account is now rotated away right after its own reading, inside the round.
+
 ## 1.5.0 (2026-10-14)
 
 - A saved account can be disabled without deleting it. **Manage saved profiles… → Disable a profile…**, the new disable/enable button on every row of the Accounts menu, or `ai-usage disable|enable <service> <profile>` leave the profile out of automatic rotation, keep-alives and background usage reads. It stays in the list with a **Disabled** label (dimmed, and named in the row's info), can still be activated by hand (rotation then leaves it as soon as it reaches a threshold), and the flag travels with exported profiles. When every other profile is disabled, rotation keeps the active account and reports why instead of announcing that no account is available. `list_accounts` over MCP shows `disabled` and never reports such a profile as usable; `switch_account` refuses it.

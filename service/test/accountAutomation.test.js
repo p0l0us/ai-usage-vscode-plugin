@@ -1701,3 +1701,18 @@ test('with every other profile disabled, rotation keeps the active account and s
   assert.deepEqual(f.switches, []);
   assert.deepEqual(f.calls, []);
 });
+
+test('a usage refresh that finds the active account at its limit rotates before reading the other accounts', async t => {
+  const f = fixture(t, { values: { a: [96, 10], b: [10, 50], c: [10, 60] }, settings: { claude: { autoRotate: true, fiveHourThresholdPercent: 95, strategy: 'leastWaste' } } });
+  // Stored readings from ten minutes ago: a below the threshold, b and c with headroom; every account is due.
+  f.values.a = [80, 10];
+  f.observeAll('claude');
+  f.values.a = [96, 10];
+  f.advance(10 * 60000 + 1);
+  await f.service.refreshUsage('claude');
+  // The switch happened inside the round, right after a's reading, and nothing waited for the scheduler.
+  assert.deepEqual(f.switches, [['claude', 'b', true]]);
+  assert.deepEqual(f.calls.map(call => call[1]), ['a', 'b', 'c'], 'the other accounts are still read on their schedule');
+  await f.service.tick();
+  assert.equal(f.switches.length, 1, 'the scheduler finds nothing more to do');
+});

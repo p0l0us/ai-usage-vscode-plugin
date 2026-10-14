@@ -640,7 +640,13 @@ export class AccountAutomation {
         // The active account is read the sooner the faster it approaches a threshold, so the limit is seen before it is hit.
         const interval = profile.id === active && usage ? activeReadDelayMs(usage, usageRates(state.samples, usage), settings) : settings.checkIntervalMs;
         if (!force && state.checkedAt !== undefined && now - state.checkedAt < interval && !resetSinceCheck) continue;
-        await this.checkAccount(provider, profile.id, settings, false);
+        const checked = await this.checkAccount(provider, profile.id, settings, false);
+        // The active account read at (or heading for) its limit is rotated away now, not once the rest of the round,
+        // spaced by the endpoint budget, is over and the scheduler's rotation check runs.
+        if (profile.id === active && checked.usage && (settings.autoRotate || settings.autoReset) &&
+          this.reachesLimit(provider, profile.id, checked.usage, settings)) {
+          await this.rotate(provider, settings);
+        }
       }
     });
   }
