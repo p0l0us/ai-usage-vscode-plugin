@@ -130,15 +130,18 @@ export function activate(context: vscode.ExtensionContext): void {
       if (!config.get<boolean>(provider.settingKey, true)) {
         provider.status.hide(); await updateChipContext(provider, false); return;
       }
+      provider.refreshing = true;
+      renderLive(provider);
       try {
         const client = await services.ensure();
         if (!client) throw new Error(services.problem() ?? 'The account service is unavailable; waiting to reconnect.');
         if (provider.id === 'copilot') await client.usageContext({ accounts: await getGitHubAccounts(), workspaceOwners: await getWorkspaceOwners() });
         const state = await readServiceUsage(client, provider.id, force, config.get<boolean>(`aiUsage.${provider.id}.advanced.rotationDiagnostics`, false));
-        if (provider.readingIdentity !== state.identity) { provider.last = undefined; provider.lastGood = undefined; }
+        if (provider.readingIdentity !== state.identity) { keepPrevious(provider); provider.last = undefined; provider.lastGood = undefined; }
         provider.readingIdentity = state.identity;
         provider.last = state.result;
         provider.lastGood = state.lastGood;
+        provider.previous = undefined;
         if (provider.id !== 'copilot') {
           await services.refreshViews(provider.id);
           provider.readingProfileId = state.profileId;
@@ -149,9 +152,10 @@ export function activate(context: vscode.ExtensionContext): void {
         provider.last = { kind: 'error', provider: provider.id, title: PROVIDER_TITLES[provider.id],
           message: error instanceof Error ? error.message : String(error), transient: true };
       }
+      provider.refreshing = false;
       renderLive(provider);
       await updateChipContext(provider, config.get<boolean>('aiUsage.chatChips.enabled', true));
-    })().finally(() => { provider.inFlight = undefined; });
+    })().finally(() => { provider.inFlight = undefined; if (provider.refreshing) { provider.refreshing = false; renderLive(provider); } });
     return provider.inFlight;
   };
 
@@ -185,6 +189,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const afterProfileActivated = async (provider: AuthProvider, change: ActivationChange = { kind: 'activated', accountChanged: true }) => {
     const live = liveProviders.find((candidate) => candidate.id === provider)!;
     await live.inFlight;
+    keepPrevious(live);
     live.last = undefined;
     live.lastGood = undefined;
     live.readingProfileId = undefined;
@@ -766,10 +771,16 @@ async function updateChipContext(provider: LiveProvider, enabled: boolean): Prom
 /** The account service connection as `renderLive` needs it; set on activation. */
 let serviceState: { problem(): string | undefined; hasView(id: ProviderId): boolean } = { problem: () => undefined, hasView: () => false };
 
+/** Before an account switch clears the readings, keeps what the item showed until the new account's first reading. */
+function keepPrevious(provider: LiveProvider): void {
+  provider.previous = visibleUsage(provider) ?? provider.previous;
+}
+
 function renderLive(provider: LiveProvider): void {
   const serviceProblem = serviceState.problem();
   // Only a connected service's view can say the active account changed; a lost connection keeps the last readings.
   if (!serviceProblem && provider.activeProfileId && serviceState.hasView(provider.id) && provider.readingProfileId !== provider.activeProfileId()) {
+    keepPrevious(provider);
     provider.last = undefined;
     provider.lastGood = undefined;
   }

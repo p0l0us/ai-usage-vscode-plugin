@@ -126,3 +126,26 @@ test('monitor auto rereads the Claude account file within seconds and publishes 
   const state = await monitor.read('claude'); assert.equal(reads, 3); assert.deepEqual(observed, [20, 96]);
   assert.equal(state.result.usage.windows[0].usedPercent, 96);
 });
+
+test('monitor auto adds the CLI earned resets to a Codex reading without them, spaced and per login', async t => {
+  const f = isolateHomes(t); const config = defaultConfig(); config.codex.source = 'auto';
+  let clock = now; let account = 'first-login'; const creditReads = [];
+  let credits = { availableCount: 3, totalCount: 3, earliestExpiresAt: 1800500000 };
+  const monitor = new UsageMonitor({ directory: f.home, config: () => config,
+    budget: new ApiCallBudget(path.join(f.home, 'budget.json'), () => 0, () => clock), now: () => clock,
+    identity: () => account, log: () => {},
+    fetch: async provider => ({ kind: 'ok', usage: { ...reading(provider).usage, fetchedAt: new Date(clock), source: 'sessionLog' } }),
+    codexCredits: async cliPath => { creditReads.push(cliPath); return credits; } });
+  t.after(() => monitor.dispose());
+  const first = await monitor.read('codex', true);
+  assert.deepEqual(first.result.usage.resetCredits, credits, 'a session-log reading carries the CLI count');
+  clock += 60_000; credits = { availableCount: 2 };
+  assert.equal((await monitor.read('codex', true)).result.usage.resetCredits.availableCount, 3, 'reused within five minutes');
+  assert.equal(creditReads.length, 1);
+  account = 'second-login';
+  assert.equal((await monitor.read('codex', true)).result.usage.resetCredits.availableCount, 2, 'another login is read again');
+  clock += 5 * 60_000; credits = undefined;
+  assert.equal((await monitor.read('codex', true)).result.usage.resetCredits, undefined, 'after five minutes it is read again; none reported, none shown');
+  assert.equal(creditReads.length, 3);
+  assert.deepEqual(creditReads, [config.codex.cliPath, config.codex.cliPath, config.codex.cliPath]);
+});

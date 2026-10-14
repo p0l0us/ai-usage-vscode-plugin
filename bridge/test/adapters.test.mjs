@@ -1,3 +1,4 @@
+import './helpers/isolated-homes.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
@@ -6,16 +7,6 @@ import { ClaudeAdapter, claudePrompt } from '../src/claude.mjs';
 import { BridgeEngine } from '../src/engine.mjs';
 import { normalizeRequest } from '../src/request.mjs';
 import { redImage, blueImage, imagePart } from './fixtures/images.mjs';
-import { mkdtempSync, rmSync } from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
-
-// The engine fingerprints the CLI homes' credential and settings files; the real ones change whenever a live
-// session refreshes its login or AI Usage writes its settings, which would fail a resume as "account changed".
-const homes = mkdtempSync(path.join(os.tmpdir(), 'bridge-adapters-'));
-process.env.CLAUDE_CONFIG_DIR = path.join(homes, 'claude');
-process.env.CODEX_HOME = path.join(homes, 'codex');
-process.on('exit', () => rmSync(homes, { recursive: true, force: true }));
 
 const tool = { type: 'function', function: { name: 'external_echo', parameters: { type: 'object', properties: { value: { type: 'string' } } } } };
 for (const [provider, Adapter] of [['codex', CodexAdapter], ['claude', ClaudeAdapter]]) {

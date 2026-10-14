@@ -206,3 +206,27 @@ test('without the account service an item shows why: the last reading greyed wit
   assert.equal(kept.greyed, true, 'a reading the service cannot refresh is greyed even while fresh');
   assert.equal(kept.tooltip.refreshError, problem);
 });
+
+test('a refresh keeps the figures and adds a spinner; after a switch the previous figures stay until the first reading', () => {
+  const good = usage({ fetchedAt: NOW });
+  const refreshing = si.statusItemModel(provider('claude', { last: ok(good), refreshing: true }), inputs());
+  assert.equal(refreshing.text, '$(claude) 17% (3h) 26% (3d) $(sync~spin)');
+  assert.equal(refreshing.tooltip.kind, 'usage');
+  assert.equal(si.statusItemModel(provider('claude', { last: ok(good) }), inputs()).text, '$(claude) 17% (3h) 26% (3d)', 'no spinner once done');
+  const switched = si.statusItemModel(provider('codex', { previous: good, refreshing: true }), inputs());
+  assert.equal(switched.text, '$(openai) 17% (3h) 26% (3d) $(sync~spin)');
+  assert.deepEqual(switched.tooltip, { kind: 'text', text: 'Codex\nReading the usage of the active account…' });
+  assert.ok(!switched.greyed, 'the figures keep their look');
+  assert.equal(si.statusItemModel(provider('claude', { refreshing: true }), inputs()).text, '$(claude) $(sync~spin)', 'a lone spinner is not doubled');
+  assert.equal(si.statusItemModel(provider('codex', { previous: good }), inputs({ serviceProblem: 'down' })).text, '$(openai) $(debug-disconnect)',
+    'without the service the previous account’s figures are not passed off as current');
+});
+
+test('the plain-text tooltip carries the status bar hover without Markdown or icons', () => {
+  const text = si.tooltipPlainText(usage({ provider: 'codex', title: 'Codex', subtitle: 'me@example.com', plan: 'Pro', fetchedAt: NOW, details: ['Source: Codex CLI'],
+    resetCredits: { availableCount: 2 } }), NOW, 'Codex account 1');
+  assert.doesNotMatch(text, /\*\*|\$\(|_Updated/);
+  assert.match(text, /^Codex · me@example\.com · Pro\n\n• 5-hour window: 17% used · resets in 3h \(/);
+  assert.match(text, /\n• Earned resets: 2 available/);
+  assert.match(text, /\nSource: Codex CLI\n\nUpdated .*\n\nAuthentication profile: Codex account 1$/);
+});

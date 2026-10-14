@@ -8,6 +8,7 @@ import {
 } from '../service/out';
 import { MCP_SERVER_NAME, McpRegistration } from './mcpRegistration';
 import { pickWithBack } from './quickPick';
+import { tooltipPlainText } from './statusItem';
 import { ServiceManager } from './serviceManager';
 import { openAiUsageSettings } from './settingsLink';
 import { formatEarnedResetSummary, formatUsagePercent } from './usageFormatting';
@@ -32,6 +33,8 @@ export function cliTerminalCommand(cli: string, args: string[]): string {
 
 type ProfileItem = vscode.QuickPickItem & {
   profile?: ProfileView;
+  /** The account's full reading as the status bar hover shows it, in plain text. */
+  info?: string;
   /** Set when the profile has nothing left in any window; selecting it is a no-op warning, not an activation. */
   readOnly?: boolean;
   /** The login error of the profile's last check; selecting it offers to renew the login or check it again instead of activating. */
@@ -65,11 +68,34 @@ function plural(count: number, noun: string): string {
   return `${count} ${count === 1 ? noun : `${noun}s`}`;
 }
 
-/** Menu description: the account email, the project for a project profile, a duplicate marker, then the active marker. */
-function profileDescription(profile: ProfileView, siblings: ProfileView[] = []): string | undefined {
+/**
+ * Menu description: the account email, the project for a project profile, a duplicate marker, then the active marker,
+ * which the Accounts list leaves out because it marks the active account with a separator instead.
+ */
+function profileDescription(profile: ProfileView, siblings: ProfileView[] = [], activeMarker = true): string | undefined {
   const twin = profile.email ? siblings.find((other) => other.id !== profile.id && other.email === profile.email) : undefined;
   return [profile.email, profile.folder ? `project ${path.basename(profile.folder)}` : undefined,
-    twin ? `duplicate of “${twin.name}”` : undefined, profile.active ? 'Active' : undefined].filter(Boolean).join(' · ') || undefined;
+    twin ? `duplicate of “${twin.name}”` : undefined, activeMarker && profile.active ? 'Active' : undefined].filter(Boolean).join(' · ') || undefined;
+}
+
+/**
+ * Quick pick rows cannot have a hover, so each account row gets an info button whose tooltip is the account's reading
+ * as the status bar shows it (plain text), with the account's problems; clicking it opens the same text in a dialog.
+ */
+function accountInfo(profile: ProfileView, displayedUsage?: LiveUsage): string {
+  const now = new Date();
+  const stored = profile.usage ? deserializeUsage({ usage: profile.usage }) : undefined;
+  const usage = newestValidUsage(stored, displayedUsage);
+  const lines = [usage ? tooltipPlainText(usage, now, profile.name)
+    : `${profile.name}${profile.email ? ` · ${profile.email}` : ''}\n${stored ? 'Usage reset; waiting for a new reading.' : 'Usage not checked yet.'}`];
+  if (profile.active) { lines.push('This is the active account.'); }
+  if (profile.limit.readOnly) { lines.push('At its usage limit: it cannot be activated until a window resets.'); }
+  else if (profile.limit.dimmed) { lines.push('Fable limit reached: other models still work.'); }
+  if (profile.loginProblem) { lines.push(`Login problem: ${profile.loginProblem}`); }
+  for (const problem of profile.problems) {
+    lines.push(`${problem.check === 'keepAlive' ? 'Keep-alive' : 'Usage check'} problem: ${problem.label}`);
+  }
+  return lines.join('\n\n');
 }
 
 /**
@@ -171,10 +197,13 @@ export class AccountsMenu {
           picker.activeItems = picker.items.filter(item => active.has(key(item)));
         };
         const state = this.services.onStateChanged?.(changed => { if (!changed || changed === provider) update(); });
+        const info = picker.onDidTriggerItemButton?.(({ item }) => {
+          if (item.info) { void vscode.window.showInformationMessage(item.profile?.name ?? 'Account', { modal: true, detail: item.info }); }
+        });
         const events = this.services.onEvent?.(event => { if (event.event === 'configChanged') update(); });
         // A reading may have arrived between fetching the initial view and subscribing.
         update();
-        return { dispose: () => { state?.dispose(); events?.dispose(); } };
+        return { dispose: () => { state?.dispose(); events?.dispose(); info?.dispose(); } };
       });
       if (!item || item.action === 'back') { return; }
       try {
@@ -272,7 +301,7 @@ export class AccountsMenu {
         label,
         iconPath: loginProblem ? new vscode.ThemeIcon('warning', new vscode.ThemeColor('editorWarning.foreground'))
           : profile.limit.dimmed ? new vscode.ThemeIcon(icon, new vscode.ThemeColor('disabledForeground')) : undefined,
-        description: [profileDescription(profile, view.profiles),
+        description: [profileDescription(profile, view.profiles, false),
           profile.limit.readOnly ? 'At its usage limit' : profile.limit.dimmed ? 'Fable limit reached' : undefined,
           loginProblem ? 'Login problem' : undefined].filter(Boolean).join(' · ') || undefined,
         detail: usageDetail(profile, displayedUsage, provider) ?? (profile.checkedAt
@@ -280,9 +309,17 @@ export class AccountsMenu {
           : `Saved ${new Date(profile.updatedAt).toLocaleString()} · Usage not checked yet`),
         profile,
         readOnly: profile.limit.readOnly,
-        loginProblem
+        loginProblem,
+        ...((info) => ({ info, buttons: [{ iconPath: new vscode.ThemeIcon('info'), tooltip: info }] }))(accountInfo(profile, displayedUsage))
       };
     });
+    // VS Code shows a separator's label right-aligned on the row below it, where the active account stands out;
+    // an unlabelled one after it keeps the accounts below from reading as part of an "Active" group.
+    const active = items.findIndex((item) => item.profile?.active);
+    if (active >= 0) {
+      if (active < items.length - 1) { items.splice(active + 1, 0, { label: '', kind: vscode.QuickPickItemKind.Separator }); }
+      items.splice(active, 0, { label: 'Active', kind: vscode.QuickPickItemKind.Separator });
+    }
     if (!items.length) {
       items.push({ label: 'No profiles saved yet', kind: vscode.QuickPickItemKind.Separator });
     }

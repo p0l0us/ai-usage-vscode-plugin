@@ -37,6 +37,9 @@ export function nativeUsageIdentity(provider: AuthProvider): string {
 }
 
 /** Shared polling policy for the daemon, embedded service and standalone extension fallback. */
+/** How long an earned-reset count read for the status bar is reused; well inside the 15-minute display freshness. */
+const CODEX_CREDITS_REUSE_MS = 5 * 60_000;
+
 export class UsageMonitor {
   private readonly cache: SharedCache;
   private readonly inFlight = new Map<string, Promise<UsageState>>();
@@ -45,6 +48,8 @@ export class UsageMonitor {
   private readonly fallbacks: Record<AuthProvider, ApiCallBudget>;
   private readonly cliFallbacks: Record<AuthProvider, ApiCallBudget>;
   private disposed = false;
+  /** The last earned-reset count read for the native Codex login, reused for `CODEX_CREDITS_REUSE_MS`. */
+  private codexCredits?: { identity: string; at: number; credits: LiveUsage['resetCredits'] };
   constructor(private readonly options: {
     directory: string; config: () => ServiceConfig; budget: ApiCallBudget; log: (message: string) => void;
     identity?: (provider: AuthProvider) => string;
@@ -53,6 +58,8 @@ export class UsageMonitor {
     observe?: (provider: AuthProvider, usage: LiveUsage, attributable: boolean, identity: string) => Promise<void>;
     changed?: (provider: ProviderId) => void;
     now?: () => number;
+    /** Reads the native Codex login's earned resets; defaults to the CLI unless `fetch` is stubbed. */
+    codexCredits?: (cliPath: string) => Promise<LiveUsage['resetCredits']>;
   }) {
     this.cache = new SharedCache(path.join(options.directory, 'live-usage.json'));
     this.fallbacks = Object.fromEntries((['claude', 'codex'] as const).map(provider => [provider,
@@ -102,6 +109,11 @@ export class UsageMonitor {
         if (settings.source === 'auto' && result.kind === 'ok' && !isFreshUsage(result.usage, provider, settings.apiCheckIntervalMs, (this.options.now ?? Date.now)())) {
           result = { kind: 'unavailable', provider, reason: 'No fresh valid usage reading is available.' };
         }
+        // Only the CLI reports earned resets; a session-log or endpoint reading gets them from a spaced CLI read.
+        if (provider === 'codex' && settings.source === 'auto' && result.kind === 'ok' && !result.usage.resetCredits) {
+          const credits = await this.nativeCodexCredits(identity);
+          if (credits) result = { kind: 'ok', usage: { ...result.usage, resetCredits: credits } };
+        }
       }
       catch (error) { result = { kind: 'error', provider, title: provider, message: error instanceof Error ? error.message : String(error), transient: true }; }
       this.nextCheck.set(key, now + settings.checkIntervalMs);
@@ -134,6 +146,20 @@ export class UsageMonitor {
     this.inFlight.set(key, task);
     return task;
   }
+  /** Earned resets of the native Codex login, read through the CLI at most every `CODEX_CREDITS_REUSE_MS` per login. */
+  private async nativeCodexCredits(identity: string): Promise<LiveUsage['resetCredits']> {
+    const now = (this.options.now ?? Date.now)();
+    const cached = this.codexCredits;
+    if (cached && cached.identity === identity && now - cached.at < CODEX_CREDITS_REUSE_MS) return cached.credits;
+    const read = this.options.codexCredits ?? (this.options.fetch ? undefined : fetchCodexResetCreditsCli);
+    if (!read) return undefined;
+    let credits: LiveUsage['resetCredits'];
+    try { credits = await read(this.options.config().codex.cliPath); } catch { credits = undefined; }
+    // A failed read is remembered too, so a missing CLI is not started again on every local reading.
+    this.codexCredits = { identity, at: now, credits };
+    return credits;
+  }
+
   private async fetch(provider: ProviderId, context: UsageContext, known?: LiveUsage): Promise<LiveResult> {
     const config = this.options.config();
     const { source, apiCheckIntervalMs } = usageSettings(config, provider);

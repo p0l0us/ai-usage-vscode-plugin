@@ -32,6 +32,10 @@ export type LiveProvider = {
   readingProfileId?: string;
   /** In-flight refresh for this provider only; failures elsewhere never wait on it. */
   inFlight?: Promise<void>;
+  /** True while a refresh runs: the item keeps its figures and shows a spinner after them. */
+  refreshing?: boolean;
+  /** The figures shown before an account switch cleared the readings, kept until the new account's first reading. */
+  previous?: LiveUsage;
 };
 
 export function visibleUsage(provider: LiveProvider): LiveUsage | undefined {
@@ -75,9 +79,28 @@ export type StatusInputs = {
   serviceProblem?: string;
 };
 
-/** Decides what a provider's status bar item shows: the pure part of `renderLive`. */
-export function statusItemModel(provider: Pick<LiveProvider, 'id' | 'icon' | 'last' | 'lastGood' | 'diagnostics' | 'accountNumber' | 'activeProfileName'>,
-  inputs: StatusInputs): StatusItemModel {
+const SPINNER = '$(sync~spin)';
+
+type ModelProvider = Pick<LiveProvider, 'id' | 'icon' | 'last' | 'lastGood' | 'diagnostics' | 'accountNumber' | 'activeProfileName' | 'refreshing' | 'previous'>;
+
+/**
+ * Decides what a provider's status bar item shows: the pure part of `renderLive`. A refresh never blanks it: the
+ * figures stay, with a spinner after them, and after an account switch the previous figures stay until the new
+ * account's first reading arrives.
+ */
+export function statusItemModel(provider: ModelProvider, inputs: StatusInputs): StatusItemModel {
+  const waiting = !provider.last && !visibleUsageOf(provider.last, provider.lastGood);
+  if (provider.previous && waiting && !inputs.serviceProblem && inputs.barVisible) {
+    const title = PROVIDER_TITLES[provider.id];
+    const carried = baseModel({ ...provider, last: { kind: 'ok', usage: provider.previous }, lastGood: provider.previous }, inputs);
+    return carried.visible ? { ...carried, text: `${carried.text} ${SPINNER}`,
+      tooltip: { kind: 'text', text: `${title}\nReading the usage of the active account…` } } : carried;
+  }
+  const model = baseModel(provider, inputs);
+  return model.visible && provider.refreshing && !model.text.includes(SPINNER) ? { ...model, text: `${model.text} ${SPINNER}` } : model;
+}
+
+function baseModel(provider: ModelProvider, inputs: StatusInputs): StatusItemModel {
   const result = provider.last;
   const usage = visibleUsageOf(provider.last, provider.lastGood);
   const text = (body: string, title?: string) => statusText(inputs.labels, provider.icon, provider.accountNumber?.(), body, title);
@@ -116,7 +139,7 @@ export function statusItemModel(provider: Pick<LiveProvider, 'id' | 'icon' | 'la
       return { visible: true, text: text('$(clock)', title), tooltip: { kind: 'rotation', diagnostics: provider.diagnostics } };
     }
     if (!result) {
-      return { visible: true, text: text('$(sync~spin)', title), tooltip: { kind: 'text', text: `${title}\nWaiting for the first usage reading from the account service.` }, background: null };
+      return { visible: true, text: text(SPINNER, title), tooltip: { kind: 'text', text: `${title}\nWaiting for the first usage reading from the account service.` }, background: null };
     }
     return {
       visible: true,
@@ -216,7 +239,7 @@ export function buildTooltip(md: vscode.MarkdownString, usage: LiveUsage, now: D
     md.appendMarkdown(`- **${windowName(window.label)}**: ${formatUsagePercent(window.usedPercent)} used${reset ? ` · ${reset}${at}` : ''}\n`);
   }
   if (usage.provider === 'codex') {
-    const credits = projectResetCredits(usage);
+    const credits = projectResetCredits(usage, now.getTime());
     if (credits.state === 'known') {
       const line = formatEarnedResets(credits);
       const expiry = credits.earliestExpiresAt ? ` · next credit expires ${new Date(credits.earliestExpiresAt * 1000).toLocaleString()}` : '';
@@ -245,4 +268,28 @@ export function buildTooltip(md: vscode.MarkdownString, usage: LiveUsage, now: D
     }
   }
   return md;
+}
+
+/** Collects what `buildTooltip` writes, for a plain-text copy. */
+class PlainMarkdown {
+  value = '';
+  appendMarkdown(text: string): this { this.value += text; return this; }
+  appendText(text: string): this { this.value += text; return this; }
+}
+
+/**
+ * The status bar hover of a reading as plain text, for places that cannot render Markdown (a quick pick button's
+ * tooltip, a dialog): the same windows, exact resets, earned resets, details, update time and profile.
+ */
+export function tooltipPlainText(usage: LiveUsage, now: Date, activeProfile?: string): string {
+  const md = new PlainMarkdown();
+  buildTooltip(md as unknown as vscode.MarkdownString, usage, now, undefined, activeProfile);
+  return md.value
+    .replace(/\$\([a-z-~]+\)\s*/g, '')
+    .replace(/\*\*/g, '')
+    .replace(/(^|\n)_(.*)_(?=\n|$)/g, '$1$2')
+    .replace(/ {2}\n/g, '\n')
+    .replace(/^- /gm, '• ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
 }

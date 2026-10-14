@@ -1,3 +1,4 @@
+import './helpers/isolated-homes.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHmac, randomUUID } from 'node:crypto';

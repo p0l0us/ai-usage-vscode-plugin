@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.4.7 (unreleased)
+
+- The Codex status bar shows the earned-reset count with the default `auto` usage source again. A reading from the Codex session log or the usage endpoint carries no earned resets (only the Codex CLI reports them), so the hover said "Availability unknown" although the Accounts menu knew the count. The service now adds the count from a CLI read, made at most every 5 minutes per login.
+- A refresh no longer replaces the status bar figures with a spinner: the figures stay and a spinner is added after them. After an account switch, the previous figures stay with the spinner until the new account's first reading arrives.
+- In the Claude and Codex Accounts menus the active account is marked by an "Active" label aligned right, like the section labels, instead of a word at the end of its description.
+- Each account row in the Accounts menu has an info button whose tooltip shows the account's reading as the status bar hover does (every window with its exact reset time, earned resets, plan, details, last update and profile) plus its limit and login problems; clicking it opens the same text in a dialog. Menu rows themselves cannot have a hover in VS Code.
+
 ## 1.4.6 (2026-10-14)
 
 - The account service no longer locks up reading chat token counts. Every VS Code window asks for them every 10 seconds, and for Codex the service opened every saved Codex session (all of `~/.codex/sessions`, often gigabytes) to find the current workspace's chat, then re-read the whole active transcript after each change. With several windows open that kept the service busy full-time, so connections and usage checks timed out ("timed out connecting to the service", "Request failed: timed out", "codex app-server did not answer in time"). It now reads each session's first line only once and only up to its end, checks the newest sessions first, and parses a growing transcript from where it stopped. In a test with 1,300 Codex sessions a read took about 25 ms instead of 2 s.

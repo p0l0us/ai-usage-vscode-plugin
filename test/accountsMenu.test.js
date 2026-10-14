@@ -179,13 +179,14 @@ test('an open Codex picker updates the reset balance and expiry from service eve
   const listeners = new Set();
   f.services.onStateChanged = listener => { listeners.add(listener); return { dispose: () => listeners.delete(listener) }; };
   quickPickResponses.push((items, options, picker) => {
-    assert.doesNotMatch(items[0].label, /\$\(refresh\)/);
-    assert.match(items[0].detail, /5h: 95% · \$\(refresh\) 3\/3 \(12d\) · Checked/);
-    picker.activeItems = [items[0]];
+    const account = (list) => list.find((item) => item.profile);
+    assert.doesNotMatch(account(items).label, /\$\(refresh\)/);
+    assert.match(account(items).detail, /5h: 95% · \$\(refresh\) 3\/3 \(12d\) · Checked/);
+    picker.activeItems = [account(items)];
     f.services.views.codex = { ...view, profiles: [profile({ active: true, usage: usage(2) })] };
     for (const listener of listeners) listener('codex');
-    assert.doesNotMatch(picker.items[0].label, /\$\(refresh\)/);
-    assert.match(picker.items[0].detail, /5h: 95% · \$\(refresh\) 2\/3 \(10d\) · Checked/);
+    assert.doesNotMatch(account(picker.items).label, /\$\(refresh\)/);
+    assert.match(account(picker.items).detail, /5h: 95% · \$\(refresh\) 2\/3 \(10d\) · Checked/);
     assert.equal(picker.activeItems[0].profile.id, 'a');
     return undefined;
   });
@@ -291,16 +292,19 @@ test('choosing a profile activates it through the service and closes the menu; a
     activeProfileId: 'a', activeNumber: 1, nativeUnsaved: false, checkingActive: false, keepAlive: true, autoRotate: false, strategySummary: '', scopes } };
   const f = fixture(views);
   quickPickResponses.push((items) => {
-    assert.equal(items[0].label, '$(check) Work');
-    assert.equal(items[0].description, 'Active');
-    assert.equal(items[1].label, '$(circle-slash) Full');
-    assert.match(items[1].description, /At its usage limit/);
+    // The active account is marked by a separator, whose label VS Code shows right-aligned on its row, and an
+    // unlabelled one keeps the next account out of that group.
+    assert.deepEqual(items.slice(0, 2).map((item) => [item.label, item.kind]), [['Active', -1], ['$(check) Work', undefined]]);
+    assert.equal(items[1].description, undefined, 'the description no longer repeats it');
+    assert.deepEqual([items[2].label, items[2].kind], ['', -1]);
+    assert.equal(items[3].label, '$(circle-slash) Full');
+    assert.match(items[3].description, /At its usage limit/);
     assert.ok(items.some((item) => item.action === 'save'), 'manage actions are listed');
     assert.ok(!items.some((item) => item.action === 'service'), 'the one service for both is controlled from the root menu, not here');
     assert.match(items.find((item) => item.action === 'settings').description, /Keep-alive on · rotation off/);
-    return items[1];
+    return items[3];
   });
-  quickPickResponses.push((items) => items[0]);
+  quickPickResponses.push((items) => items.find((item) => item.profile?.id === 'a'));
   const hooks = { sendKeepAlive: async () => undefined, signIn: async () => undefined, beforeActivate: async () => { f.calls.push(['before']); } };
   await f.menu.show('claude', hooks);
   assert.match(warningMessages[0], /at its usage limit/);
@@ -590,7 +594,12 @@ test('rows describe duplicates, projects, limits and what has not been read yet'
   const f = fixture({ claude: view });
   quickPickResponses.push((items) => {
     const row = (id) => items.find((item) => item.profile?.id === id);
-    assert.equal(row('a').description, 'a@example.com · duplicate of “Twin” · Active');
+    assert.equal(row('a').description, 'a@example.com · duplicate of “Twin”');
+    // Rows cannot have a hover: an info button carries the account's reading as text, problems included.
+    assert.equal(row('a').buttons[0].iconPath.id, 'info');
+    assert.match(row('a').buttons[0].tooltip, /Usage not checked yet\.\n\nThis is the active account\.$/);
+    assert.match(row('e').info, /Login problem: OAuth token has expired/);
+    assert.match(row('f').info, /At its usage limit/);
     assert.equal(row('b').description, 'a@example.com · project my app · duplicate of “Work”');
     assert.equal(row('c').label, 'Fable', 'a dimmed account loses its icon');
     assert.equal(row('c').iconPath.id, 'key');
