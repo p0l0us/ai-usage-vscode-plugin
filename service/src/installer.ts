@@ -171,7 +171,9 @@ export function systemdUnitText(home: string, node: Pick<NodeChoice, 'command' |
   const exec = [node.command, ...node.args, launchScript(home), 'daemon'].map(quoteSystemd).join(' ');
   const environment = Object.entries({ ...node.env, AI_USAGE_HOME: home }).map(([key, value]) => `Environment=${quoteSystemd(`${key}=${value}`)}`).join('\n');
   return [
-    '[Unit]', 'Description=AI Usage account service (Claude Code and Codex profiles, keep-alives and rotation)', 'After=network-online.target', '',
+    '[Unit]', 'Description=AI Usage account service (Claude Code and Codex profiles, keep-alives and rotation)', 'After=network-online.target',
+    // A crash followed by editors starting the service again exceeds the default start limit; systemd would then stop restarting it.
+    'StartLimitIntervalSec=0', '',
     '[Service]', 'Type=simple', `ExecStart=${exec}`, 'Restart=on-failure', 'RestartSec=5', environment, '',
     '[Install]', 'WantedBy=default.target', ''
   ].join('\n');

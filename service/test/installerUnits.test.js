@@ -73,7 +73,7 @@ test('systemd unit: exact text with quoting for spaces, quotes, backslashes and 
   const home = '/home/Zoë/my "ai" usage';
   const text = systemdUnitText(home, { command: '/opt/My Node/bin/node', args: ['--max-old-space-size=256'], env: { ELECTRON_RUN_AS_NODE: '1' } });
   assert.equal(text, [
-    '[Unit]', 'Description=AI Usage account service (Claude Code and Codex profiles, keep-alives and rotation)', 'After=network-online.target', '',
+    '[Unit]', 'Description=AI Usage account service (Claude Code and Codex profiles, keep-alives and rotation)', 'After=network-online.target', 'StartLimitIntervalSec=0', '',
     '[Service]', 'Type=simple',
     'ExecStart="/opt/My Node/bin/node" "--max-old-space-size=256" "/home/Zoë/my \\"ai\\" usage/service/launch.js" "daemon"',
     'Restart=on-failure', 'RestartSec=5',

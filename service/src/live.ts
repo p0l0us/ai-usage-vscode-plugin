@@ -776,10 +776,14 @@ function codexRpc(cli: string, requests: CodexRpcRequest[], env: NodeJS.ProcessE
     };
     const timer = setTimeout(() => finish(() => reject(new Error('codex app-server did not answer in time'))), CODEX_CLI_TIMEOUT_MS);
     const send = (id: number, request: CodexRpcRequest) => {
-      child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method: request.method, params: request.params ?? {} }) + '\n');
+      if (!settled) {
+        child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method: request.method, params: request.params ?? {} }) + '\n');
+      }
     };
 
     child.on('error', (error) => finish(() => reject(error)));
+    // Without a listener, a write into a pipe the app-server already closed (EPIPE) is an uncaught error that ends the service.
+    child.stdin.on('error', (error) => finish(() => reject(new Error(`codex app-server closed its input (${error.message})${stderr.trim() ? `: ${stderr.trim().slice(0, 200)}` : ''}`))));
     child.on('exit', (code) => finish(() => reject(new Error(`codex app-server exited (${code ?? 'signal'}): ${stderr.trim().slice(0, 200)}`))));
     child.stderr.on('data', (chunk) => (stderr += String(chunk)));
     child.stdout.on('data', (chunk) => {

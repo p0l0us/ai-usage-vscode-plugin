@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.4.3 (unreleased)
+
+- The account service no longer crashes when a `codex app-server` used for a Codex usage or login check closes its input early. The unhandled `write EPIPE` ended the whole service every few minutes, which failed every check in progress at that moment ("Request failed: timed out", "codex app-server did not answer in time", "Network error") and greyed the status bar until it restarted. The check now fails on its own with "codex app-server closed its input".
+- The systemd unit no longer has a start limit (`StartLimitIntervalSec=0`). After a crash, the editors' start attempts plus systemd's own restart could exceed the default limit, and systemd then left the service stopped.
+
 ## 1.4.2 (2026-10-14)
 
 - Claude rotation with the default `auto` usage source now sees the active account approach its limit within seconds instead of up to `checkIntervalMinutes` (10) later. `auto` re-reads Claude Code's local usage cache every `aiUsage.claude.accountFile.checkIntervalSeconds` (15 s), as `both` and `accountFile` already did. A busy session could previously go from below the 5-hour threshold to the limit between two readings without a switch. The usage endpoint is still called no more often than before, and a local read that fails no longer delays that endpoint fallback.

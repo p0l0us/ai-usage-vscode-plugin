@@ -304,6 +304,17 @@ require('readline').createInterface({ input: process.stdin }).on('line', (line) 
   assert.equal(result.message, 'Codex CLI: initialize failed: unknown error');
 });
 
+test('Codex CLI: an app-server that closes its input fails the reading instead of crashing the service', { skip: process.platform === 'win32' }, async (t) => {
+  const root = temporary(t);
+  // Answers `initialize` after closing stdin, so the next request is written into a closed pipe (EPIPE),
+  // and stays alive so the pipe error, not the exit, ends the call. An unhandled EPIPE used to kill the service.
+  const cli = path.join(root, 'closed-input');
+  fs.writeFileSync(cli, `#!/bin/sh\nread line\nexec 0<&-\necho '{"id":1,"result":{}}'\nsleep 5\n`, { mode: 0o755 });
+  const result = await live.fetchCodexUsageCli(cli, codexHome(root));
+  assert.match(result.message, /^Codex CLI: codex app-server closed its input \(.*EPIPE.*\)/);
+  assert.equal(result.transient, true);
+});
+
 const creditCases = [
   ['zero available', { availableCount: 0 }, { availableCount: 0 }],
   ['one available has no total', { availableCount: 1, credits: [{ status: 'available', expiresAt: 5 }] }, { availableCount: 1, earliestExpiresAt: 5 }],
