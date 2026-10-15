@@ -19,7 +19,7 @@ function fixture(t, options = {}) {
   let now = Date.now();
   const active = { claude: 'a', codex: 'a' };
   const values = { a: [99.5, 10], b: [10, 10], c: [20, 20], ...options.values };
-  const calls = [], switches = [], refreshed = [], messages = [], problems = [], resets = [];
+  const calls = [], switches = [], refreshed = [], messages = [], problems = [], resets = [], nativeReads = [];
   const credits = { ...options.credits };
   const redeemedKeys = new Set();
   const settings = Object.fromEntries(['claude', 'codex'].map(provider => [provider, {
@@ -35,6 +35,11 @@ function fixture(t, options = {}) {
     credential: async (provider, id) => options.credential ? options.credential(provider, id) : ({ id }),
     refreshedCredential: async (...args) => refreshed.push(args),
     matchesNative: async () => options.matchesNative !== false,
+    ...(options.readActive ? { readActiveUsage: async (provider) => {
+      nativeReads.push(provider);
+      const percents = options.readActive[provider];
+      return percents ? { kind: 'ok', usage: usage(provider, percents, now) } : { kind: 'error', provider, title: provider, message: 'native read failed', transient: true };
+    } } : {}),
     activateProfile: async (provider, id, automatic) => {
       if (options.activateFails) return false;
       active[provider] = id;
@@ -83,7 +88,7 @@ function fixture(t, options = {}) {
   };
   const service = make();
   t.after(() => service.dispose());
-  return { service, make, options, active, values, credits, calls, switches, resets, refreshed, settings, messages, problems,
+  return { service, make, options, active, values, credits, calls, switches, resets, refreshed, settings, messages, problems, nativeReads,
     /** Every recorded history event, oldest first. */
     events: () => service.history ? [...service.history.events()] : [],
     observe: (provider, percents, id = active[provider]) => service.observe(provider, id, usage(provider, percents, now)),
@@ -1715,4 +1720,50 @@ test('a usage refresh that finds the active account at its limit rotates before 
   assert.deepEqual(f.calls.map(call => call[1]), ['a', 'b', 'c'], 'the other accounts are still read on their schedule');
   await f.service.tick();
   assert.equal(f.switches.length, 1, 'the scheduler finds nothing more to do');
+});
+
+test('the active login in use is read where it is used and gets no keep-alive, by schedule or by hand', async t => {
+  const f = fixture(t, { values: { a: [60, 10], b: [10, 10], c: [10, 10] }, readActive: { codex: [30, 10] },
+    settings: { codex: { enabled: true, autoRotate: true, fiveHourThresholdPercent: 95 } } });
+  f.observeAll('codex');
+  f.advance(2 * HOUR);
+  await f.service.refreshUsage('codex', true);
+  // a's reading came from the native login (30%), not from a probe of its profile home.
+  assert.deepEqual(f.nativeReads, ['codex']);
+  assert.ok(!f.calls.some(call => call[1] === 'a'), `a was probed: ${JSON.stringify(f.calls)}`);
+  assert.equal(f.service.usage('codex', 'a').windows[0].usedPercent, 30);
+  assert.deepEqual(f.calls.map(call => call[1]).sort(), ['b', 'c']);
+  // The keep-alive sweep leaves the active login alone too.
+  f.calls.length = 0;
+  await f.service.tick();
+  assert.deepEqual(f.calls.filter(call => call[2]).map(call => call[1]).sort(), ['b', 'c']);
+  await assert.rejects(f.service.sendKeepAliveNow('codex', 'a'), /“a” is the active login/);
+  assert.ok((await f.service.sendKeepAliveNow('codex', 'b')).usage);
+  // A native read carries no earned-reset count; the last known count stays with the reading.
+  f.service.observe('codex', 'a', { ...usage('codex', [31, 10], f.now()), resetCredits: { availableCount: 2 } });
+  f.advance(2 * HOUR);
+  await f.service.refreshUsage('codex');
+  assert.equal(f.service.usage('codex', 'a').resetCredits.availableCount, 2);
+  // The next scheduled read of the active account goes the same way, and rotation acts on it inside the round.
+  f.nativeReads.length = 0; f.calls.length = 0;
+  f.options.readActive.codex = [99.5, 10];
+  f.advance(10 * 60000 + 1);
+  await f.service.refreshUsage('codex');
+  assert.deepEqual(f.switches.at(-1), ['codex', 'b', true]);
+  // a was read natively and rotated away inside the round; b, the new active login, was then read natively too, and
+  // only c from its profile home.
+  assert.deepEqual(f.nativeReads, ['codex', 'codex']);
+  assert.deepEqual(f.calls.map(call => call[1]), ['c']);
+});
+
+test('an active profile whose login is not the native one is checked and kept alive from its profile home', async t => {
+  const f = fixture(t, { values: { a: [10, 10], b: [10, 10] }, ids: ['a', 'b'], readActive: { codex: [30, 10] }, matchesNative: false,
+    settings: { codex: { enabled: true } } });
+  await f.service.refreshUsage('codex', true);
+  assert.deepEqual(f.nativeReads, []);
+  assert.deepEqual(f.calls.map(call => call[1]).sort(), ['a', 'b']);
+  f.calls.length = 0;
+  await f.service.tick();
+  assert.deepEqual(f.calls.filter(call => call[2]).map(call => call[1]).sort(), ['a', 'b']);
+  assert.ok((await f.service.sendKeepAliveNow('codex', 'a')).usage);
 });

@@ -57,6 +57,12 @@ async function runningService(t, behavior = {}) {
     home, version: 'cli-test', mode: 'background',
     engineOptions: {
       fetchUsage: async (provider) => ({ kind: 'ok', usage: usage(provider, [50, 5]) }),
+      // The active account is read through the native login, with the values of the token the native file holds.
+      readNativeUsage: async (provider) => {
+        const token = JSON.parse(fs.readFileSync(path.join(claudeHome, '.credentials.json'), 'utf8')).claudeAiOauth?.accessToken;
+        const readings = percents[token];
+        return readings && !behavior.usageErrors?.[token] ? { kind: 'ok', usage: usage(provider, readings) } : { kind: 'error', provider, title: provider, message: behavior.usageErrors?.[token] ?? 'Unavailable' };
+      },
       identityOf: async (provider, credential) => ({ email: `${credential.claudeAiOauth?.accessToken}@example.com`, accountId: `acct-${credential.claudeAiOauth?.accessToken}` }),
       verifyCodex: async () => ({ status: 'match', detail: 'ok' }),
       syncClaudeMetadata: async (credential) => ({ status: 'synced', identity: { email: `${credential.claudeAiOauth.accessToken}@example.com`, accountId: `acct-${credential.claudeAiOauth.accessToken}` }, detail: 'synced' }),
@@ -359,10 +365,11 @@ test('keepalive: one account, the failure and unreadable-usage lines, and the sw
   await run('save', 'claude', 'Work');
   await run('import', 'claude', credentialFile('b.json', 'b'), '--name', 'Backup');
   await run('import', 'claude', credentialFile('c.json', 'c'), '--name', 'Third');
+  // Work is the active login: it is never kept alive, and the command says why.
   let result = await run('keepalive', 'claude', 'Work');
-  assert.equal(result.code, 0, result.stderr);
-  assert.match(result.stdout, /^✓ Claude keep-alive completed for “Work”: 5h 96% \(3h\) · 7d 82% \(3h\)\n$/);
-  assert.deepEqual(probes.at(-1), ['a', true], 'the keep-alive prompt was sent');
+  assert.equal(result.code, 1);
+  assert.match(result.stdout, /^✗ Claude keep-alive for “Work” not sent: .*is the active login/);
+  assert.ok(!probes.some(([token, keepAlive]) => token === 'a' && keepAlive), 'no keep-alive prompt went to the active login');
   result = await run('ka', 'claude', 'Backup');
   assert.equal(result.code, 1);
   assert.match(result.stdout, /^✗ Claude keep-alive failed for “Backup”: .*[Ii]nsufficient credits.* Usage statistics were still updated\.\n$/);
@@ -371,19 +378,18 @@ test('keepalive: one account, the failure and unreadable-usage lines, and the sw
   assert.match(result.stdout, /^! Claude keep-alive completed for “Third”, but usage could not be read: Network error\. The service could not be reached\./);
   result = await run('keepalive', 'claude', 'nobody');
   assert.deepEqual([result.code, result.stderr], [2, 'No Claude profile matches "nobody".\n']);
-  // Several accounts: all of them with --all, progress on stderr, results in order on stdout, failures counted.
+  // Several accounts: all but the active login with --all, progress on stderr, results in order on stdout, failures counted.
   result = await run('keepalive', 'claude', '--all');
   assert.equal(result.code, 1, 'a failing account makes the sweep fail');
   const lines = result.stdout.trim().split('\n');
-  assert.equal(lines.length, 3);
-  assert.match(lines[0], /^✓ .*“Work”/);
-  assert.match(lines[1], /^✗ .*“Backup”/);
-  assert.match(lines[2], /^! .*“Third”/);
+  assert.equal(lines.length, 2);
+  assert.match(lines[0], /^✗ .*“Backup”/);
+  assert.match(lines[1], /^! .*“Third”/);
   // Without a name or --all and with several accounts, a script has to say yes.
   result = await run('keepalive', 'claude');
-  assert.deepEqual([result.code, result.stderr], [2, 'Send the keep-alive to all 3 Claude accounts? Pass -y to confirm without a prompt.\n']);
+  assert.deepEqual([result.code, result.stderr], [2, 'Send the keep-alive to all 2 Claude accounts? Pass -y to confirm without a prompt.\n']);
   result = await run('keepalive', 'claude', '-y');
-  assert.equal(result.stdout.trim().split('\n').length, 3);
+  assert.equal(result.stdout.trim().split('\n').length, 2);
   result = await run('keepalive', 'codex');
   assert.deepEqual([result.code, result.stderr], [2, 'No Codex profiles are saved.\n']);
 });
@@ -393,18 +399,21 @@ test('keepalive: the sweep reports its progress on stderr', async (t) => {
   const { run } = await runningService(t);
   await run('save', 'claude', 'Work');
   await run('import', 'claude', credentialFile('b.json', 'b'), '--name', 'Backup');
+  await run('import', 'claude', credentialFile('c.json', 'c'), '--name', 'Third');
   const result = await run('keepalive', 'claude', '--all');
-  assert.match(result.stderr, /1\/2: “Work”…\n.*2\/2: “Backup”…\n/s);
+  assert.match(result.stderr, /1\/2: “Backup”…\n.*2\/2: “Third”…\n/s);
 });
 
 test('keepalive: a successful sweep exits 0, and Ctrl-C cancels the rest with a "cancelled" line', async (t) => {
   let release;
   const gate = new Promise((resolve) => { release = resolve; });
   const gated = { current: false };
-  const { run, probes } = await runningService(t, { gate: async (token) => { if (gated.current && token === 'b') { await gate; } } });
+  const { run, probes } = await runningService(t, { percents: { d: [30, 8] }, gate: async (token) => { if (gated.current && token === 'c') { await gate; } } });
   await run('save', 'claude', 'Work');
   await run('import', 'claude', credentialFile('b.json', 'b'), '--name', 'Backup');
   await run('import', 'claude', credentialFile('c.json', 'c'), '--name', 'Third');
+  await run('import', 'claude', credentialFile('d.json', 'd'), '--name', 'Fourth');
+  // Work, the active login, is left out: three others.
   let result = await run('keepalive', 'claude', '--all');
   assert.equal(result.code, 0, result.stdout + result.stderr);
   assert.equal(result.stdout.split('\n').filter((line) => line.startsWith('✓')).length, 3);
@@ -419,7 +428,7 @@ test('keepalive: a successful sweep exits 0, and Ctrl-C cancels the rest with a 
   release();
   result = await sweep;
   assert.equal(result.code, 1);
-  assert.match(result.stdout, /✓ Claude keep-alive completed for “Work”/);
+  assert.match(result.stdout, /✓ Claude keep-alive completed for “Backup”/);
   assert.match(result.stdout, /! \d of 3 not sent: cancelled\.\n$/);
   assert.ok(probes.length < before + 3, 'the third account was never probed');
 });
@@ -558,9 +567,11 @@ test('history: summary, day counts, exports, the files and a recording switch, w
   await run('config', 'history.enabled', 'false');
   assert.match((await run('history', 'path')).stdout.split('\n')[0], /\(recording is off: history.enabled\)$/);
   await run('config', 'history.enabled', 'true');
-  // Exports: each kind to stdout and to a file, a usage line for a bad kind.
+  // Exports: each kind to stdout and to a file, a usage line for a bad kind. A reading comes from a keep-alive of a
+  // saved account other than the active login, which is never kept alive.
   await run('save', 'claude', 'Work');
-  await run('keepalive', 'claude', 'Work');
+  await run('import', 'claude', credentialFile('history-b.json', 'b'), '--name', 'Backup');
+  await run('keepalive', 'claude', 'Backup');
   assert.match((await run('history', 'export', 'readings', '-')).stdout, /^time,provider,/);
   assert.match((await run('history', 'export', 'events', '-')).stdout, /^time,provider,type,reason/);
   const jsonl = (await run('history', 'export', 'jsonl', '-')).stdout;

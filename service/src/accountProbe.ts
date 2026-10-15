@@ -240,7 +240,8 @@ export function runKeepAlive(cli: string, args: string[], home: string, env: Nod
   });
 }
 
-async function claudeUsage(home: string, signal: AbortSignal, budget?: ApiCallBudget): Promise<LiveResult> {
+/** Claude usage over HTTPS from `home`'s credential, after a slot in the shared endpoint budget (waited for up to two minutes). */
+export async function claudeUsage(home: string, signal: AbortSignal, budget?: ApiCallBudget): Promise<LiveResult> {
   if (budget && !await budget.waitForSlot(BUDGET_WAIT_MS, signal)) {
     return {
       kind: 'error', provider: 'claude', title: 'Claude', transient: true,

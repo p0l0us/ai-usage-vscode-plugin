@@ -15,13 +15,23 @@ exports.options = (home, mode) => {
       windows: [{ label: '5h', usedPercent: data.used ?? 100, resetsAt: new Date(data.base + 3_600_000) }],
       resetCredits: { availableCount: data.credits ?? 1 } };
   };
+  // A check configured with `delayMs` announces itself with the probe-waiting marker and takes that long, whether
+  // it probes a profile home or reads the active account through the native login.
+  const slow = async () => {
+    if (state().delayMs) {
+      fs.writeFileSync(path.join(home, 'probe-waiting'), 'waiting');
+      await new Promise(resolve => setTimeout(resolve, state().delayMs));
+    }
+  };
   return { ...options, engineOptions: { ...options.engineOptions,
     fetchUsage: async (provider, context) => provider === 'codex' ? { kind: 'ok', usage: usage() } : options.engineOptions.fetchUsage(provider, context),
+    readNativeUsage: async (provider) => {
+      if (provider !== 'codex') throw new Error('Unexpected Claude native read');
+      await slow();
+      return { kind: 'ok', usage: usage() };
+    },
     probe: async (provider, credential) => {
-      if (state().delayMs) {
-        fs.writeFileSync(path.join(home, 'probe-waiting'), 'waiting');
-        await new Promise(resolve => setTimeout(resolve, state().delayMs));
-      }
+      await slow();
       if (provider !== 'codex') throw new Error('Unexpected Claude probe');
       return { credential, result: { kind: 'ok', usage: usage() } };
     },

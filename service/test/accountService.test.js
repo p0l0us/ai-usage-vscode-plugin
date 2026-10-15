@@ -29,6 +29,13 @@ function fixture(t, options = {}) {
       'claude.keepAlive.home': path.join(root, '.claude-profile-{number}'),
       'codex.keepAlive.home': path.join(root, '.codex-profile-{number}') },
     home, version: 'test', fetchUsage: async provider => ({ kind: 'ok', usage: usage(provider, [50, 5]) }), log: (message) => logs.push(message),
+    // The active account is read through the native login: whatever login the native file holds, with that token's values.
+    readNativeUsage: async provider => {
+      const token = provider === 'claude' ? JSON.parse(fs.readFileSync(path.join(claudeHome, '.credentials.json'), 'utf8')).claudeAiOauth.accessToken
+        : JSON.parse(fs.readFileSync(path.join(codexHome, 'auth.json'), 'utf8')).tokens.account_id;
+      const percents = values[token];
+      return percents ? { kind: 'ok', usage: usage(provider, percents) } : { kind: 'error', provider, title: provider, message: options.usageErrors?.[token] ?? 'Unavailable' };
+    },
     identityOf: async (provider, credential) => provider === 'codex'
       ? { email: `${credential.tokens?.account_id}@example.com`, accountId: credential.tokens?.account_id }
       : { email: `${credential.claudeAiOauth?.accessToken}@example.com`, accountId: `account-${credential.claudeAiOauth?.accessToken}` },
@@ -64,21 +71,23 @@ test('startup refreshes every saved account with keep-alive and rotation off, an
   f.events.length = 0;
   f.service.start();
   const deadline = Date.now() + 5_000;
-  while (f.probes.length < 4 || f.events.filter(event => event.event === 'stateChanged').length < 4) {
+  while (f.probes.length < 2 || f.events.filter(event => event.event === 'stateChanged').length < 4) {
     assert.ok(Date.now() < deadline, 'startup completed the saved-account refresh');
     await new Promise(resolve => setTimeout(resolve, 10));
   }
+  // The active logins (Work, Codex) are read where they are in use, through the native login, never probed in a profile home.
   assert.deepEqual(f.probes.map(([provider, token, keepAlive]) => [provider, token, keepAlive]).sort(),
-    [['claude', 'a', false], ['claude', 'b', false], ['claude', 'c', false], ['codex', 'acc-1', false]].sort());
+    [['claude', 'b', false], ['claude', 'c', false]].sort());
   for (const provider of ['claude', 'codex']) {
     const view = await f.call('profiles.list', { provider });
     assert.ok(view.profiles.every(profile => profile.usage && profile.checkedAt));
+    assert.equal(view.profiles.find(profile => profile.active).usage.windows[0].usedPercent, provider === 'claude' ? 10 : 30, 'the active profile shows the native login\'s reading');
     assert.ok(f.events.some(event => event.event === 'usageChanged' && event.provider === provider));
     assert.deepEqual(await f.call('profiles.list', { provider }), view, 'another window reads the same cached data');
   }
-  assert.equal(f.probes.length, 4, 'reading views never probes the providers');
+  assert.equal(f.probes.length, 2, 'reading views never probes the providers');
   await f.service.tick();
-  assert.equal(f.probes.length, 4, 'a fresh cache is reused on the next tick');
+  assert.equal(f.probes.length, 2, 'a fresh cache is reused on the next tick');
 });
 
 test('profiles are listed as views with numbers, active marks, readings and problems', async (t) => {
@@ -190,6 +199,8 @@ test('a sign-in is prepared with an isolated home and finished from the file the
   fs.writeFileSync(cli, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
   await f.call('config.set', { values: { 'claude.cliPath': cli, 'claude.keepAlive.home': path.join(f.root, 'claude-tmp') } });
   const work = await f.call('profiles.saveNative', { provider: 'claude', name: 'Work' });
+  // Keep-alives by hand go to a saved account that is not the active login; the active one is never kept alive.
+  const spare = await f.call('profiles.importCredential', { provider: 'claude', name: 'Spare', credential: claudeLogin('b') });
   const prepared = await f.call('profiles.signIn.prepare', { provider: 'claude', id: work.profile.id });
   assert.equal(prepared.cli, cli);
   assert.deepEqual(prepared.args, ['auth', 'login']);
@@ -201,9 +212,10 @@ test('a sign-in is prepared with an isolated home and finished from the file the
   assert.equal((await f.call('automation.rotateNow', { provider: 'claude' })).reason, 'a Claude sign-in is in progress');
   await assert.rejects(f.call('profiles.signIn.finish', { provider: 'claude', id: work.profile.id }), /wrote no login/);
   // A finish without a login lifts the hold; a new prepare holds again.
-  f.values.a = [5, 5];
-  assert.ok((await f.call('automation.keepAliveNow', { provider: 'claude', id: work.profile.id })).usage);
-  await f.call('profiles.signIn.prepare', { provider: 'claude' });
+  f.values.b = [5, 5];
+  assert.ok((await f.call('automation.keepAliveNow', { provider: 'claude', id: spare.profile.id })).usage);
+  await assert.rejects(f.call('automation.keepAliveNow', { provider: 'claude', id: work.profile.id }), /is the active login/);
+  await f.call('profiles.signIn.prepare', { provider: 'claude', id: work.profile.id });
   await assert.rejects(f.call('automation.keepAliveNow', { provider: 'claude', id: work.profile.id }), /sign-in is in progress/);
   fs.writeFileSync(prepared.file, JSON.stringify(claudeLogin('other')));
   const refused = await f.call('profiles.signIn.finish', { provider: 'claude', id: work.profile.id });
@@ -219,13 +231,12 @@ test('a sign-in is prepared with an isolated home and finished from the file the
   assert.equal(JSON.parse(fs.readFileSync(path.join(f.claudeHome, '.credentials.json'), 'utf8')).claudeAiOauth.accessToken, 'other');
   assert.equal((await f.call('profiles.list', { provider: 'claude' })).profiles[0].email, 'other@example.com');
   // The stored login lifted the hold: checks run again.
-  f.values.other = [5, 5];
-  assert.ok((await f.call('automation.keepAliveNow', { provider: 'claude', id: work.profile.id })).usage);
+  assert.ok((await f.call('automation.keepAliveNow', { provider: 'claude', id: spare.profile.id })).usage);
   // A cancelled sign-in lifts it too.
-  await f.call('profiles.signIn.prepare', { provider: 'claude' });
+  await f.call('profiles.signIn.prepare', { provider: 'claude', id: work.profile.id });
   await f.call('profiles.signIn.cancel', { provider: 'claude' });
   assert.equal(JSON.parse(fs.readFileSync(persistentFile)).claudeAiOauth.accessToken, 'other');
-  assert.ok((await f.call('automation.keepAliveNow', { provider: 'claude', id: work.profile.id })).usage);
+  assert.ok((await f.call('automation.keepAliveNow', { provider: 'claude', id: spare.profile.id })).usage);
 });
 
 test('service reads per-account homes, preserves them on reorder, and activates CLI-refreshed tokens', async t => {
@@ -260,8 +271,8 @@ test('an explicit imported login replacement updates the active native copy and 
   await f.call('profiles.applyImport', { entries: exported.entries,
     chosen: [{ provider: 'claude', id: a.profile.id }] });
   f.values['imported-refresh'] = [15, 5];
-  await f.call('automation.keepAliveNow', { provider: 'claude', id: a.profile.id });
-  assert.deepEqual(f.probes.at(-1), ['claude', 'imported-refresh', true]);
+  // The active login is never kept alive from its profile home; the replacement reached both copies at import time.
+  await assert.rejects(f.call('automation.keepAliveNow', { provider: 'claude', id: a.profile.id }), /is the active login/);
   const view = await f.call('profiles.list', { provider: 'claude' });
   assert.equal(JSON.parse(fs.readFileSync(path.join(view.profiles[0].home, '.credentials.json'))).claudeAiOauth.accessToken, 'imported-refresh');
   assert.equal(JSON.parse(fs.readFileSync(path.join(f.claudeHome, '.credentials.json'))).claudeAiOauth.accessToken, 'imported-refresh');
@@ -346,14 +357,16 @@ test('a keep-alive sweep over every account runs in the service, reports progres
   const f = fixture(t, { keepAliveErrors: { b: 'Keep-alive CLI exited with code 1: out of credits' } });
   await f.call('profiles.saveNative', { provider: 'claude', name: 'Work' });
   await f.call('profiles.importCredential', { provider: 'claude', name: 'Backup', credential: claudeLogin('b') });
+  await f.call('profiles.importCredential', { provider: 'claude', name: 'Third', credential: claudeLogin('c') });
   const progress = [];
   f.service.events.on('event', (event) => { if (event.event === 'keepAliveProgress') { progress.push(`${event.index}/${event.total} ${event.name}`); } });
-  // The sweep pauses between accounts; cancelling during that pause ends it with the first account done.
+  // The sweep leaves out the active login (Work) and pauses between accounts; cancelling during that pause ends it
+  // with the first account done.
   const sweep = f.call('automation.keepAliveAll', { provider: 'claude', token: 't1' });
   await new Promise((resolve) => setTimeout(resolve, 100));
   await f.call('automation.cancel', { token: 't1' });
   const result = await sweep;
-  assert.deepEqual(progress, ['0/2 Work']);
+  assert.deepEqual(progress, ['0/2 Backup']);
   assert.equal(result.done, 1);
   assert.equal(result.total, 2);
   assert.equal(result.cancelled, true);

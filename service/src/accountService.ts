@@ -15,11 +15,11 @@ import { AuthProvider, StoredCredential, parseCredentialJson, readNativeCredenti
 import { activateClaudeAccountMetadata, claudeAccountFileConfirms, CredentialIdentity } from './accountIdentity';
 import { AccountAutomation, AutomationProfiles, KeepAliveNowResult, LockWait } from './accountAutomation';
 import {
-  resetCodexAccount, acquireAccountLock, explainAccountProblem, isolatedEnvironment, loginArgs, loginHome, probeAccount, readableProblem, stagedCredentialPath
+  resetCodexAccount, acquireAccountLock, claudeUsage, explainAccountProblem, isolatedEnvironment, loginArgs, loginHome, probeAccount, readableProblem, stagedCredentialPath
 } from './accountProbe';
 import { deserializeUsage } from './cache';
 import { ConfigAuthority, ConfigPatchResult, ConfigView, ServiceConfig, automationSettings, configFileOf, getConfigValue, strategySummary } from './configStore';
-import { LiveUsage, LiveResult, ProviderId, newestValidUsage, refreshCodexNativeLogin, resolveCli, verifyCodexNativeAccount } from './live';
+import { LiveUsage, LiveResult, ProviderId, claudeConfigDir, fetchCodexUsage, newestValidUsage, refreshCodexNativeLogin, resolveCli, verifyCodexNativeAccount } from './live';
 import { ExportedProfile, ImportPlan, parseProfileExport, serializeProfileExport } from './profileTransfer';
 import { ActivationOutcome, PrivateProfileBackend, ProfileMetadata, ProfileStore, PROVIDERS, TITLES, importOutcome } from './profileStore';
 import { ProfileHomes } from './profileHomes';
@@ -57,6 +57,8 @@ export type AccountServiceOptions = {
   identityOf?: (provider: AuthProvider, credential: StoredCredential) => Promise<CredentialIdentity>;
   verifyCodex?: typeof verifyCodexNativeAccount;
   syncClaudeMetadata?: typeof activateClaudeAccountMetadata;
+  /** Injected by tests: the usage of the native login, read for the active account instead of probing its profile home. */
+  readNativeUsage?: (provider: AuthProvider) => Promise<LiveResult>;
   now?: () => number;
   /** Where the private profiles are kept; profiles.json in the home by default. */
   privateProfiles?: PrivateProfileBackend;
@@ -203,6 +205,7 @@ export class AccountService {
         if (stored) this.profileHomes.acknowledge(provider, this.accountHome(provider, id), stored);
       },
       matchesNative: (provider, id) => this.store.matchesNative(provider, id),
+      readActiveUsage: (provider) => this.readNativeUsage(provider),
       activateProfile: async (provider, id, automatic) => {
         try { await this.activate(provider, id, Boolean(automatic)); return true; }
         catch (error) { this.log(`${provider}: could not activate ${id}: ${error instanceof Error ? error.message : String(error)}`); return false; }
@@ -765,6 +768,16 @@ export class AccountService {
     return this.profileHomes.resolve(provider, id, this.store.profiles(provider).map(p => p.id), this.config[provider].keepAlive.home);
   }
 
+  /**
+   * The native login's usage over HTTPS, for the active account: the login the user's own CLI holds, read from its
+   * own home, with no CLI start and no token refresh; Claude's call takes a slot in the shared endpoint budget.
+   */
+  private async readNativeUsage(provider: AuthProvider): Promise<LiveResult> {
+    if (this.options.readNativeUsage) { return this.options.readNativeUsage(provider); }
+    if (this.options.fetchUsage) { return this.options.fetchUsage(provider, {}); }
+    return provider === 'claude' ? claudeUsage(claudeConfigDir(), new AbortController().signal, this.claudeBudget) : fetchCodexUsage();
+  }
+
   private async accountCredential(provider: AuthProvider, id: string): Promise<StoredCredential | undefined> {
     const stored = await this.store.credential(provider, id);
     if (!stored) return undefined;
@@ -1186,9 +1199,13 @@ export class AccountService {
       case 'automation.keepAliveAll': {
         const provider = providerParam(params);
         const saved = this.store.profiles(provider);
+        // A sweep over every account leaves out the active login in use: the user's own use keeps it fresh. Named
+        // explicitly, it is refused with the reason in its row.
+        const active = this.store.activeProfileId(provider);
+        const inUse = active !== undefined && await this.store.matchesNative(provider, active);
         const profiles = Array.isArray(params.ids)
           ? (params.ids as unknown[]).flatMap((id) => { const profile = saved.find((candidate) => candidate.id === id); return profile ? [profile] : []; })
-          : saved;
+          : saved.filter((profile) => !(inUse && profile.id === active));
         const wait = this.waitFor(provider, params, request);
         try {
           const result = await this.keepAliveAll(provider, profiles, wait);

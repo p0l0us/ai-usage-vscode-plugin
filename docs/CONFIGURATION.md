@@ -493,7 +493,7 @@ in between two accounts. Once the wait runs out, the notification says that the 
 
 | Setting suffix (`aiUsage.claude.` / `aiUsage.codex.`) | Claude default | Codex default | Purpose |
 | --- | --- | --- | --- |
-| `keepAlive.enabled` | `true` | `true` | Periodically check every saved account, including inactive ones, with the smallest model; this also keeps their logins refreshed. |
+| `keepAlive.enabled` | `true` | `true` | Periodically check every saved account, including inactive ones, with the smallest model; this also keeps their logins refreshed. The active login is never kept alive and never checked from its profile home: it is read through the native login, where it is in use, so one login is never exercised from two installations at once. |
 | `autoRotate.enabled` | `true` | `true` | Switch accounts automatically at a threshold or, with `proactive`, when another account scores clearly better. |
 | `autoReset.enabled` | — | `true` | Automatically redeem an earned Codex rate-limit reset credit when the active saved account is limited and the timing rules favor a reset. |
 | `autoRotate.updateUsageBeforeRotation` | `false` | `false` | Read the target account's usage right before a rotation switch (a usage call, never a keep-alive). Off: stored readings decide, a window that has reset since counts as fresh. |

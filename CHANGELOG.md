@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.5.2 (unreleased)
+
+- The active account is read only through the native login and is never kept alive or checked from its profile home. Each profile home is its own Codex installation, so the active login was being exercised from two installations at once: the user's own Codex (extension, proxy, CLI) and the service's checks every 5 minutes plus an hourly keep-alive. OpenAI answered with `token_revoked: Encountered invalidated oauth token for user`; on 14 October every saved Codex login was revoked within 90 minutes and the pattern repeated after each re-login, always on the account that was, or had just become, the active one. The service now reads the active account over HTTPS with the native login (no CLI start, no token refresh; Claude's call takes a slot in the shared endpoint budget), the keep-alive sweep leaves the active login out, and a keep-alive named by hand for it is refused with the reason. `ai-usage keepalive --all` and the menu's **All accounts** mean every saved account other than the active one. An active profile whose login is not the native one is treated as before.
+
 ## 1.5.1 (2026-10-14)
 
 - Rotation no longer waits for the rest of a usage-refresh round. The round reads the active account first, but when that reading reached a threshold the switch only came after the other due accounts had been read, 30 seconds apart (today: 95% read at 20:50:41, switched at 20:52:12, with the status bar showing the limit meanwhile). The active account is now rotated away right after its own reading, inside the round.

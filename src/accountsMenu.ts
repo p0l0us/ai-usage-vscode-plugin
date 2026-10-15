@@ -667,12 +667,14 @@ export class AccountsMenu {
   /** Like `pickSaved`, with an extra "All accounts" entry on top; empty when nothing was picked. */
   private async pickKeepAliveTargets(view: ProviderView): Promise<ProfileView[]> {
     const items: Array<vscode.QuickPickItem & { profiles?: ProfileView[] }> = [];
-    const enabled = view.profiles.filter((profile) => !profile.disabled);
-    if (enabled.length > 1) {
-      items.push({ label: '$(run-all) All accounts', description: `${enabled.length} ${enabled.length === view.profiles.length ? 'saved' : 'enabled'} accounts, one by one`, profiles: enabled });
+    // The active login is kept fresh by the user's own use and is never exercised from its profile home.
+    const others = view.profiles.filter((profile) => !profile.active);
+    const all = others.filter((profile) => !profile.disabled);
+    if (all.length > 1) {
+      items.push({ label: '$(run-all) All accounts', description: `${all.length} ${all.length === others.length ? 'saved' : 'enabled'} accounts other than the active one, one by one`, profiles: all });
       items.push({ label: '', kind: vscode.QuickPickItemKind.Separator });
     }
-    items.push(...view.profiles.map((profile) => ({ label: profile.name, description: profileDescription(profile), profiles: [profile] })));
+    items.push(...others.map((profile) => ({ label: profile.name, description: [profileDescription(profile), profile.disabled ? 'Disabled' : undefined].filter(Boolean).join(' · ') || undefined, profiles: [profile] })));
     items.push({ label: '', kind: vscode.QuickPickItemKind.Separator });
     items.push({ label: '$(arrow-left) Back', description: `${TITLES[view.provider]} accounts` });
     const picked = await vscode.window.showQuickPick(items, { title: `Send a ${TITLES[view.provider]} keep-alive now` });

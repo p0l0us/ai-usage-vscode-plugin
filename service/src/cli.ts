@@ -459,8 +459,9 @@ export async function main(argv: string[], io?: CliOutput): Promise<number> {
         const service = provider(rest[0]);
         return withClient(home, ['keepAliveProgress', 'waiting'], async (client) => {
           const view = await client.list(service);
-          const targets = flags.all || !rest[1] ? view.profiles : view.profiles.filter((candidate) => matches(candidate, rest.slice(1).join(' ')));
-          if (!targets.length) { throw new UsageError(rest[1] ? `No ${TITLES[service]} profile matches "${rest.slice(1).join(' ')}".` : `No ${TITLES[service]} profiles are saved.`); }
+          // The active login is kept fresh by the user's own use and is left out of a sweep; named, the service says so.
+          const targets = flags.all || !rest[1] ? view.profiles.filter((candidate) => !candidate.active) : view.profiles.filter((candidate) => matches(candidate, rest.slice(1).join(' ')));
+          if (!targets.length) { throw new UsageError(rest[1] ? `No ${TITLES[service]} profile matches "${rest.slice(1).join(' ')}".` : `No ${TITLES[service]} profiles are saved${view.profiles.length ? ' other than the active login' : ''}.`); }
           if (!rest[1] && !flags.all && targets.length > 1 && !await confirm(`Send the keep-alive to all ${targets.length} ${TITLES[service]} accounts?`, flags)) { return 1; }
           const token = `cli-${process.pid}-${Date.now()}`;
           const onInterrupt = () => { void client.cancel(token).catch(() => undefined); };

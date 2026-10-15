@@ -6,7 +6,7 @@ import * as path from 'path';
 import { createHash, randomUUID } from 'crypto';
 import { AuthProvider, StoredCredential, writeJsonAtomically } from './authFiles';
 import { CacheEntry, deserializeUsage } from './cache';
-import { formatResetRemaining, LiveUsage, usageHasExpiredReset, UsageWindow } from './live';
+import { formatResetRemaining, LiveResult, LiveUsage, usageHasExpiredReset, UsageWindow } from './live';
 import { AccountLock, ProbeSettings, ProbeResult, acquireAccountLock, explainAccountProblem, isLoginProblem, needsSignIn, probeAccount, resetCodexAccount } from './accountProbe';
 import { sleep } from './apiBudget';
 import type { ActivationChange } from './profileStore';
@@ -67,6 +67,12 @@ export interface AutomationProfiles {
   refreshedCredential(provider: AuthProvider, id: string, before: StoredCredential, after: StoredCredential): Promise<void>;
   matchesNative(provider: AuthProvider, id: string): Promise<boolean>;
   activateProfile(provider: AuthProvider, id: string, automatic?: boolean): Promise<boolean>;
+  /**
+   * Reads the usage of the active login where it is in use, the native CLI home, so the active account is never
+   * exercised from its profile home: the same login from a second installation is what the vendor may treat as a
+   * compromised session. Undefined: the active account is read like any other.
+   */
+  readActiveUsage?(provider: AuthProvider): Promise<LiveResult>;
 }
 
 /** One past reading of an account: when it was taken and what each window showed, kept to measure usage rates. */
@@ -437,6 +443,14 @@ export class AccountAutomation {
     return state.activeId === active && state.checkedAt !== undefined ? this.now() - state.checkedAt : undefined;
   }
 
+  /**
+   * Whether the profile is the active login the user's own CLI holds, on a host that can read that login itself
+   * (`readActiveUsage`): such a login is never exercised from its profile home, by a check or a keep-alive.
+   */
+  private async inUseNatively(provider: AuthProvider, id: string): Promise<boolean> {
+    return this.profiles.readActiveUsage !== undefined && this.profiles.activeProfileId(provider) === id && await this.profiles.matchesNative(provider, id);
+  }
+
   /** How fast each window of `usage` is being used, from the account's earlier readings. */
   private rates(provider: AuthProvider, id: string, usage: LiveUsage): Map<string, number> {
     return usageRates(this.read(provider, id).samples, usage);
@@ -603,9 +617,12 @@ export class AccountAutomation {
    * `callerReports`: the caller tells the user about a dead login itself, from the returned errors, so
    * `onAccountProblem` is not told about it; the login still counts as announced, and later checks stay quiet.
    */
-  sendKeepAliveNow(provider: AuthProvider, id: string, { callerReports = false, wait }: { callerReports?: boolean; wait?: LockWait } = {}): Promise<KeepAliveNowResult> {
+  async sendKeepAliveNow(provider: AuthProvider, id: string, { callerReports = false, wait }: { callerReports?: boolean; wait?: LockWait } = {}): Promise<KeepAliveNowResult> {
     const held = this.heldFor(provider);
-    if (held) { return Promise.reject(new Error(`${held.charAt(0).toUpperCase()}${held.slice(1)}; keep-alives wait until it finishes.`)); }
+    if (held) { throw new Error(`${held.charAt(0).toUpperCase()}${held.slice(1)}; keep-alives wait until it finishes.`); }
+    if (await this.inUseNatively(provider, id)) {
+      throw new Error(`“${this.account(provider, id).name}” is the active login: your own use keeps it fresh, and a keep-alive would exercise it from a second installation.`);
+    }
     // A manual call counts as this account's latest keep-alive for the periodic schedule.
     return this.checkNow(provider, id, true, (state) => ({ ...state, lastKeepAliveAt: this.now() }), !callerReports, wait);
   }
@@ -755,6 +772,8 @@ export class AccountAutomation {
         for (const profile of this.profiles.profiles(provider)) {
           if (this.disposed || this.paused || this.holds.has(provider) || !this.settings(provider).enabled) { break; }
           if (profile.disabled) { continue; }
+          // The active login is kept fresh by the user's own use; a keep-alive would exercise it from a second installation.
+          if (await this.inUseNatively(provider, profile.id)) { continue; }
           const due = () => {
             const state = this.read(provider, profile.id);
             return state.lastKeepAliveAt === undefined || this.now() - state.lastKeepAliveAt >= settings.intervalMs ? state : undefined;
@@ -790,14 +809,21 @@ export class AccountAutomation {
     this.locks.get(provider)?.touch();
     let outcome: ProbeResult;
     let credential: StoredCredential | undefined;
+    let native = false;
     const active = this.profiles.activeProfileId(provider) === id;
     if (active) { this.checkingActive.add(provider); }
     try {
-      credential = await this.profiles.credential(provider, id);
-      if (!credential) { throw new Error('Saved credential is missing.'); }
-      const accountSettings = this.profiles.probeSettings?.(provider, id, settings) ?? settings;
-      outcome = await this.probe(provider, credential, accountSettings, keepAlive, this.abort.signal);
-      await this.profiles.refreshedCredential(provider, id, credential, outcome.credential);
+      // The active login is in use by the user's own CLI: its usage is read there, never from its profile home.
+      native = active && !keepAlive && await this.inUseNatively(provider, id);
+      if (native) {
+        outcome = { credential: {}, result: await this.profiles.readActiveUsage!(provider) };
+      } else {
+        credential = await this.profiles.credential(provider, id);
+        if (!credential) { throw new Error('Saved credential is missing.'); }
+        const accountSettings = this.profiles.probeSettings?.(provider, id, settings) ?? settings;
+        outcome = await this.probe(provider, credential, accountSettings, keepAlive, this.abort.signal);
+        await this.profiles.refreshedCredential(provider, id, credential, outcome.credential);
+      }
     } catch (error) {
       outcome = { credential: {}, result: { kind: 'error', provider, title: provider,
         message: error instanceof Error ? error.message : 'Account check failed.' } };
@@ -805,7 +831,10 @@ export class AccountAutomation {
       if (active) { this.checkingActive.delete(provider); }
     }
     const state = this.read(provider, id);
-    const result = outcome.result;
+    // A native read over HTTPS carries no earned-reset count (only the CLI reports it); the last known count stays.
+    const previousCredits = native && provider === 'codex' ? deserializeUsage(state)?.resetCredits : undefined;
+    const result: LiveResult = outcome.result.kind === 'ok' && previousCredits && !outcome.result.usage.resetCredits
+      ? { kind: 'ok', usage: { ...outcome.result.usage, resetCredits: previousCredits } } : outcome.result;
     const usageError = result.kind === 'ok' ? undefined
       : result.kind === 'error' ? result.message : result.reason ?? 'Usage unavailable.';
     const credited = result.kind === 'ok' ? this.countResetCredits(provider, state, result.usage) : undefined;

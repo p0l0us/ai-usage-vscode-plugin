@@ -113,6 +113,10 @@ Code set to Sonnet, an account at `7d Fable` 100% and `7d` 30% is a normal candi
   of trusting its stored reading, which may be hours old.
 - The service refreshes the active login according to its source interval, even without VS Code. The one-minute
   automation scheduler also considers stored account readings; enabled keep-alives update other saved accounts.
+- **The active account is read only through the native login**, never from its profile home, and gets no keep-alive
+  while it is the login in use. The same login exercised from a second installation (the profile home has its own
+  Codex installation id) is what the vendor may treat as a compromised session and revoke. A keep-alive sweep leaves
+  the active login out; naming it by hand is refused with the reason.
 - When the active account cannot be read (its checks are paused after a provider error), the sweep is retried as
   soon as that pause ends, not a full check interval later.
 

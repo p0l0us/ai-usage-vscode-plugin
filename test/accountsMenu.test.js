@@ -638,17 +638,18 @@ test('Settings opens the service-specific settings and closes the menu', async (
 });
 
 test('keep-alive now: one account, all of them, Back and Escape', async () => {
-  const f = fixture({ claude: baseView('claude', [profile({ active: true }), profile({ id: 'b', name: 'Other', number: 2 })]) });
+  // The active login (Work) is never kept alive: it is not offered, and "All accounts" means the others.
+  const f = fixture({ claude: baseView('claude', [profile({ active: true }), profile({ id: 'b', name: 'Other', number: 2 }), profile({ id: 'c', name: 'Third', number: 3 })]) });
   const sent = [];
   const hooks = hooksOf({ sendKeepAlive: async (provider, profiles) => { sent.push([provider, profiles.map((p) => p.id)]); } });
   quickPickResponses.push(pickAction('keepAliveNow'), (items, options) => {
     assert.equal(options.title, 'Send a Claude keep-alive now');
-    assert.deepEqual(items.filter((item) => item.kind !== -1).map((item) => item.label), ['$(run-all) All accounts', 'Work', 'Other', '$(arrow-left) Back']);
-    assert.equal(items[0].description, '2 saved accounts, one by one');
+    assert.deepEqual(items.filter((item) => item.kind !== -1).map((item) => item.label), ['$(run-all) All accounts', 'Other', 'Third', '$(arrow-left) Back']);
+    assert.equal(items[0].description, '2 saved accounts other than the active one, one by one');
     return items[0];
   }, undefined);
   await f.menu.show('claude', hooks);
-  assert.deepEqual(sent, [['claude', ['a', 'b']]]);
+  assert.deepEqual(sent, [['claude', ['b', 'c']]]);
   quickPickResponses.push(pickAction('keepAliveNow'), (items) => items.find((item) => item.label === 'Other'), undefined);
   await f.menu.show('claude', hooks);
   assert.deepEqual(sent.at(-1), ['claude', ['b']]);

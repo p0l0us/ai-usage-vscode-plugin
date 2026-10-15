@@ -41,7 +41,7 @@ export type HostOptions = {
   engineOptions?: EngineTestOptions;
 };
 
-export type EngineTestOptions = Partial<Pick<AccountServiceOptions, 'fetchUsage' | 'usageIdentity' | 'now' | 'probe' | 'reset' | 'identityOf' | 'verifyCodex' | 'syncClaudeMetadata'>>;
+export type EngineTestOptions = Partial<Pick<AccountServiceOptions, 'fetchUsage' | 'readNativeUsage' | 'usageIdentity' | 'now' | 'probe' | 'reset' | 'identityOf' | 'verifyCodex' | 'syncClaudeMetadata'>>;
 
 export type StopInfo = { by: 'host' | 'client' | 'signal' | 'lease-lost'; client?: string; reason?: string };
 
@@ -157,7 +157,7 @@ async function hostWithLease(home: string, mode: HostMode, version: string, leas
   const token = readOrCreateToken(home);
   const identity: HostIdentity = { mode, instanceId: lease.instanceId, protocol: SERVICE_PROTOCOL_VERSION, capabilities: HOST_CAPABILITIES, lease: lease.kind };
   const fixtures: EngineTestOptions = {};
-  for (const key of ['fetchUsage', 'usageIdentity', 'now', 'probe', 'reset', 'identityOf', 'verifyCodex', 'syncClaudeMetadata'] as const) {
+  for (const key of ['fetchUsage', 'readNativeUsage', 'usageIdentity', 'now', 'probe', 'reset', 'identityOf', 'verifyCodex', 'syncClaudeMetadata'] as const) {
     if (options.engineOptions?.[key] !== undefined) { (fixtures as Record<string, unknown>)[key] = options.engineOptions[key]; }
   }
   const service = new AccountService({ ...fixtures, home, version, log: (message) => logger.log(message), privateProfiles: options.privateProfiles,
