@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { ProfileHomes } = require('../out/profileHomes');
-const { stagedCredentialPath } = require('../out/accountProbe');
+const { stagedCredentialPath, acquireAccountLock } = require('../out/accountProbe');
 const { applyCodexProxyProvider } = require('../out/codexConfig');
 
 const credential = token => ({ claudeAiOauth: { accessToken: token, refreshToken: `refresh-${token}` } });
@@ -104,4 +104,18 @@ test('a rejected store compare-and-swap leaves the CLI refresh available for rec
   await assert.rejects(f.homes.synchronize('claude', home, credential('initial'), async () => credential('different')), /changed while/);
   assert.deepEqual(JSON.parse(fs.readFileSync(stagedCredentialPath('claude', home))), credential('refreshed'));
   assert.ok(!fs.existsSync(path.join(home, '.ai-usage.lock')));
+});
+
+test('a switch or save that meets a running check waits for the profile home instead of failing', async t => {
+  const f = fixture(t);
+  const home = f.homes.resolve('claude', 'a', ['a'], f.template('claude'));
+  const held = acquireAccountLock(path.join(home, '.ai-usage.lock'));
+  assert.ok(held);
+  let settled = false;
+  const pending = f.homes.synchronize('claude', home, credential('initial'), async (_, after) => after).then((result) => { settled = true; return result; });
+  await new Promise((resolve) => setTimeout(resolve, 400));
+  assert.equal(settled, false, 'the sync waits while the check holds the home');
+  held.release();
+  assert.deepEqual(await pending, credential('initial'));
+  assert.equal(settled, true);
 });

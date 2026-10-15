@@ -4,9 +4,16 @@ import * as os from 'os';
 import * as path from 'path';
 import { ApiCallBudget } from './apiBudget';
 import { AuthProvider, StoredCredential, nativeCredentialPath, parseCredentialJson, writeJsonAtomically } from './authFiles';
-import { LiveResult, consumeCodexResetCredit, fetchClaudeUsage, fetchCodexUsageCli, resolveCli } from './live';
+import { LiveResult, consumeCodexResetCredit, fetchClaudeUsage, fetchCodexUsage, fetchCodexUsageCli, resolveCli } from './live';
 
-export type ProbeSettings = { home: string; cliPath: string; model: string; persistent?: boolean };
+export type ProbeSettings = {
+  home: string; cliPath: string; model: string; persistent?: boolean;
+  /** Codex: also read the earned-reset count, which only the CLI reports; otherwise the usage endpoint is read over HTTPS without starting the CLI. */
+  creditsRead?: boolean;
+};
+
+/** How a Codex probe reads usage; tests replace both. */
+export type CodexUsageFetchers = { http: typeof fetchCodexUsage; cli: typeof fetchCodexUsageCli };
 export type ProbeResult = { result: LiveResult; credential: StoredCredential; keepAliveError?: string };
 
 /** A sweep reads several accounts in a row; waiting out the shared spacing beats being rate-limited. */
@@ -251,9 +258,24 @@ export async function claudeUsage(home: string, signal: AbortSignal, budget?: Ap
   return fetchClaudeUsage(home, budget);
 }
 
+/**
+ * Codex usage from the staged login: over HTTPS, with no CLI start and no token refresh, unless the earned-reset
+ * count is wanted (a keep-alive, or `creditsRead`) or the token needs the refresh only the CLI performs.
+ */
+async function codexUsage(settings: ProbeSettings, home: string, env: NodeJS.ProcessEnv, keepAlive: boolean, fetchers: CodexUsageFetchers): Promise<LiveResult> {
+  if (keepAlive || settings.creditsRead) { return fetchers.cli(settings.cliPath, home, env, home); }
+  const direct = await fetchers.http(home);
+  if (direct.kind === 'error' && (direct.status === 401 || direct.status === 403 || /expired/i.test(direct.message))) {
+    // An expired login is refreshed by the CLI; a rejected one gets one CLI attempt, which also says why.
+    return fetchers.cli(settings.cliPath, home, env, home);
+  }
+  return direct;
+}
+
 /** Use an account's separate home, make a small call, then collect all limit windows. */
 export async function probeAccount(provider: AuthProvider, credential: StoredCredential, settings: ProbeSettings,
-  keepAlive: boolean, signal: AbortSignal, budget?: ApiCallBudget): Promise<ProbeResult> {
+  keepAlive: boolean, signal: AbortSignal, budget?: ApiCallBudget,
+  fetchers: CodexUsageFetchers = { http: fetchCodexUsage, cli: fetchCodexUsageCli }): Promise<ProbeResult> {
   const home = isolatedHome(provider, settings.home);
   const lock = acquireAccountLock(path.join(home, '.ai-usage.lock'));
   if (!lock) { throw new Error('Another account check is using the keep-alive home.'); }
@@ -288,7 +310,7 @@ export async function probeAccount(provider: AuthProvider, credential: StoredCre
     const result: LiveResult = signal.aborted
       ? { kind: 'unavailable', provider, reason: 'Account check cancelled.' }
       : provider === 'claude' ? await claudeUsage(home, signal, budget)
-        : await fetchCodexUsageCli(settings.cliPath, home, env, home);
+        : await codexUsage(settings, home, env, keepAlive, fetchers);
     // Codex app-server can also refresh its token while reading limits. Keep that newer credential when valid,
     // but never turn a completed usage check into an error because a CLI removed the temporary auth file.
     try {

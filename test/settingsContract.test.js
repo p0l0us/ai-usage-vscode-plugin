@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const manifest = require('../package.json');
-const { SETTINGS, GLOBAL_SETTINGS, settingScope, defaultConfig, listConfig } = require('../service/out/configStore');
+const { SETTINGS, GLOBAL_SETTINGS, settingScope, defaultConfig, listConfig, getConfigValue, setConfigValue } = require('../service/out/configStore');
 
 /**
  * The contract between package.json's `aiUsage.*` settings and the service's engine settings. configSync.test.js
@@ -93,4 +93,15 @@ test('the known deviations are still real', () => {
     if (kind === 'minimum') assert.notEqual(spec.minimum, entry.schema.min, `${name} no longer deviates`);
     if (kind === 'maximum') assert.notEqual(spec.maximum, entry.schema.max, `${name} no longer deviates`);
   }
+});
+
+test('every VS Code setting is also a validated standalone CLI setting, with identical defaults', () => {
+  const manifest = require('../package.json'); const config = defaultConfig();
+  for (const block of manifest.contributes.configuration) for (const [key, schema] of Object.entries(block.properties)) {
+    const dotted = key.replace(/^aiUsage\./, '');
+    assert.deepEqual(getConfigValue(config, dotted), schema.default, key);
+    if (schema.default !== undefined) assert.deepEqual(getConfigValue(setConfigValue(config, dotted, schema.default), dotted), schema.default);
+  }
+  assert.equal(getConfigValue(setConfigValue(config, 'codexConfig.agents.maxDepth', 'null'), 'codexConfig.agents.maxDepth'), null);
+  assert.deepEqual(getConfigValue(setConfigValue(config, 'accounts', '[{"name":"test"}]'), 'accounts'), [{ name: 'test' }]);
 });

@@ -86,6 +86,29 @@ export function staleCodexProcesses(processes: ProcessInfo[], parentPid: number,
     process.ppid === parentPid && isCodexAppServer(process.command) && process.startedAt < switchedAt - START_TIME_GRACE_MS);
 }
 
+/**
+ * A per-window app-server a VS Code extension host started from the extension's own directory. The extension never
+ * respawns it, so ending it would break that window's Codex chat; the restart hint covers those.
+ */
+export function isExtensionOwnedCodexAppServer(command: string): boolean {
+  return /[\\/]extensions[\\/][^\\/]+[\\/]/i.test(command);
+}
+
+/** The code-mode host a Codex app-server daemon starts beside itself; it goes with the daemon. */
+export function isCodexDaemonHelper(command: string): boolean {
+  return /(^|[\\/\s"'])codex-code-mode-host(\.exe)?["']?(\s|$)/i.test(command);
+}
+
+/**
+ * Codex app-servers of this user that outlived a login change at `changedAt` and that Codex starts again by itself
+ * with the current login: the shared `app-server daemon`, its code-mode host, and the VS Code agent host's SDK
+ * server. Extension-owned servers and AI Usage's own short-lived ones are left out.
+ */
+export function staleCodexDaemons(processes: ProcessInfo[], changedAt: number, ownPid = process.pid): ProcessInfo[] {
+  return processes.filter((process) => process.pid !== ownPid && process.startedAt < changedAt - START_TIME_GRACE_MS &&
+    ((isCodexAppServer(process.command) && !isExtensionOwnedCodexAppServer(process.command)) || isCodexDaemonHelper(process.command)));
+}
+
 function run(file: string, args: string[]): Promise<string> {
   return new Promise((resolve, reject) => {
     execFile(file, args, { maxBuffer: 16 * 1024 * 1024, windowsHide: true }, (error, stdout) => {
@@ -106,6 +129,53 @@ export async function listProcesses(now = Date.now()): Promise<ProcessInfo[]> {
     return parseWindowsListing(await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script]));
   }
   return parsePsListing(await run('ps', ['-eo', 'pid=,ppid=,etime=,args=']), now);
+}
+
+/** This user's processes on POSIX (`ps -u`); on Windows every process the query can see. */
+export async function listOwnProcesses(now = Date.now()): Promise<ProcessInfo[]> {
+  if (process.platform === 'win32') { return listProcesses(now); }
+  const uid = process.getuid?.();
+  return parsePsListing(await run('ps', uid === undefined ? ['-eo', 'pid=,ppid=,etime=,args='] : ['-u', String(uid), '-o', 'pid=,ppid=,etime=,args=']), now);
+}
+
+export type Signaller = (pid: number, signal: NodeJS.Signals | 0) => void;
+
+/**
+ * Ends a process: TERM, then KILL once `graceMs` has passed and it is still there. Resolves to whether it is gone;
+ * a process that is not ours (EPERM) stays and reports false, one already gone reports true.
+ */
+export async function terminateProcess(pid: number, graceMs = 3_000, signal: Signaller = (target, sig) => { process.kill(target, sig); },
+  sleep: (ms: number) => Promise<void> = (ms) => new Promise((resolve) => setTimeout(resolve, ms))): Promise<boolean> {
+  const alive = () => { try { signal(pid, 0); return true; } catch (error) { return (error as NodeJS.ErrnoException).code === 'EPERM'; } };
+  if (process.platform === 'win32') {
+    try { await run('taskkill', ['/PID', String(pid), '/T', '/F']); } catch { /* Gone already, or not ours. */ }
+    return !alive();
+  }
+  try { signal(pid, 'SIGTERM'); } catch (error) { return (error as NodeJS.ErrnoException).code === 'ESRCH'; }
+  const deadline = Date.now() + graceMs;
+  while (Date.now() < deadline) {
+    if (!alive()) return true;
+    await sleep(100);
+  }
+  if (alive()) {
+    try { signal(pid, 'SIGKILL'); } catch { /* Raced with its exit. */ }
+    await sleep(100);
+  }
+  return !alive();
+}
+
+export type StaleDaemonSweep = { ended: ProcessInfo[]; kept: ProcessInfo[] };
+
+/** Finds this user's stale Codex daemons (see `staleCodexDaemons`) and ends them; `kept` names those that would not go. */
+export async function terminateStaleCodexDaemons(changedAt: number,
+  deps: { list?: () => Promise<ProcessInfo[]>; terminate?: (pid: number) => Promise<boolean> } = {}): Promise<StaleDaemonSweep> {
+  let processes: ProcessInfo[];
+  try { processes = await (deps.list ?? listOwnProcesses)(); } catch { return { ended: [], kept: [] }; }
+  const ended: ProcessInfo[] = [], kept: ProcessInfo[] = [];
+  for (const stale of staleCodexDaemons(processes, changedAt)) {
+    (await (deps.terminate ?? terminateProcess)(stale.pid) ? ended : kept).push(stale);
+  }
+  return { ended, kept };
 }
 
 /**

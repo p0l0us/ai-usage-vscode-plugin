@@ -39,6 +39,52 @@ test('findNode accepts the fallback runtime when nothing is on PATH and rejects 
   }
 });
 
+function installFixture(t) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-reinstall-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const options = { home: path.join(root, 'home'), sourceDir: servicePackageDir(),
+    node: { command: process.execPath, args: [], env: {}, version: process.version.slice(1), source: 'test' }, autostart: false };
+  return { root, options, installed: installService(options) };
+}
+
+test('the installed package can reinstall itself and keeps its bridge, license and launcher', t => {
+  const { options, installed } = installFixture(t);
+  const reinstalled = installService({ ...options, sourceDir: installed.dir });
+  assert.equal(reinstalled.dir, installed.dir);
+  for (const file of ['out/cli.js', 'out/index.d.ts', 'bridge/src/cli.mjs', 'LICENSE']) {
+    assert.equal(fs.readFileSync(path.join(reinstalled.dir, file), 'utf8'), fs.readFileSync(path.join(servicePackageDir(), file), 'utf8'));
+  }
+  const result = require('node:child_process').spawnSync(process.execPath, [path.join(reinstalled.dir, 'bin/ai-usage.js'), '--version'], { encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout.trim(), installed.version);
+  assert.equal(readCurrentInstall(options.home).dir, installed.dir);
+});
+
+test('an incomplete replacement leaves the current install and launcher usable', t => {
+  const { root, options, installed } = installFixture(t);
+  const source = path.join(root, 'incomplete');
+  fs.mkdirSync(path.join(source, 'bin'), { recursive: true });
+  fs.copyFileSync(path.join(installed.dir, 'package.json'), path.join(source, 'package.json'));
+  fs.writeFileSync(path.join(source, 'bin/ai-usage.js'), '// incomplete replacement');
+  const before = fs.readFileSync(path.join(installed.dir, 'bin/ai-usage.js'), 'utf8');
+  assert.throws(() => installService({ ...options, sourceDir: source }));
+  assert.equal(fs.readFileSync(path.join(installed.dir, 'bin/ai-usage.js'), 'utf8'), before);
+  assert.ok(fs.existsSync(path.join(installed.dir, 'out/cli.js')));
+  assert.equal(readCurrentInstall(options.home).dir, installed.dir);
+  assert.deepEqual(fs.readdirSync(path.dirname(installed.dir)).filter(name => name.startsWith('.install-')), []);
+});
+
+test('package versions cannot escape the service install directory', t => {
+  const { root, options } = installFixture(t);
+  const source = path.join(root, 'malformed');
+  fs.mkdirSync(source);
+  fs.writeFileSync(path.join(source, 'package.json'), JSON.stringify({ version: '../../protected' }));
+  const protectedFile = path.join(options.home, 'protected', 'keep');
+  fs.mkdirSync(path.dirname(protectedFile)); fs.writeFileSync(protectedFile, 'preserved');
+  assert.throws(() => installService({ ...options, sourceDir: source }), /Invalid service package version/);
+  assert.equal(fs.readFileSync(protectedFile, 'utf8'), 'preserved');
+});
+
 test('installing copies the package, writes the launchers, and the service starts and stops from the install', async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-install-'));
   const home = path.join(root, 'home');

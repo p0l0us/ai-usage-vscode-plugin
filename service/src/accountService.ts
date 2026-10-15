@@ -1,7 +1,7 @@
 import { randomUUID, createHash } from 'crypto';
 import { projectQuota, projectResetCredits, StatusFilter, StatusRead, StatusSnapshot, StatusProvider, StatusNative, StatusCursor } from './statusProjection';
 import { mcpCli, mcpCommand, readMcpRegistration, registerMcpServer, unregisterMcpServer } from './mcpRegistration';
-import { findStaleCodexProcesses } from './codexProcesses';
+import { findStaleCodexProcesses, StaleDaemonSweep } from './codexProcesses';
 import { UsageMonitor, UsageContext, UsageStateView, usageSettings, nativeUsageIdentity, serializeUsageState } from './usageMonitor';
 import { ServiceRuntime } from './runtime';
 import { readCurrentSessionTokens } from './sessionTokens';
@@ -11,7 +11,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { ApiCallBudget, sleep } from './apiBudget';
-import { AuthProvider, StoredCredential, parseCredentialJson, readNativeCredential } from './authFiles';
+import { AuthProvider, StoredCredential, parseCredentialJson, readNativeCredential, writeJsonAtomically } from './authFiles';
 import { activateClaudeAccountMetadata, claudeAccountFileConfirms, CredentialIdentity } from './accountIdentity';
 import { AccountAutomation, AutomationProfiles, KeepAliveNowResult, LockWait } from './accountAutomation';
 import {
@@ -59,6 +59,11 @@ export type AccountServiceOptions = {
   syncClaudeMetadata?: typeof activateClaudeAccountMetadata;
   /** Injected by tests: the usage of the native login, read for the active account instead of probing its profile home. */
   readNativeUsage?: (provider: AuthProvider) => Promise<LiveResult>;
+  /**
+   * Ends this user's Codex daemons that started before `changedAt`; the host passes the real sweep, tests a fake.
+   * Without it nothing is ended: an engine driven by tests must never touch the machine's processes.
+   */
+  terminateStaleCodexDaemons?: (changedAt: number) => Promise<StaleDaemonSweep>;
   now?: () => number;
   /** Where the private profiles are kept; profiles.json in the home by default. */
   privateProfiles?: PrivateProfileBackend;
@@ -155,6 +160,8 @@ export class AccountService {
   clientCount: () => number = () => 0;
 
   private readonly claudeBudget: ApiCallBudget;
+  /** The engine's state directory (budgets, account readings, the Codex login change time). */
+  private readonly statesDir: string;
   private readonly log: (message: string) => void;
   private readonly now: () => number;
   private timer?: NodeJS.Timeout;
@@ -190,6 +197,7 @@ export class AccountService {
     });
     this.store.verifyActivation = (provider, credential, expected) => this.verifyActivation(provider, credential, expected);
     const states = stateDir(options.home);
+    this.statesDir = states;
     this.profileHomes = new ProfileHomes(states, key => getConfigValue(this.config, key.replace(/^aiUsage\./, '')));
     this.claudeBudget = new ApiCallBudget(path.join(states, 'claude-api-budget.json'),
       () => Math.min(600, Math.max(0, this.config.claude.api.minIntervalSeconds)) * 1000);
@@ -434,8 +442,45 @@ export class AccountService {
     if (changed) {
       const current = this.store.activeProfileId(provider);
       if (current) { this.recordSwitch(provider, previous, current, 'external'); }
+      if (provider === 'codex') { this.codexLoginChanged(); }
     }
     return changed;
+  }
+
+  private codexLoginFile(): string { return path.join(this.statesDir, 'codex-login.json'); }
+
+  /** When the native Codex login last changed as far as this service saw: a switch, a sign-in or an outside change. */
+  private codexLoginChangedAt(): number | undefined {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(this.codexLoginFile(), 'utf8')) as { changedAt?: unknown };
+      return typeof parsed.changedAt === 'number' && Number.isFinite(parsed.changedAt) ? parsed.changedAt : undefined;
+    } catch { return undefined; }
+  }
+
+  /** The native Codex login changed now: remember when, and end the daemons that still hold the previous one. */
+  private codexLoginChanged(): void {
+    const at = this.now();
+    try { writeJsonAtomically(this.codexLoginFile(), { changedAt: at }); } catch { /* Best effort: the next change writes it again. */ }
+    this.endStaleCodexDaemons(at);
+  }
+
+  /**
+   * Ends this user's Codex app-server daemons that started before `changedAt` (`codex.terminateStaleDaemons`): they
+   * keep the previous login in memory, can refresh it and rotate its token under the service's copy, and the vendor
+   * may then revoke the whole login. Codex starts them again with the current login when needed.
+   */
+  private endStaleCodexDaemons(changedAt: number): void {
+    const terminate = this.options.terminateStaleCodexDaemons;
+    if (!terminate || !this.config.codex.terminateStaleDaemons) { return; }
+    this.background(async () => {
+      const sweep = await terminate(changedAt);
+      for (const ended of sweep.ended) {
+        this.log(`codex: ended stale app-server pid ${ended.pid}, started ${new Date(ended.startedAt).toISOString()} before the login changed at ${new Date(changedAt).toISOString()}: ${ended.command.slice(0, 120)}`);
+      }
+      for (const kept of sweep.kept) {
+        this.log(`codex: could not end stale app-server pid ${kept.pid} (started ${new Date(kept.startedAt).toISOString()}): ${kept.command.slice(0, 120)}`);
+      }
+    });
   }
 
   historyInfo(): HistoryInfo {
@@ -477,6 +522,9 @@ export class AccountService {
     this.statusLifecycle = 'running';
     this.refreshStatus();
     this.history.prune();
+    // Daemons left from before the service last ran may still hold a login that has since changed.
+    const lastChange = this.codexLoginChangedAt();
+    if (lastChange !== undefined) { this.endStaleCodexDaemons(lastChange); }
     this.timer = setInterval(() => void this.tick().catch(() => undefined), TICK_MS);
     this.timer.unref?.();
     this.background(() => this.runtime.start());
@@ -789,13 +837,14 @@ export class AccountService {
 
   private async replaceAccountHome(provider: AuthProvider, id: string): Promise<void> {
     const credential = await this.store.credential(provider, id);
-    if (credential) this.profileHomes.replace(provider, this.accountHome(provider, id), credential);
+    if (credential) await this.profileHomes.replace(provider, this.accountHome(provider, id), credential);
   }
 
   private async activate(provider: AuthProvider, id: string, automatic: boolean): Promise<ActivationOutcome> {
     const previous = this.store.activeProfileId(provider);
     await this.accountCredential(provider, id);
     const outcome = await this.store.activateProfile(provider, id, automatic);
+    if (provider === 'codex' && outcome.accountChanged) { this.codexLoginChanged(); }
     // Rotation records its switches itself, with the candidates it considered.
     if (!automatic) { this.recordSwitch(provider, previous, id, 'manual'); }
     this.emit({ event: 'activated', provider, id: outcome.profile.id, name: outcome.profile.name, email: outcome.profile.email, automatic,
@@ -955,6 +1004,7 @@ export class AccountService {
         message: `You signed in as ${identity.email ?? identity.accountId}, but the profile “${profile.name}” holds ${profile.email ?? profile.accountId}.` };
     }
     const active = await this.automation.withPaused(() => this.store.replaceCredential(provider, id, credential));
+    if (provider === 'codex' && active) { this.codexLoginChanged(); }
     await this.replaceAccountHome(provider, id);
     fs.rmSync(file, { force: true });
     this.signInHomes.delete(provider);

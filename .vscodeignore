@@ -16,6 +16,9 @@ service/src/**
 service/test/**
 service/tsconfig.json
 service/node_modules/**
+service/scripts/**
+*.tgz
+service/*.tgz
 coverage/**
 reports/**
 .stryker-tmp/**
@@ -24,3 +27,4 @@ coverage-thresholds.json
 stryker.config.json
 .github/**
 CLAUDE.md
+media/icons/**

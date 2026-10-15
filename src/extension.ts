@@ -45,7 +45,7 @@ import {
   accountLabel, resetConfirmationDetail
 } from './accountMessages';
 import { displayedMcpCommand, mcpSetupItems, mcpWhere } from './mcpSetupItems';
-import { applyStatusItem, clickCommand, LiveProvider, statusItemModel, visibleUsage } from './statusItem';
+import { applyStatusItem, clickCommand, LiveProvider, showsSpinFrame, SPIN_FRAMES, statusItemModel, StatusItemModel, visibleUsage } from './statusItem';
 import {
   CHIP_COMMAND_PREFIX, PROVIDER_TITLES, chatTokenChipCommands, chatTokensMessage, chipCommands, chipContextValues, chipStyle,
   chipsInWorkbench, statusBarStyle, statusBarVisible as statusBarVisibleIn, updateIntervalMs as updateIntervalMsIn
@@ -776,6 +776,44 @@ function keepPrevious(provider: LiveProvider): void {
   provider.previous = visibleUsage(provider) ?? provider.previous;
 }
 
+/** Items whose logo is rotating, and the timer that advances their frame; it runs only while one is loading. */
+const spinningItems = new Set<LiveProvider>();
+let spinTimer: NodeJS.Timeout | undefined;
+const SPIN_INTERVAL_MS = 75;
+
+function trackSpin(provider: LiveProvider, model: StatusItemModel): void {
+  if (showsSpinFrame(model)) {
+    spinningItems.add(provider);
+  } else {
+    spinningItems.delete(provider);
+    provider.spinFrame = undefined;
+  }
+  if (spinningItems.size && !spinTimer) {
+    spinTimer = setInterval(() => {
+      for (const item of spinningItems) {
+        item.spinFrame = ((item.spinFrame ?? 0) + 1) % SPIN_FRAMES;
+        // Only the text changes, so an open hover is not rebuilt on every frame.
+        const frame = liveModel(item, new Date());
+        if (frame.visible && showsSpinFrame(frame)) { item.status.text = frame.text; } else { renderLive(item); }
+      }
+    }, SPIN_INTERVAL_MS);
+  } else if (!spinningItems.size && spinTimer) {
+    clearInterval(spinTimer);
+    spinTimer = undefined;
+  }
+}
+
+function liveModel(provider: LiveProvider, now: Date): StatusItemModel {
+  return statusItemModel(provider, {
+    barVisible: statusBarVisible(),
+    labels: statusBarStyle(workspaceConfig()).labels,
+    usageStyle: statusBarStyle(workspaceConfig()).usage,
+    earnedResetsEnabled: workspaceConfig().get<boolean>(CODEX_EARNED_RESETS_SETTING, true),
+    now,
+    serviceProblem: serviceState.problem()
+  });
+}
+
 function renderLive(provider: LiveProvider): void {
   const serviceProblem = serviceState.problem();
   // Only a connected service's view can say the active account changed; a lost connection keeps the last readings.
@@ -785,15 +823,9 @@ function renderLive(provider: LiveProvider): void {
     provider.lastGood = undefined;
   }
   const now = new Date();
-  const model = statusItemModel(provider, {
-    barVisible: statusBarVisible(),
-    labels: statusBarStyle(workspaceConfig()).labels,
-    usageStyle: statusBarStyle(workspaceConfig()).usage,
-    earnedResetsEnabled: workspaceConfig().get<boolean>(CODEX_EARNED_RESETS_SETTING, true),
-    now,
-    serviceProblem
-  });
+  const model = liveModel(provider, now);
   applyStatusItem(provider.status, model, clickCommand(provider.id), vscode, now);
+  trackSpin(provider, model);
 }
 
 /**
@@ -869,6 +901,8 @@ async function showDetailsPanel(providers: LiveProvider[], refreshAll: () => Pro
 }
 
 export async function deactivate(): Promise<void> {
+  if (spinTimer) { clearInterval(spinTimer); spinTimer = undefined; }
+  spinningItems.clear();
   await activeServices?.stop();
   activeServices = undefined;
 }

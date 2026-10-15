@@ -8,6 +8,7 @@ import { SERVICE_CAPABILITIES, SERVICE_PROTOCOL_VERSION } from './protocol';
 import type { HelloResult, ServiceInfo } from './protocol';
 import { serviceVersion } from './version';
 import { EngineLease, LeaseKind, acquireEngineLease, leaseHeld, defaultLeaseKind, tcpLeasePort } from './runtimeLease';
+import { terminateStaleCodexDaemons } from './codexProcesses';
 
 /**
  * The one way an account service engine runs, whether as the background daemon or inside a VS Code window: take the
@@ -41,7 +42,7 @@ export type HostOptions = {
   engineOptions?: EngineTestOptions;
 };
 
-export type EngineTestOptions = Partial<Pick<AccountServiceOptions, 'fetchUsage' | 'readNativeUsage' | 'usageIdentity' | 'now' | 'probe' | 'reset' | 'identityOf' | 'verifyCodex' | 'syncClaudeMetadata'>>;
+export type EngineTestOptions = Partial<Pick<AccountServiceOptions, 'fetchUsage' | 'readNativeUsage' | 'usageIdentity' | 'now' | 'probe' | 'reset' | 'identityOf' | 'verifyCodex' | 'syncClaudeMetadata' | 'terminateStaleCodexDaemons'>>;
 
 export type StopInfo = { by: 'host' | 'client' | 'signal' | 'lease-lost'; client?: string; reason?: string };
 
@@ -157,10 +158,12 @@ async function hostWithLease(home: string, mode: HostMode, version: string, leas
   const token = readOrCreateToken(home);
   const identity: HostIdentity = { mode, instanceId: lease.instanceId, protocol: SERVICE_PROTOCOL_VERSION, capabilities: HOST_CAPABILITIES, lease: lease.kind };
   const fixtures: EngineTestOptions = {};
-  for (const key of ['fetchUsage', 'readNativeUsage', 'usageIdentity', 'now', 'probe', 'reset', 'identityOf', 'verifyCodex', 'syncClaudeMetadata'] as const) {
+  for (const key of ['fetchUsage', 'readNativeUsage', 'usageIdentity', 'now', 'probe', 'reset', 'identityOf', 'verifyCodex', 'syncClaudeMetadata', 'terminateStaleCodexDaemons'] as const) {
     if (options.engineOptions?.[key] !== undefined) { (fixtures as Record<string, unknown>)[key] = options.engineOptions[key]; }
   }
-  const service = new AccountService({ ...fixtures, home, version, log: (message) => logger.log(message), privateProfiles: options.privateProfiles,
+  // The real process sweep belongs to a real host only: a host started with engine fixtures is a test's, and ends
+  // nothing on the machine unless its fixtures say otherwise.
+  const service = new AccountService({ ...(options.engineOptions ? {} : { terminateStaleCodexDaemons }), ...fixtures, home, version, log: (message) => logger.log(message), privateProfiles: options.privateProfiles,
     seedConfig: { ...(options.initialConfig ?? {}), ...(options.seedConfig ?? {}) }, ownership: lease });
   service.hostIdentity = identity;
   const socket = socketPath(home);

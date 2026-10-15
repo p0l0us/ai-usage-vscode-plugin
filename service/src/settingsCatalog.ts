@@ -442,6 +442,12 @@ export const SETTINGS_CATALOG = [
     "description": "After a Codex account switch, warn once per window when this window's Codex extension process started before the switch and offer **Restart extensions**. Off by default: the warning interrupts every window that holds an older Codex process. A running Codex process keeps its login in memory and fails turns once the credential file changes underneath it; VS Code cannot restart a single extension, so restarting the extension host is the lightest repair. Turn this on to be reminded, or enable `#aiUsage.codex.proxy.enabled#` so open chats follow a switch by themselves. New Codex CLI sessions need nothing."
   },
   {
+    "key": "codex.terminateStaleDaemons",
+    "type": "boolean",
+    "default": true,
+    "description": "**End stale Codex daemons.** After a Codex account switch, sign-in or outside login change, and when the account service starts, end this user's Codex `app-server` processes that started before the change and are not a VS Code extension's own: the shared `app-server daemon` with its code-mode host, and the VS Code agent host's SDK server. Codex starts them again with the current login when needed. A process that outlives a login change keeps the previous login in memory, can refresh and rotate its token under the service's copy, and the vendor may then revoke the whole login. Per-window extension processes are left alone; see `#aiUsage.codex.switchRestartHint#`."
+  },
+  {
     "key": "codex.proxy.enabled",
     "type": "boolean",
     "default": false,

@@ -143,16 +143,7 @@ test('the history block is a global setting: on by default, a year of retention,
   assert.deepEqual(listConfig(config).map((entry) => entry.key).filter((key) => key.startsWith('history.')), ['history.enabled', 'history.retentionDays', 'history.directory']);
 });
 
-test('every VS Code setting is also a validated standalone CLI setting, with identical defaults', () => {
-  const manifest = require('../../package.json'); const config = defaultConfig();
-  for (const block of manifest.contributes.configuration) for (const [key, schema] of Object.entries(block.properties)) {
-    const dotted = key.replace(/^aiUsage\./, '');
-    assert.deepEqual(getConfigValue(config, dotted), schema.default, key);
-    if (schema.default !== undefined) assert.deepEqual(getConfigValue(setConfigValue(config, dotted, schema.default), dotted), schema.default);
-  }
-  assert.equal(getConfigValue(setConfigValue(config, 'codexConfig.agents.maxDepth', 'null'), 'codexConfig.agents.maxDepth'), null);
-  assert.deepEqual(getConfigValue(setConfigValue(config, 'accounts', '[{"name":"test"}]'), 'accounts'), [{ name: 'test' }]);
-});
+
 
 
 test('new clients default to auto with 30-minute checks and opt-in reset confirmation', () => {

@@ -361,3 +361,35 @@ test('known keep-alive and usage errors read as a short description with advice'
   const unknown = explainAccountProblem('Keep-alive CLI exited with code 2: Something odd happened.');
   assert.deepEqual(unknown, { label: 'Something odd happened', known: false });
 });
+
+test('Codex usage is read over HTTPS without starting the CLI, unless the earned-reset count is wanted or the token needs the CLI', async t => {
+  const root = temporary(t), home = path.join(root, 'codex-tmp');
+  const calls = [];
+  const ok = (via) => ({ kind: 'ok', usage: { provider: 'codex', title: 'Codex', fetchedAt: new Date(), windows: [{ label: '5h', usedPercent: 10 }],
+    ...(via === 'cli' ? { resetCredits: { availableCount: 1 } } : {}) } });
+  const fetchers = { http: async () => { calls.push('http'); return ok('http'); }, cli: async () => { calls.push('cli'); return ok('cli'); } };
+  const credential = { tokens: { access_token: 'test-token', account_id: 'account-b' } };
+  const settings = { home, cliPath: 'codex', model: '' };
+  const probe = (overrides = {}) => probeAccount('codex', credential, { ...settings, ...overrides }, false, new AbortController().signal, undefined, fetchers);
+  let result = await probe();
+  assert.deepEqual(calls, ['http']);
+  assert.equal(result.result.usage.resetCredits, undefined);
+  calls.length = 0;
+  result = await probe({ creditsRead: true });
+  assert.deepEqual(calls, ['cli']);
+  assert.equal(result.result.usage.resetCredits.availableCount, 1);
+  // A token the endpoint rejects, or one that has expired, gets the CLI, which refreshes it; a network error does not.
+  for (const refused of [{ kind: 'error', provider: 'codex', title: 'Codex', message: 'Not authorized. Run `codex login` to sign in again.', status: 401 },
+    { kind: 'error', provider: 'codex', title: 'Codex', message: 'Login token expired. Run `codex` once to refresh it.' }]) {
+    calls.length = 0;
+    fetchers.http = async () => { calls.push('http'); return refused; };
+    result = await probe();
+    assert.deepEqual(calls, ['http', 'cli']);
+    assert.equal(result.result.kind, 'ok');
+  }
+  calls.length = 0;
+  fetchers.http = async () => { calls.push('http'); return { kind: 'error', provider: 'codex', title: 'Codex', message: 'Request failed: timed out', transient: true }; };
+  result = await probe();
+  assert.deepEqual(calls, ['http']);
+  assert.equal(result.result.kind, 'error');
+});

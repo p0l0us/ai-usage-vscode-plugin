@@ -289,6 +289,15 @@ editors and terminals stay open and Codex chats reopen from their local session 
 restarts by itself. The warning is off by default because it interrupts every window holding an older Codex
 process.
 
+**Stale Codex daemons** (`aiUsage.codex.terminateStaleDaemons`, on by default). A Codex process that outlives a login
+change keeps the previous login in memory, can refresh it and rotate its token under the service's copy, and the
+vendor may then revoke the whole login. After a switch, a sign-in or an outside login change, and when the account
+service starts, the service ends this user's Codex `app-server` processes that started before the change and are
+not a VS Code extension's own: the shared `app-server daemon` with its code-mode host, and the VS Code agent host's
+SDK server. Codex starts them again with the current login when needed. Per-window extension processes are left
+alone (the restart hint above covers them), as are AI Usage's own short-lived servers. The service log names every
+process it ended.
+
 Right after the write, AI Usage starts a fresh `codex app-server` on the native home and checks that the login it
 reports (`getAuthStatus`, falling back to `account/read`) is the activated profile. A mismatch is shown as an error
 instead of the success message; the previous `auth.json` remains recoverable from its saved profile because refreshed
@@ -493,7 +502,7 @@ in between two accounts. Once the wait runs out, the notification says that the 
 
 | Setting suffix (`aiUsage.claude.` / `aiUsage.codex.`) | Claude default | Codex default | Purpose |
 | --- | --- | --- | --- |
-| `keepAlive.enabled` | `true` | `true` | Periodically check every saved account, including inactive ones, with the smallest model; this also keeps their logins refreshed. The active login is never kept alive and never checked from its profile home: it is read through the native login, where it is in use, so one login is never exercised from two installations at once. |
+| `keepAlive.enabled` | `true` | `true` | Periodically check every saved account, including inactive ones, with the smallest model; this also keeps their logins refreshed. The active login is never kept alive and never checked from its profile home: it is read through the native login, where it is in use, so one login is never exercised from two installations at once. Between keep-alives, saved Codex accounts are read over HTTPS with their stored token (no `codex app-server` start, no token refresh); the earned-reset count, which only the CLI reports, is read with the hourly keep-alive or, with keep-alives off, by one CLI read an hour. |
 | `autoRotate.enabled` | `true` | `true` | Switch accounts automatically at a threshold or, with `proactive`, when another account scores clearly better. |
 | `autoReset.enabled` | — | `true` | Automatically redeem an earned Codex rate-limit reset credit when the active saved account is limited and the timing rules favor a reset. |
 | `autoRotate.updateUsageBeforeRotation` | `false` | `false` | Read the target account's usage right before a rotation switch (a usage call, never a keep-alive). Off: stored readings decide, a window that has reset since counts as fresh. |

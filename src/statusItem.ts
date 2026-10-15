@@ -36,6 +36,8 @@ export type LiveProvider = {
   refreshing?: boolean;
   /** The figures shown before an account switch cleared the readings, kept until the new account's first reading. */
   previous?: LiveUsage;
+  /** Which rotated frame of the logo a loading item shows; advanced by a timer in `renderLive`. */
+  spinFrame?: number;
 };
 
 export function visibleUsage(provider: LiveProvider): LiveUsage | undefined {
@@ -79,31 +81,52 @@ export type StatusInputs = {
   serviceProblem?: string;
 };
 
+/** Shown after the figures while loading when no logo is shown (name-only labels). */
 const SPINNER = '$(sync~spin)';
 
-type ModelProvider = Pick<LiveProvider, 'id' | 'icon' | 'last' | 'lastGood' | 'diagnostics' | 'accountNumber' | 'activeProfileName' | 'refreshing' | 'previous'>;
+/**
+ * VS Code animates `~spin` only on a few built-in icons, so a loading logo is drawn as one of SPIN_FRAMES rotated copies
+ * from media/spin-icons.ttf (scripts/generate-spin-icons.js, whose FRAMES must match) that the caller cycles.
+ */
+export const SPIN_FRAMES = 24;
+const SPIN_ICONS: Record<string, string> = { claude: 'ai-usage-spin-claude', openai: 'ai-usage-spin-openai', copilot: 'ai-usage-spin-copilot' };
+
+/** Whether the item text shows a rotating-logo frame, which a timer must keep advancing. */
+export function showsSpinFrame(model: StatusItemModel): boolean {
+  return model.visible && model.text.includes('$(ai-usage-spin-');
+}
+
+type ModelProvider = Pick<LiveProvider, 'id' | 'icon' | 'last' | 'lastGood' | 'diagnostics' | 'accountNumber' | 'activeProfileName' | 'refreshing' | 'previous' | 'spinFrame'>;
 
 /**
  * Decides what a provider's status bar item shows: the pure part of `renderLive`. A refresh never blanks it: the
- * figures stay, with a spinner after them, and after an account switch the previous figures stay until the new
+ * figures stay and the logo rotates, and after an account switch the previous figures stay until the new
  * account's first reading arrives.
  */
 export function statusItemModel(provider: ModelProvider, inputs: StatusInputs): StatusItemModel {
   const waiting = !provider.last && !visibleUsageOf(provider.last, provider.lastGood);
   if (provider.previous && waiting && !inputs.serviceProblem && inputs.barVisible) {
     const title = PROVIDER_TITLES[provider.id];
-    const carried = baseModel({ ...provider, last: { kind: 'ok', usage: provider.previous }, lastGood: provider.previous }, inputs);
-    return carried.visible ? { ...carried, text: `${carried.text} ${SPINNER}`,
-      tooltip: { kind: 'text', text: `${title}\nReading the usage of the active account…` } } : carried;
+    const carried = baseModel({ ...provider, last: { kind: 'ok', usage: provider.previous }, lastGood: provider.previous }, inputs, true);
+    return carried.visible ? { ...carried, tooltip: { kind: 'text', text: `${title}\nReading the usage of the active account…` } } : carried;
   }
-  const model = baseModel(provider, inputs);
-  return model.visible && provider.refreshing && !model.text.includes(SPINNER) ? { ...model, text: `${model.text} ${SPINNER}` } : model;
+  return baseModel(provider, inputs, Boolean(provider.refreshing));
 }
 
-function baseModel(provider: ModelProvider, inputs: StatusInputs): StatusItemModel {
+/**
+ * `loading` is true while a refresh runs: the logo then rotates beside the figures. Idle items, and every error or
+ * disconnect state, keep a still logo, so the rotation means data is being read.
+ */
+function baseModel(provider: ModelProvider, inputs: StatusInputs, loading = false): StatusItemModel {
   const result = provider.last;
   const usage = visibleUsageOf(provider.last, provider.lastGood);
-  const text = (body: string, title?: string) => statusText(inputs.labels, provider.icon, provider.accountNumber?.(), body, title);
+  const showsLogo = inputs.labels === 'iconOnly' || inputs.labels === 'iconAndName';
+  const spinIcon = showsLogo ? SPIN_ICONS[provider.icon] : undefined;
+  const text = (body: string, title?: string, spinning = false) => {
+    const icon = spinning && spinIcon ? `${spinIcon}-${(provider.spinFrame ?? 0) % SPIN_FRAMES}` : provider.icon;
+    const base = statusText(inputs.labels, icon, provider.accountNumber?.(), body, title);
+    return spinning && !spinIcon ? `${base} ${SPINNER}`.trimStart() : base;
+  };
   if (!inputs.barVisible) {
     return { visible: false };
   }
@@ -139,7 +162,7 @@ function baseModel(provider: ModelProvider, inputs: StatusInputs): StatusItemMod
       return { visible: true, text: text('$(clock)', title), tooltip: { kind: 'rotation', diagnostics: provider.diagnostics } };
     }
     if (!result) {
-      return { visible: true, text: text(SPINNER, title), tooltip: { kind: 'text', text: `${title}\nWaiting for the first usage reading from the account service.` }, background: null };
+      return { visible: true, text: text('', title, loading), tooltip: { kind: 'text', text: `${title}\nWaiting for the first usage reading from the account service.` }, background: null };
     }
     return {
       visible: true,
@@ -174,7 +197,7 @@ function baseModel(provider: ModelProvider, inputs: StatusInputs): StatusItemMod
   const worst = worstPercent(usage);
   return {
     visible: true,
-    text: text(`${usageLabel}${resetCount ? ` ${resetCount}` : ''}`, usage.title),
+    text: text(`${usageLabel}${resetCount ? ` ${resetCount}` : ''}`, usage.title, loading),
     tooltip: { kind: 'usage', usage, refreshError: inputs.serviceProblem ?? (result?.kind === 'error' ? result.message : undefined),
       activeProfile: provider.activeProfileName?.(), diagnostics: provider.diagnostics },
     greyed: Boolean(inputs.serviceProblem) || inputs.now.getTime() - usage.fetchedAt.getTime() >= STALE_AFTER_MS,

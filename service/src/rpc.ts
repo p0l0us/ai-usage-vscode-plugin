@@ -110,20 +110,31 @@ export class RpcServer {
     const id = this.nextId++;
     let authenticated = false;
     let helloPending = false;
+    let closing = false;
     const requests = new Map<number, { controller: AbortController; timer?: NodeJS.Timeout }>();
     const write = (message: RpcResponse | RpcEvent) => { if (!socket.destroyed && socket.writable) socket.write(`${JSON.stringify(message)}\n`); };
     const connection: RpcConnection = { id, client: 'unknown', subscriptions: new Set(), send: event => write(event), close: () => socket.destroy() };
     const helloTimer = setTimeout(() => socket.destroy(), 5_000);
     helloTimer.unref();
-    const fail = (error: unknown, requestId = 0) => { write({ id: requestId, error: wireError(error) }); socket.end(); };
+    const fail = (error: unknown, requestId = 0) => {
+      if (closing) return;
+      closing = true;
+      write({ id: requestId, error: wireError(error) });
+      // A malformed frame can be followed by more frames in the same data event.
+      // Stop dispatch immediately, before the socket's asynchronous close event.
+      for (const entry of requests.values()) entry.controller.abort(new RpcError('connection rejected', 'closed'));
+      socket.end();
+    };
     socket.on('error', () => { /* Close handles vanished clients. */ });
     socket.on('close', () => {
+      closing = true;
       clearTimeout(helloTimer);
       this.sockets.delete(socket);
       for (const entry of requests.values()) { clearTimeout(entry.timer); entry.controller.abort(new RpcError('client disconnected', 'closed')); }
       if (authenticated) { this.connections.delete(id); this.options.onDisconnect?.(connection); }
     });
     lineReader(socket, line => {
+      if (closing || socket.destroyed) return;
       let request: RpcRequest;
       try { request = JSON.parse(line); } catch { fail(new RpcError('malformed request', 'invalid_request')); return; }
       if (!request || !Number.isSafeInteger(request.id) || typeof request.method !== 'string' ||
@@ -147,7 +158,7 @@ export class RpcServer {
         connection.version = typeof params.version === 'string' ? params.version : undefined;
         connection.subscriptions = params.subscribe === 'all' ? 'all' : new Set(Array.isArray(params.subscribe) ? params.subscribe.filter((s): s is string => typeof s === 'string') : []);
         Promise.resolve().then(() => this.options.onHello?.(connection, params)).then(result => {
-          if (socket.destroyed) { this.options.onDisconnect?.(connection); return; }
+          if (closing || socket.destroyed) { this.options.onDisconnect?.(connection); return; }
           clearTimeout(helloTimer);
           authenticated = true;
           this.connections.set(id, connection);

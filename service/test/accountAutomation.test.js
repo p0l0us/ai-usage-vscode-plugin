@@ -19,7 +19,7 @@ function fixture(t, options = {}) {
   let now = Date.now();
   const active = { claude: 'a', codex: 'a' };
   const values = { a: [99.5, 10], b: [10, 10], c: [20, 20], ...options.values };
-  const calls = [], switches = [], refreshed = [], messages = [], problems = [], resets = [], nativeReads = [];
+  const calls = [], switches = [], refreshed = [], messages = [], problems = [], resets = [], nativeReads = [], creditReads = [];
   const credits = { ...options.credits };
   const redeemedKeys = new Set();
   const settings = Object.fromEntries(['claude', 'codex'].map(provider => [provider, {
@@ -49,13 +49,15 @@ function fixture(t, options = {}) {
   };
   const probe = async (provider, credential, config, keepAlive) => {
     calls.push([provider, credential.id, keepAlive]);
+    if (provider === 'codex' && !keepAlive) { creditReads.push([credential.id, Boolean(config.creditsRead)]); }
     if (options.beforeProbe) await options.beforeProbe(provider, credential, keepAlive);
     const percents = values[credential.id];
     return { credential: { ...credential, refreshed: true },
       keepAliveError: keepAlive ? options.keepAliveErrors?.[credential.id] : undefined,
+      // Like the real probe, the earned-reset count comes only with a keep-alive or when asked for (`creditsRead`).
       result: percents
         ? { kind: 'ok', usage: { ...usage(provider, percents, now),
-          ...(provider === 'codex' && credits[credential.id] !== undefined ? { resetCredits: {
+          ...(provider === 'codex' && (keepAlive || config.creditsRead) && credits[credential.id] !== undefined ? { resetCredits: {
             availableCount: credits[credential.id], ...(options.creditExpiry ? { earliestExpiresAt: options.creditExpiry } : {})
           } } : {}) } }
         : { kind: 'error', provider, title: provider, message: options.usageErrors?.[credential.id] ?? 'Unavailable',
@@ -88,7 +90,7 @@ function fixture(t, options = {}) {
   };
   const service = make();
   t.after(() => service.dispose());
-  return { service, make, options, active, values, credits, calls, switches, resets, refreshed, settings, messages, problems, nativeReads,
+  return { service, make, options, active, values, credits, calls, switches, resets, refreshed, settings, messages, problems, nativeReads, creditReads,
     /** Every recorded history event, oldest first. */
     events: () => service.history ? [...service.history.events()] : [],
     observe: (provider, percents, id = active[provider]) => service.observe(provider, id, usage(provider, percents, now)),
@@ -1766,4 +1768,45 @@ test('an active profile whose login is not the native one is checked and kept al
   await f.service.tick();
   assert.deepEqual(f.calls.filter(call => call[2]).map(call => call[1]).sort(), ['a', 'b']);
   assert.ok((await f.service.sendKeepAliveNow('codex', 'a')).usage);
+});
+
+test('Codex usage checks read the earned-reset count once an hour and keep the last count between those reads', async t => {
+  const f = fixture(t, { values: { a: [10, 10], b: [10, 10] }, ids: ['a', 'b'], credits: { b: 2 } });
+  await f.service.refreshUsage('codex', true);
+  assert.deepEqual(f.creditReads, [['a', true], ['b', true]], 'no count known yet: read it');
+  assert.equal(f.service.usage('codex', 'b').resetCredits.availableCount, 2);
+  f.creditReads.length = 0;
+  f.advance(10 * 60000);
+  await f.service.refreshUsage('codex', true);
+  assert.deepEqual(f.creditReads, [['a', true], ['b', false]], 'b: the count is fresh, usage alone over HTTPS; a never reported one');
+  // Meanwhile the usage read carries no count: the known one stays with the reading.
+  delete f.credits.b;
+  f.advance(10 * 60000);
+  await f.service.refreshUsage('codex', true);
+  assert.equal(f.service.usage('codex', 'b').resetCredits.availableCount, 2);
+  f.creditReads.length = 0;
+  f.advance(45 * 60000);
+  await f.service.refreshUsage('codex', true);
+  assert.deepEqual(f.creditReads.find(([id]) => id === 'b'), ['b', true], 'an hour on, the count is read again');
+});
+
+test('a keep-alive sweep makes the usage reads that fall due between its keep-alives instead of deferring them', async t => {
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  let gated = false;
+  const f = fixture(t, { values: { a: [10, 10], b: [10, 10], c: [10, 10] }, settings: { codex: { enabled: true } },
+    beforeProbe: async (provider, credential, keepAlive) => { if (keepAlive && credential.id === 'b') { gated = true; await gate; } } });
+  // c's keep-alive is not due, but its usage has never been read.
+  f.service.write('codex', 'c', { lastKeepAliveAt: f.now() });
+  const sweep = f.service.tick();
+  for (let attempt = 0; attempt < 200 && !gated; attempt++) { await new Promise(resolve => setTimeout(resolve, 10)); }
+  assert.ok(gated, 'the sweep is held at the second account');
+  // While b's keep-alive is still running, c's usage was already read, between a's keep-alive and b's.
+  assert.deepEqual(f.calls.map(call => `${call[1]}:${call[2] ? 'ka' : 'usage'}`), ['a:ka', 'c:usage', 'b:ka']);
+  // A refresh asked for meanwhile steps aside: this sweep does the reading.
+  await f.service.refreshUsage('codex', true);
+  assert.equal(f.calls.length, 3);
+  release();
+  await sweep;
+  assert.deepEqual(f.calls.filter(call => call[2]).map(call => call[1]), ['a', 'b'], 'c, not due for a keep-alive, got none');
 });

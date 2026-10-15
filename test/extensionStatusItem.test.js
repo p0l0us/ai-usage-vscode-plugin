@@ -25,8 +25,10 @@ test('a hidden status bar hides the item whatever the readings are', () => {
   assert.deepEqual(si.statusItemModel(provider('claude', { last: ok(usage()) }), inputs({ barVisible: false })), { visible: false });
 });
 
-test('an enabled item never hides: no reading waits with a spinner, unavailable says why; with diagnostics a clock and the rotation tooltip', () => {
-  assert.deepEqual(si.statusItemModel(provider('claude'), inputs()), { visible: true, text: '$(claude) $(sync~spin)', background: null,
+test('an enabled item never hides: no reading waits with a rotating logo while loading, unavailable says why; with diagnostics a clock and the rotation tooltip', () => {
+  assert.deepEqual(si.statusItemModel(provider('claude', { refreshing: true }), inputs()), { visible: true, text: '$(ai-usage-spin-claude-0)', background: null,
+    tooltip: { kind: 'text', text: 'Claude\nWaiting for the first usage reading from the account service.' } });
+  assert.deepEqual(si.statusItemModel(provider('claude'), inputs()), { visible: true, text: '$(claude)', background: null,
     tooltip: { kind: 'text', text: 'Claude\nWaiting for the first usage reading from the account service.' } });
   assert.deepEqual(si.statusItemModel(provider('codex', { last: { kind: 'unavailable', provider: 'codex', reason: 'No Codex login found.' } }), inputs()), {
     visible: true, text: '$(openai) $(circle-slash)', command: 'aiUsage.showDetails', background: null,
@@ -207,17 +209,22 @@ test('without the account service an item shows why: the last reading greyed wit
   assert.equal(kept.tooltip.refreshError, problem);
 });
 
-test('a refresh keeps the figures and adds a spinner; after a switch the previous figures stay until the first reading', () => {
+test('a refresh keeps the figures and rotates the logo; after a switch the previous figures stay until the first reading', () => {
   const good = usage({ fetchedAt: NOW });
   const refreshing = si.statusItemModel(provider('claude', { last: ok(good), refreshing: true }), inputs());
-  assert.equal(refreshing.text, '$(claude) 17% (3h) 26% (3d) $(sync~spin)');
+  assert.equal(refreshing.text, '$(ai-usage-spin-claude-0) 17% (3h) 26% (3d)');
   assert.equal(refreshing.tooltip.kind, 'usage');
   assert.equal(si.statusItemModel(provider('claude', { last: ok(good) }), inputs()).text, '$(claude) 17% (3h) 26% (3d)', 'no spinner once done');
   const switched = si.statusItemModel(provider('codex', { previous: good, refreshing: true }), inputs());
-  assert.equal(switched.text, '$(openai) 17% (3h) 26% (3d) $(sync~spin)');
+  assert.equal(switched.text, '$(ai-usage-spin-openai-0) 17% (3h) 26% (3d)');
   assert.deepEqual(switched.tooltip, { kind: 'text', text: 'Codex\nReading the usage of the active account…' });
   assert.ok(!switched.greyed, 'the figures keep their look');
-  assert.equal(si.statusItemModel(provider('claude', { refreshing: true }), inputs()).text, '$(claude) $(sync~spin)', 'a lone spinner is not doubled');
+  assert.equal(si.statusItemModel(provider('claude', { refreshing: true }), inputs()).text, '$(ai-usage-spin-claude-0)', 'a lone logo is not doubled');
+  assert.equal(si.statusItemModel(provider('claude', { refreshing: true }), inputs({ labels: 'nameOnly' })).text, 'Claude $(sync~spin)', 'a spinner stands in when the logo is hidden');
+  assert.equal(si.statusItemModel(provider('claude', { last: ok(good), refreshing: true, spinFrame: 5 }), inputs()).text, '$(ai-usage-spin-claude-5) 17% (3h) 26% (3d)', 'the timer picks the frame');
+  assert.ok(si.showsSpinFrame(refreshing) && !si.showsSpinFrame(si.statusItemModel(provider('claude', { last: ok(good) }), inputs())), 'the timer runs only while a frame shows');
+  assert.ok(si.statusItemModel(provider('copilot', { last: ok(good), refreshing: true }), inputs()).text.startsWith('$(ai-usage-spin-copilot-0) '), 'Copilot rotates its logo too');
+  assert.ok(si.statusItemModel(provider('claude', { last: ok(good), refreshing: true }), inputs({ labels: 'nameOnly' })).text.endsWith(' $(sync~spin)'), 'figures with the logo hidden get the spinner');
   assert.equal(si.statusItemModel(provider('codex', { previous: good }), inputs({ serviceProblem: 'down' })).text, '$(openai) $(debug-disconnect)',
     'without the service the previous account’s figures are not passed off as current');
 });

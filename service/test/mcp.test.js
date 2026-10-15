@@ -466,7 +466,7 @@ test('MCP guidance and profile facts distinguish general exhaustion from a model
 });
 
 for (const mode of ['background', 'embedded']) test(`${mode}: MCP reads the shared engine's live rotation prerequisites across configuration toggles`, async t => {
-  const { runtimeFixture } = require('../../test/helpers/runtimeHost');
+  const { runtimeFixture } = require('./helpers/runtimeHost');
   const fixture = await runtimeFixture(t, mode);
   await fixture.client.setConfig({ 'mcp.enabled': true, 'claude.autoRotate.enabled': true, 'codex.autoRotate.enabled': true });
   const mcp = new McpServer({ connect: () => fixture.connect('w20-mcp'), version: 'w20-fixture' });
@@ -621,7 +621,7 @@ test('stdio slow output coalesces notifications and bounds ordinary response bac
 });
 
 for (const mode of ['background', 'embedded']) test(`${mode}: deployed CLI MCP receives engine events and waits using cached projection only`, { timeout: 15000 }, async t => {
-  const { runtimeFixture } = require('../../test/helpers/runtimeHost');
+  const { runtimeFixture } = require('./helpers/runtimeHost');
   const { spawn } = require('node:child_process');
   const fixture = await runtimeFixture(t, mode);
   await fixture.client.setConfig({ 'mcp.enabled': true });

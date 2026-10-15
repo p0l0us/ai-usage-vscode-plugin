@@ -29,6 +29,7 @@ function fixture(t, options = {}) {
       'claude.keepAlive.home': path.join(root, '.claude-profile-{number}'),
       'codex.keepAlive.home': path.join(root, '.codex-profile-{number}') },
     home, version: 'test', fetchUsage: async provider => ({ kind: 'ok', usage: usage(provider, [50, 5]) }), log: (message) => logs.push(message),
+    terminateStaleCodexDaemons: options.terminateStaleCodexDaemons,
     // The active account is read through the native login: whatever login the native file holds, with that token's values.
     readNativeUsage: async provider => {
       const token = provider === 'claude' ? JSON.parse(fs.readFileSync(path.join(claudeHome, '.credentials.json'), 'utf8')).claudeAiOauth.accessToken
@@ -441,4 +442,33 @@ test('profile setDisabled RPC marks the profile, the view shows it, and the flag
   await f.call('profiles.setDisabled', { provider: 'claude', id: backup.profile.id, disabled: false });
   view = await f.call('profiles.list', { provider: 'claude' });
   assert.equal(view.profiles[1].disabled, false);
+});
+
+test('a Codex login change ends the stale Codex daemons, when the setting is on, and the service start repeats it', async (t) => {
+  const sweeps = [];
+  const f = fixture(t, { ownership: { held: () => true, assertHeld() {} }, values: { 'acc-1': [10, 5], 'acc-2': [10, 5] },
+    terminateStaleCodexDaemons: async (changedAt) => { sweeps.push(changedAt); return { ended: [{ pid: 7, ppid: 1, startedAt: changedAt - 60000, command: 'codex app-server daemon' }], kept: [] }; } });
+  await f.call('config.set', { values: { 'claude.autoRotate.enabled': false, 'codex.autoRotate.enabled': false, 'codex.autoReset.enabled': false, 'bridge.autoStart': false, 'copilot.enabled': false } });
+  await f.call('profiles.saveNative', { provider: 'codex', name: 'First' });
+  const second = await f.call('profiles.importCredential', { provider: 'codex', name: 'Second',
+    credential: { auth_mode: 'chatgpt', tokens: { access_token: 't2', refresh_token: 'r2', account_id: 'acc-2' } } });
+  await f.call('profiles.activate', { provider: 'codex', id: second.profile.id });
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(sweeps.length, 1, 'the switch ended the daemons that predate it');
+  assert.ok(f.logs.some((line) => /codex: ended stale app-server pid 7/.test(line)), f.logs.filter((line) => /daemon|app-server/.test(line)).join('\n'));
+  // Selecting the login that is already active changes nothing and ends nothing.
+  await f.call('profiles.activate', { provider: 'codex', id: second.profile.id });
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(sweeps.length, 1);
+  // The service start repeats the sweep for the last change it remembers, unless the setting is off.
+  const changedAt = JSON.parse(fs.readFileSync(path.join(f.home, 'state', 'codex-login.json'), 'utf8')).changedAt;
+  assert.equal(typeof changedAt, 'number');
+  f.service.start();
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.deepEqual(sweeps, [changedAt, changedAt]);
+  await f.call('config.set', { values: { 'codex.terminateStaleDaemons': false } });
+  const first = (await f.call('profiles.list', { provider: 'codex' })).profiles.find((profile) => profile.name === 'First');
+  await f.call('profiles.activate', { provider: 'codex', id: first.id });
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(sweeps.length, 2, 'off: a switch ends nothing');
 });

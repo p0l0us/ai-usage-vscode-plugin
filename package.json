@@ -2,7 +2,7 @@
   "name": "ai-usage-vscode-plugin",
   "displayName": "AI subscription management and usage",
   "description": "Manage your Claude Code, Codex and GitHub Copilot subscriptions and see what is left of them: switch between saved accounts without signing in again, keep them warm, rotate on exhaustion, and read live 5h/7d windows, premium requests and org billing in the status bar and chat input. Open source, contributions welcome.",
-  "version": "1.5.2",
+  "version": "1.6.0",
   "publisher": "p0l0us",
   "license": "GPL-3.0-only",
   "repository": {
@@ -7487,6 +7487,13 @@
             "default": false,
             "markdownDescription": "After a Codex account switch, warn once per window when this window's Codex extension process started before the switch and offer **Restart extensions**. Off by default: the warning interrupts every window that holds an older Codex process. A running Codex process keeps its login in memory and fails turns once the credential file changes underneath it; VS Code cannot restart a single extension, so restarting the extension host is the lightest repair. Turn this on to be reminded, or enable `#aiUsage.codex.proxy.enabled#` so open chats follow a switch by themselves. New Codex CLI sessions need nothing.",
             "order": 8
+          },
+          "aiUsage.codex.terminateStaleDaemons": {
+            "type": "boolean",
+            "default": true,
+            "scope": "machine",
+            "order": 8.1,
+            "markdownDescription": "**End stale Codex daemons.** After a Codex account switch, sign-in or outside login change, and when the account service starts, end this user's Codex `app-server` processes that started before the change and are not a VS Code extension's own: the shared `app-server daemon` with its code-mode host, and the VS Code agent host's SDK server. Codex starts them again with the current login when needed. A process that outlives a login change keeps the previous login in memory, can refresh and rotate its token under the service's copy, and the vendor may then revoke the whole login. Per-window extension processes are left alone; see `#aiUsage.codex.switchRestartHint#`."
           },
           "aiUsage.codex.proxy.enabled": {
             "type": "boolean",
@@ -20364,10 +20371,516 @@
         "id": "aiUsage.accounts",
         "label": "AI Usage accounts"
       }
-    ]
+    ],
+    "icons": {
+      "ai-usage-spin-claude-0": {
+        "description": "Claude logo rotated 0°, shown while a reading loads",
+        "default": {
+          "fontPath": "./media/spin-icons.ttf",
+          "fontCharacter": "\\E000"
+        }
+      },
+      "ai-usage-spin-claude-1": {
+        "description": "Claude logo rotated 15°, shown while a reading loads",
+        "default": {
+          "fontPath": "./media/spin-icons.ttf",
+          "fontCharacter": "\\E001"
+        }
+      },
+      "ai-usage-spin-claude-2": {
+        "description": "Claude logo rotated 30°, shown while a reading loads",
+        "default": {
+          "fontPath": "./media/spin-icons.ttf",
+          "fontCharacter": "\\E002"
+        }
+      },
+      "ai-usage-spin-claude-3": {
+        "description": "Claude logo rotated 45°, shown while a reading loads",
+        "default": {
+          "fontPath": "./media/spin-icons.ttf",
+          "fontCharacter": "\\E003"
+        }
+      },
+      "ai-usage-spin-claude-4": {
+        "description": "Claude logo rotated 60°, shown while a reading loads",
+        "default": {
+          "fontPath": "./media/spin-icons.ttf",
+          "fontCharacter": "\\E004"
+        }
+      },
+      "ai-usage-spin-claude-5": {
+        "description": "Claude logo rotated 75°, shown while a reading loads",
+        "default": {
+          "fontPath": "./media/spin-icons.ttf",
+          "fontCharacter": "\\E005"
+        }
+      },
+      "ai-usage-spin-claude-6": {
+        "description": "Claude logo rotated 90°, shown while a reading loads",
+        "default": {
+          "fontPath": "./media/spin-icons.ttf",
+          "fontCharacter": "\\E006"
+        }
+      },
+      "ai-usage-spin-claude-7": {
+        "description": "Claude logo rotated 105°, shown while a reading loads",
+        "default": {
+          "fontPath": "./media/spin-icons.ttf",
+          "fontCharacter": "\\E007"
+        }
+      },
+      "ai-usage-spin-claude-8": {
+        "description": "Claude logo rotated 120°, shown while a reading loads",
+        "default": {
+          "fontPath": "./media/spin-icons.ttf",
+          "fontCharacter": "\\E008"
+        }
+      },
+      "ai-usage-spin-claude-9": {
+        "description": "Claude logo rotated 135°, shown while a reading loads",
+        "default": {
+          "fontPath": "./media/spin-icons.ttf",
+          "fontCharacter": "\\E009"
+        }
+      },
+      "ai-usage-spin-claude-10": {
+        "description": "Claude logo rotated 150°, shown while a reading loads",
+        "default": {
+          "fontPath": "./media/spin-icons.ttf",
+          "fontCharacter": "\\E00A"
+        }
+      },
+      "ai-usage-spin-claude-11": {
+        "description": "Claude logo rotated 165°, shown while a reading loads",
+        "default": {
+          "fontPath": "./media/spin-icons.ttf",
+          "fontCharacter": "\\E00B"
+        }
+      },
+      "ai-usage-spin-claude-12": {
+        "description": "Claude logo rotated 180°, shown while a reading loads",
+        "default": {
+          "fontPath": "./media/spin-icons.ttf",
+          "fontCharacter": "\\E00C"
+        }
+      },
+      "ai-usage-spin-claude-13": {
+        "description": "Claude logo rotated 195°, shown while a reading loads",
+        "default": {
+          "fontPath": "./media/spin-icons.ttf",
+          "fontCharacter": "\\E00D"
+        }
+      },
+      "ai-usage-spin-claude-14": {
+        "description": "Claude logo rotated 210°, shown while a reading loads",
+        "default": {
+          "fontPath": "./media/spin-icons.ttf",
+          "fontCharacter": "\\E00E"
+        }
+      },
+      "ai-usage-spin-claude-15": {
+        "description": "Claude logo rotated 225°, shown while a reading loads",
+        "default": {
+          "fontPath": "./media/spin-icons.ttf",
+          "fontCharacter": "\\E00F"
+        }
+      },
+      "ai-usage-spin-claude-16": {
+        "description": "Claude logo rotated 240°, shown while a reading loads",
+        "default": {
+          "fontPath": "./media/spin-icons.ttf",
+          "fontCharacter": "\\E010"
+        }
+      },
+      "ai-usage-spin-claude-17": {
+        "description": "Claude logo rotated 255°, shown while a reading loads",
+        "default": {
+          "fontPath": "./media/spin-icons.ttf",
+          "fontCharacter": "\\E011"
+        }
+      },
+      "ai-usage-spin-claude-18": {
+        "description": "Claude logo rotated 270°, shown while a reading loads",
+        "default": {
+          "fontPath": "./media/spin-icons.ttf",
+          "fontCharacter": "\\E012"
+        }
+      },
+      "ai-usage-spin-claude-19": {
+        "description": "Claude logo rotated 285°, shown while a reading loads",
+        "default": {
+          "fontPath": "./media/spin-icons.ttf",
+          "fontCharacter": "\\E013"
+        }
+      },
+      "ai-usage-spin-claude-20": {
+        "description": "Claude logo rotated 300°, shown while a reading loads",
+        "default": {
+          "fontPath": "./media/spin-icons.ttf",
+          "fontCharacter": "\\E014"
+        }
+      },
+      "ai-usage-spin-claude-21": {
+        "description": "Claude logo rotated 315°, shown while a reading loads",
+        "default": {
+          "fontPath": "./media/spin-icons.ttf",
+          "fontCharacter": "\\E015"
+        }
+      },
+      "ai-usage-spin-claude-22": {
+        "description": "Claude logo rotated 330°, shown while a reading loads",
+        "default": {
+          "fontPath": "./media/spin-icons.ttf",
+          "fontCharacter": "\\E016"
+        }
+      },
+      "ai-usage-spin-claude-23": {
+        "description": "Claude logo rotated 345°, shown while a reading loads",
+        "default": {
+          "fontPath": "./media/spin-icons.ttf",
+          "fontCharacter": "\\E017"
+        }
+      },
+      "ai-usage-spin-openai-0": {
+        "description": "Codex logo rotated 0°, shown while a reading loads",
+        "default": {
+          "fontPath": "./media/spin-icons.ttf",
+          "fontCharacter": "\\E018"
+        }
+      },
+      "ai-usage-spin-openai-1": {
+        "description": "Codex logo rotated 15°, shown while a reading loads",
+        "default": {
+          "fontPath": "./media/spin-icons.ttf",
+          "fontCharacter": "\\E019"
+        }
+      },
+      "ai-usage-spin-openai-2": {
+        "description": "Codex logo rotated 30°, shown while a reading loads",
+        "default": {
+          "fontPath": "./media/spin-icons.ttf",
+          "fontCharacter": "\\E01A"
+        }
+      },
+      "ai-usage-spin-openai-3": {
+        "description": "Codex logo rotated 45°, shown while a reading loads",
+        "default": {
+          "fontPath": "./media/spin-icons.ttf",
+          "fontCharacter": "\\E01B"
+        }
+      },
+      "ai-usage-spin-openai-4": {
+        "description": "Codex logo rotated 60°, shown while a reading loads",
+        "default": {
+          "fontPath": "./media/spin-icons.ttf",
+          "fontCharacter": "\\E01C"
+        }
+      },
+      "ai-usage-spin-openai-5": {
+        "description": "Codex logo rotated 75°, shown while a reading loads",
+        "default": {
+          "fontPath": "./media/spin-icons.ttf",
+          "fontCharacter": "\\E01D"
+        }
+      },
+      "ai-usage-spin-openai-6": {
+        "description": "Codex logo rotated 90°, shown while a reading loads",
+        "default": {
+          "fontPath": "./media/spin-icons.ttf",
+          "fontCharacter": "\\E01E"
+        }
+      },
+      "ai-usage-spin-openai-7": {
+        "description": "Codex logo rotated 105°, shown while a reading loads",
+        "default": {
+          "fontPath": "./media/spin-icons.ttf",
+          "fontCharacter": "\\E01F"
+        }
+      },
+      "ai-usage-spin-openai-8": {
+        "description": "Codex logo rotated 120°, shown while a reading loads",
+        "default": {
+          "fontPath": "./media/spin-icons.ttf",
+          "fontCharacter": "\\E020"
+        }
+      },
+      "ai-usage-spin-openai-9": {
+        "description": "Codex logo rotated 135°, shown while a reading loads",
+        "default": {
+          "fontPath": "./media/spin-icons.ttf",
+          "fontCharacter": "\\E021"
+        }
+      },
+      "ai-usage-spin-openai-10": {
+        "description": "Codex logo rotated 150°, shown while a reading loads",
+        "default": {
+          "fontPath": "./media/spin-icons.ttf",
+          "fontCharacter": "\\E022"
+        }
+      },
+      "ai-usage-spin-openai-11": {
+        "description": "Codex logo rotated 165°, shown while a reading loads",
+        "default": {
+          "fontPath": "./media/spin-icons.ttf",
+          "fontCharacter": "\\E023"
+        }
+      },
+      "ai-usage-spin-openai-12": {
+        "description": "Codex logo rotated 180°, shown while a reading loads",
+        "default": {
+          "fontPath": "./media/spin-icons.ttf",
+          "fontCharacter": "\\E024"
+        }
+      },
+      "ai-usage-spin-openai-13": {
+        "description": "Codex logo rotated 195°, shown while a reading loads",
+        "default": {
+          "fontPath": "./media/spin-icons.ttf",
+          "fontCharacter": "\\E025"
+        }
+      },
+      "ai-usage-spin-openai-14": {
+        "description": "Codex logo rotated 210°, shown while a reading loads",
+        "default": {
+          "fontPath": "./media/spin-icons.ttf",
+          "fontCharacter": "\\E026"
+        }
+      },
+      "ai-usage-spin-openai-15": {
+        "description": "Codex logo rotated 225°, shown while a reading loads",
+        "default": {
+          "fontPath": "./media/spin-icons.ttf",
+          "fontCharacter": "\\E027"
+        }
+      },
+      "ai-usage-spin-openai-16": {
+        "description": "Codex logo rotated 240°, shown while a reading loads",
+        "default": {
+          "fontPath": "./media/spin-icons.ttf",
+          "fontCharacter": "\\E028"
+        }
+      },
+      "ai-usage-spin-openai-17": {
+        "description": "Codex logo rotated 255°, shown while a reading loads",
+        "default": {
+          "fontPath": "./media/spin-icons.ttf",
+          "fontCharacter": "\\E029"
+        }
+      },
+      "ai-usage-spin-openai-18": {
+        "description": "Codex logo rotated 270°, shown while a reading loads",
+        "default": {
+          "fontPath": "./media/spin-icons.ttf",
+          "fontCharacter": "\\E02A"
+        }
+      },
+      "ai-usage-spin-openai-19": {
+        "description": "Codex logo rotated 285°, shown while a reading loads",
+        "default": {
+          "fontPath": "./media/spin-icons.ttf",
+          "fontCharacter": "\\E02B"
+        }
+      },
+      "ai-usage-spin-openai-20": {
+        "description": "Codex logo rotated 300°, shown while a reading loads",
+        "default": {
+          "fontPath": "./media/spin-icons.ttf",
+          "fontCharacter": "\\E02C"
+        }
+      },
+      "ai-usage-spin-openai-21": {
+        "description": "Codex logo rotated 315°, shown while a reading loads",
+        "default": {
+          "fontPath": "./media/spin-icons.ttf",
+          "fontCharacter": "\\E02D"
+        }
+      },
+      "ai-usage-spin-openai-22": {
+        "description": "Codex logo rotated 330°, shown while a reading loads",
+        "default": {
+          "fontPath": "./media/spin-icons.ttf",
+          "fontCharacter": "\\E02E"
+        }
+      },
+      "ai-usage-spin-openai-23": {
+        "description": "Codex logo rotated 345°, shown while a reading loads",
+        "default": {
+          "fontPath": "./media/spin-icons.ttf",
+          "fontCharacter": "\\E02F"
+        }
+      },
+      "ai-usage-spin-copilot-0": {
+        "description": "Copilot logo rotated 0°, shown while a reading loads",
+        "default": {
+          "fontPath": "./media/spin-icons.ttf",
+          "fontCharacter": "\\E030"
+        }
+      },
+      "ai-usage-spin-copilot-1": {
+        "description": "Copilot logo rotated 15°, shown while a reading loads",
+        "default": {
+          "fontPath": "./media/spin-icons.ttf",
+          "fontCharacter": "\\E031"
+        }
+      },
+      "ai-usage-spin-copilot-2": {
+        "description": "Copilot logo rotated 30°, shown while a reading loads",
+        "default": {
+          "fontPath": "./media/spin-icons.ttf",
+          "fontCharacter": "\\E032"
+        }
+      },
+      "ai-usage-spin-copilot-3": {
+        "description": "Copilot logo rotated 45°, shown while a reading loads",
+        "default": {
+          "fontPath": "./media/spin-icons.ttf",
+          "fontCharacter": "\\E033"
+        }
+      },
+      "ai-usage-spin-copilot-4": {
+        "description": "Copilot logo rotated 60°, shown while a reading loads",
+        "default": {
+          "fontPath": "./media/spin-icons.ttf",
+          "fontCharacter": "\\E034"
+        }
+      },
+      "ai-usage-spin-copilot-5": {
+        "description": "Copilot logo rotated 75°, shown while a reading loads",
+        "default": {
+          "fontPath": "./media/spin-icons.ttf",
+          "fontCharacter": "\\E035"
+        }
+      },
+      "ai-usage-spin-copilot-6": {
+        "description": "Copilot logo rotated 90°, shown while a reading loads",
+        "default": {
+          "fontPath": "./media/spin-icons.ttf",
+          "fontCharacter": "\\E036"
+        }
+      },
+      "ai-usage-spin-copilot-7": {
+        "description": "Copilot logo rotated 105°, shown while a reading loads",
+        "default": {
+          "fontPath": "./media/spin-icons.ttf",
+          "fontCharacter": "\\E037"
+        }
+      },
+      "ai-usage-spin-copilot-8": {
+        "description": "Copilot logo rotated 120°, shown while a reading loads",
+        "default": {
+          "fontPath": "./media/spin-icons.ttf",
+          "fontCharacter": "\\E038"
+        }
+      },
+      "ai-usage-spin-copilot-9": {
+        "description": "Copilot logo rotated 135°, shown while a reading loads",
+        "default": {
+          "fontPath": "./media/spin-icons.ttf",
+          "fontCharacter": "\\E039"
+        }
+      },
+      "ai-usage-spin-copilot-10": {
+        "description": "Copilot logo rotated 150°, shown while a reading loads",
+        "default": {
+          "fontPath": "./media/spin-icons.ttf",
+          "fontCharacter": "\\E03A"
+        }
+      },
+      "ai-usage-spin-copilot-11": {
+        "description": "Copilot logo rotated 165°, shown while a reading loads",
+        "default": {
+          "fontPath": "./media/spin-icons.ttf",
+          "fontCharacter": "\\E03B"
+        }
+      },
+      "ai-usage-spin-copilot-12": {
+        "description": "Copilot logo rotated 180°, shown while a reading loads",
+        "default": {
+          "fontPath": "./media/spin-icons.ttf",
+          "fontCharacter": "\\E03C"
+        }
+      },
+      "ai-usage-spin-copilot-13": {
+        "description": "Copilot logo rotated 195°, shown while a reading loads",
+        "default": {
+          "fontPath": "./media/spin-icons.ttf",
+          "fontCharacter": "\\E03D"
+        }
+      },
+      "ai-usage-spin-copilot-14": {
+        "description": "Copilot logo rotated 210°, shown while a reading loads",
+        "default": {
+          "fontPath": "./media/spin-icons.ttf",
+          "fontCharacter": "\\E03E"
+        }
+      },
+      "ai-usage-spin-copilot-15": {
+        "description": "Copilot logo rotated 225°, shown while a reading loads",
+        "default": {
+          "fontPath": "./media/spin-icons.ttf",
+          "fontCharacter": "\\E03F"
+        }
+      },
+      "ai-usage-spin-copilot-16": {
+        "description": "Copilot logo rotated 240°, shown while a reading loads",
+        "default": {
+          "fontPath": "./media/spin-icons.ttf",
+          "fontCharacter": "\\E040"
+        }
+      },
+      "ai-usage-spin-copilot-17": {
+        "description": "Copilot logo rotated 255°, shown while a reading loads",
+        "default": {
+          "fontPath": "./media/spin-icons.ttf",
+          "fontCharacter": "\\E041"
+        }
+      },
+      "ai-usage-spin-copilot-18": {
+        "description": "Copilot logo rotated 270°, shown while a reading loads",
+        "default": {
+          "fontPath": "./media/spin-icons.ttf",
+          "fontCharacter": "\\E042"
+        }
+      },
+      "ai-usage-spin-copilot-19": {
+        "description": "Copilot logo rotated 285°, shown while a reading loads",
+        "default": {
+          "fontPath": "./media/spin-icons.ttf",
+          "fontCharacter": "\\E043"
+        }
+      },
+      "ai-usage-spin-copilot-20": {
+        "description": "Copilot logo rotated 300°, shown while a reading loads",
+        "default": {
+          "fontPath": "./media/spin-icons.ttf",
+          "fontCharacter": "\\E044"
+        }
+      },
+      "ai-usage-spin-copilot-21": {
+        "description": "Copilot logo rotated 315°, shown while a reading loads",
+        "default": {
+          "fontPath": "./media/spin-icons.ttf",
+          "fontCharacter": "\\E045"
+        }
+      },
+      "ai-usage-spin-copilot-22": {
+        "description": "Copilot logo rotated 330°, shown while a reading loads",
+        "default": {
+          "fontPath": "./media/spin-icons.ttf",
+          "fontCharacter": "\\E046"
+        }
+      },
+      "ai-usage-spin-copilot-23": {
+        "description": "Copilot logo rotated 345°, shown while a reading loads",
+        "default": {
+          "fontPath": "./media/spin-icons.ttf",
+          "fontCharacter": "\\E047"
+        }
+      }
+    }
   },
   "scripts": {
-    "compile": "node scripts/generate-manifest.js && node scripts/generate-service-settings.js && node scripts/package-service-bridge.js && tsc -p service && tsc -p ./",
+    "compile": "node scripts/generate-manifest.js && npm run compile:service && tsc -p ./",
     "test": "node scripts/run-tests.js",
     "watch": "tsc -watch -p ./",
     "generate": "node scripts/generate-manifest.js && node scripts/generate-service-settings.js",
@@ -20381,17 +20894,20 @@
     "publish:pre": "node scripts/publish.js --pre-release",
     "publish:all": "node scripts/publish.js --ovsx",
     "publish:dry": "node scripts/publish.js --dry-run",
-    "compile:service": "tsc -p service",
+    "compile:service": "npm --prefix service run build",
     "watch:service": "tsc -watch -p service",
     "coverage": "node scripts/coverage.js",
     "test:e2e": "node test/e2e/runTest.js",
-    "mutation": "stryker run"
+    "mutation": "stryker run",
+    "test:package": "node scripts/test-service-package.js"
   },
   "devDependencies": {
     "@stryker-mutator/core": "^10.0.0",
     "@types/node": "^24.4.0",
     "@types/vscode": "^1.137.0",
     "@vscode/test-electron": "^3.1.0",
+    "svg2ttf": "^6.1.0",
+    "svgicons2svgfont": "^16.0.0",
     "typescript": "^5.9.2"
   },
   "extensionKind": [

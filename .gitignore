@@ -2,6 +2,7 @@ node_modules/
 out/
 .vscode-test/
 *.vsix
+*.tgz
 
 # Generated from the shared bridge sources by the build.
 service/bridge/

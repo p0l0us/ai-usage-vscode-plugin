@@ -3,13 +3,16 @@ import * as os from 'os';
 import * as path from 'path';
 import { createHash } from 'crypto';
 import { AuthProvider, StoredCredential, nativeCredentialPath, parseCredentialJson, writeJsonAtomically, writeTextAtomically } from './authFiles';
-import { acquireAccountLock, isolatedHome, stagedCredentialPath } from './accountProbe';
+import { AccountLock, acquireAccountLock, isolatedHome, stagedCredentialPath } from './accountProbe';
 import { removeCodexProxyProvider } from './codexConfig';
 import { applyClaudeSettingsToFile, readClaudeSettingAssignments } from './claudeSettings';
 import { applyCodexSettingsToFile, readCodexSettingAssignments, setCodexConfigValue } from './codexSettings';
 
 type HomeMarker = { provider: AuthProvider; id: string; number: number; syncedHash?: string };
 const MARKER = '.ai-usage-profile.json';
+/** How long a switch or save waits for a profile home whose lock a running check holds, and how often it looks. */
+const HOME_LOCK_WAIT_MS = 2 * 60_000;
+const HOME_LOCK_POLL_MS = 250;
 export const credentialHash = (credential: StoredCredential): string => createHash('sha256').update(JSON.stringify(credential)).digest('hex');
 
 function readMarker(home: string): HomeMarker | undefined {
@@ -112,11 +115,25 @@ export class ProfileHomes {
     }
   }
 
+  /**
+   * The home's lock, waited for while a check (a usage read, a keep-alive) holds it, up to `HOME_LOCK_WAIT_MS`: a
+   * switch or a save that meets a running check waits for it instead of failing.
+   */
+  private async lock(home: string): Promise<AccountLock> {
+    const file = path.join(home, '.ai-usage.lock');
+    const deadline = Date.now() + HOME_LOCK_WAIT_MS;
+    for (;;) {
+      const lock = acquireAccountLock(file);
+      if (lock) return lock;
+      if (Date.now() >= deadline) throw new Error('Another account check is using this profile home.');
+      await new Promise((resolve) => setTimeout(resolve, HOME_LOCK_POLL_MS));
+    }
+  }
+
   /** Three-way reconciliation prevents restoring a refresh token that another CLI has already rotated. */
   async synchronize(provider: AuthProvider, home: string, stored: StoredCredential,
     adopt: (before: StoredCredential, after: StoredCredential) => Promise<StoredCredential | undefined>): Promise<StoredCredential> {
-    const lock = acquireAccountLock(path.join(home, '.ai-usage.lock'));
-    if (!lock) throw new Error('Another account check is using this profile home.');
+    const lock = await this.lock(home);
     try {
       const marker = readMarker(home)!;
       const file = stagedCredentialPath(provider, home);
@@ -140,9 +157,8 @@ export class ProfileHomes {
   }
 
   /** Explicit sign-in/import replacement is authoritative; ordinary checks use synchronize instead. */
-  replace(provider: AuthProvider, home: string, credential: StoredCredential): void {
-    const lock = acquireAccountLock(path.join(home, '.ai-usage.lock'));
-    if (!lock) throw new Error('Another account check is using this profile home.');
+  async replace(provider: AuthProvider, home: string, credential: StoredCredential): Promise<void> {
+    const lock = await this.lock(home);
     try {
       writeJsonAtomically(stagedCredentialPath(provider, home), credential);
       writeJsonAtomically(path.join(home, MARKER), { ...readMarker(home)!, syncedHash: credentialHash(credential) });

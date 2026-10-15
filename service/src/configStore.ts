@@ -40,6 +40,8 @@ export type ProviderConfig = {
     home: string;
   };
   autoReset: { enabled: boolean; confirmationRequired: boolean };
+  /** Codex: end this user's Codex app-server daemons that started before the login changed; Codex restarts them with the current login. */
+  terminateStaleDaemons: boolean;
   autoRotate: {
     enabled: boolean;
     resetAware: boolean;
@@ -104,6 +106,7 @@ export const SETTINGS: SettingSchema[] = [
   { key: 'autoRotate.enabled', type: 'boolean', description: 'Switch the active account automatically once it reaches a rotation threshold.' },
   { key: 'autoReset.enabled', type: 'boolean', providers: ['codex'], description: 'Automatically redeem an available earned Codex rate-limit reset when it is more useful than rotating or waiting.' },
   { key: 'autoReset.confirmationRequired', type: 'boolean', providers: ['codex'], description: 'Require a connected editor to approve an earned Codex reset before redemption; without approval no credit is redeemed.' },
+  { key: 'terminateStaleDaemons', type: 'boolean', providers: ['codex'], description: 'After a Codex login change, and at service start, end this user\'s Codex app-server processes that started before it and are not a VS Code extension\'s own (the shared app-server daemon, the agent host\'s SDK server): Codex starts them again with the current login.' },
   { key: 'autoRotate.updateUsageBeforeRotation', type: 'boolean', description: 'Read the usage of the account rotation is about to switch to right before the switch (a usage call, never a keep-alive). Off: the stored readings decide, with windows that have reset since counted as fresh.' },
   { key: 'autoRotate.resetAware', type: 'boolean', providers: ['codex'], description: 'Avoid automatic switches in the five minutes before a Codex usage window resets; reconsider after the reset.' },
   { key: 'autoRotate.fiveHourThresholdPercent', type: 'number', min: 1, max: 100, description: 'Rotate when the 5-hour window reaches this percentage; a candidate must be below it.' },
@@ -147,6 +150,7 @@ export function defaultProviderConfig(provider: AuthProvider): ProviderConfig {
     api: { minIntervalSeconds: 30 },
     keepAlive: { enabled: true, periodHours: claude ? 2 : 6, model: claude ? 'haiku' : 'gpt-5.6-luna', home: `~/.${provider}-profile-{number}` },
     autoReset: { enabled: !claude, confirmationRequired: false },
+    terminateStaleDaemons: !claude,
     autoRotate: {
       enabled: true,
       resetAware: !claude,

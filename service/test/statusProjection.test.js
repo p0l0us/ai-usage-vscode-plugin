@@ -1,4 +1,4 @@
-require('../../test/helpers/fixtureNetwork');
+require('./helpers/fixtureNetwork');
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const { projectResetCredits, projectQuota, RESET_CREDIT_FRESHNESS_MS } = require('../out/statusProjection');

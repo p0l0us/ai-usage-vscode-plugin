@@ -112,7 +112,9 @@ Code set to Sonnet, an account at `7d Fable` 100% and `7d` 30% is a normal candi
   as a profile's reading. When they show a threshold reached, the next sweep reads the active account itself instead
   of trusting its stored reading, which may be hours old.
 - The service refreshes the active login according to its source interval, even without VS Code. The one-minute
-  automation scheduler also considers stored account readings; enabled keep-alives update other saved accounts.
+  automation scheduler also considers stored account readings; enabled keep-alives update other saved accounts. A
+  keep-alive holds the service's account lock for one account at a time, and a usage refresh that meets one waits for
+  it instead of skipping its round, so readings keep coming during a sweep.
 - **The active account is read only through the native login**, never from its profile home, and gets no keep-alive
   while it is the login in use. The same login exercised from a second installation (the profile home has its own
   Codex installation id) is what the vendor may treat as a compromised session and revoke. A keep-alive sweep leaves

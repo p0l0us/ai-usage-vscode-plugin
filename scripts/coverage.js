@@ -65,6 +65,8 @@ function main(args) {
   // Same isolation as scripts/run-tests.js: tests never see the developer's account homes.
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-coverage-'));
   const env = { ...process.env };
+  delete env.AI_USAGE_TEST_HOME_ISOLATED;
+  env.AI_USAGE_CLAUDE_KEYCHAIN = 'off';
   for (const [key, name] of Object.entries({ HOME: 'home', AI_USAGE_HOME: 'service', CODEX_HOME: 'codex', CLAUDE_CONFIG_DIR: 'claude' })) {
     env[key] = path.join(temporary, name);
     fs.mkdirSync(env[key], { recursive: true });

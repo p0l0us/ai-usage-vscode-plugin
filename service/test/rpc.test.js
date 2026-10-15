@@ -7,12 +7,66 @@ const { RpcServer, RpcClient, RpcError } = require('../out/rpc');
 const { runDaemon } = require('../out/daemon');
 const { ServiceClient, ServiceUnavailableError, connectService, pingService } = require('../out/client');
 const { socketPath, readServiceInfo } = require('../out/paths');
+const net = require('node:net');
+const { once } = require('node:events');
 
 function temporaryHome(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-rpc-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   return root;
 }
+
+async function rawConnection(t, server) {
+  const socket = net.connect(server);
+  socket.setEncoding('utf8');
+  t.after(() => socket.destroy());
+  await once(socket, 'connect');
+  return socket;
+}
+
+test('malformed frames reject the connection before subsequent buffered mutations can run', async t => {
+  const socketFile = socketPath(temporaryHome(t));
+  const methods = [];
+  const server = new RpcServer({ socketPath: socketFile, token: 'secret', handle: async method => methods.push(method) });
+  await server.listen(); t.after(() => server.close());
+  const socket = await rawConnection(t, socketFile);
+  const hello = once(socket, 'data');
+  socket.write(JSON.stringify({ id: 1, method: 'hello', params: { token: 'secret' } }) + '\n');
+  await hello;
+  const closed = once(socket, 'close');
+  socket.write('{malformed}\n' + JSON.stringify({ id: 2, method: 'mutate' }) + '\n');
+  await closed;
+  assert.deepEqual(methods, []);
+});
+
+test('rejecting duplicate ids cancels mutations queued earlier in the same packet', async t => {
+  const socketFile = socketPath(temporaryHome(t));
+  const methods = [];
+  const server = new RpcServer({ socketPath: socketFile, token: 'secret', handle: async method => methods.push(method) });
+  await server.listen(); t.after(() => server.close());
+  const socket = await rawConnection(t, socketFile);
+  const hello = once(socket, 'data');
+  socket.write(JSON.stringify({ id: 1, method: 'hello', params: { token: 'secret' } }) + '\n');
+  await hello;
+  const closed = once(socket, 'close');
+  socket.write([2, 2, 3].map(id => JSON.stringify({ id, method: 'mutate' }) + '\n').join(''));
+  await closed;
+  assert.deepEqual(methods, []);
+});
+
+test('a failed authentication cannot be retried within the same packet', async t => {
+  const socketFile = socketPath(temporaryHome(t));
+  let hellos = 0;
+  const server = new RpcServer({ socketPath: socketFile, token: 'secret', onHello: () => { hellos++; }, handle: async () => null });
+  await server.listen(); t.after(() => server.close());
+  const socket = await rawConnection(t, socketFile);
+  socket.resume();
+  const closed = once(socket, 'close');
+  socket.write(['wrong', 'secret'].map((token, index) => JSON.stringify({ id: index, method: 'hello', params: { token } }) + '\n').join(''));
+  await closed;
+  assert.equal(hellos, 0);
+  assert.equal(server.clientCount, 0);
+});
 
 test('the server refuses anything before a hello with the token, answers calls and pushes events to subscribers', async (t) => {
   const home = temporaryHome(t);

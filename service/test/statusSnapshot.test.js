@@ -1,10 +1,10 @@
-require('../../test/helpers/fixtureNetwork');
+require('./helpers/fixtureNetwork');
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const fs = require('node:fs');
 const path = require('node:path');
 const { AccountService } = require('../out/accountService');
-const { isolateHomes, seedFixture } = require('../../test/helpers/runtimeHost');
+const { isolateHomes, seedFixture } = require('./helpers/runtimeHost');
 const { serializeLiveUsage } = require('../out/usageMonitor');
 
 function fixture(t) {

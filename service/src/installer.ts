@@ -332,20 +332,45 @@ export function installService(options: InstallOptions): InstallResult {
   const log = options.log ?? (() => undefined);
   const pkg = JSON.parse(fs.readFileSync(path.join(options.sourceDir, 'package.json'), 'utf8')) as { version?: string };
   const version = typeof pkg.version === 'string' ? pkg.version : '0.0.0';
+  // The version becomes a directory name; never let a malformed package escape the install root.
+  if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(version)) {
+    throw new Error(`Invalid service package version: ${version}`);
+  }
   const root = installDir(options.home);
   const dir = path.join(root, version);
   fs.mkdirSync(root, { recursive: true, mode: 0o700 });
-  fs.rmSync(dir, { recursive: true, force: true });
-  fs.mkdirSync(dir, { recursive: true });
-  for (const name of ['package.json', 'README.md']) {
-    const file = path.join(options.sourceDir, name);
-    if (fs.existsSync(file)) { fs.copyFileSync(file, path.join(dir, name)); }
-  }
-  for (const name of ['bin', 'out']) { copyDir(path.join(options.sourceDir, name), path.join(dir, name)); }
-  const bridgeSource = [path.join(options.sourceDir, 'bridge'), path.join(options.sourceDir, '..', 'bridge')].find(candidate => fs.existsSync(path.join(candidate, 'src', 'cli.mjs')));
-  if (bridgeSource) {
-    copyDir(path.join(bridgeSource, 'src'), path.join(dir, 'bridge', 'src'));
-    fs.copyFileSync(path.join(bridgeSource, 'package.json'), path.join(dir, 'bridge', 'package.json'));
+  const staging = fs.mkdtempSync(path.join(root, '.install-'));
+  const stagedPackage = path.join(staging, 'package');
+  const previous = path.join(staging, 'previous');
+  let replaced = false;
+  try {
+    fs.mkdirSync(stagedPackage);
+    for (const name of ['package.json', 'README.md', 'LICENSE']) {
+      const file = path.join(options.sourceDir, name);
+      if (fs.existsSync(file)) { fs.copyFileSync(file, path.join(stagedPackage, name)); }
+    }
+    for (const name of ['bin', 'out']) { copyDir(path.join(options.sourceDir, name), path.join(stagedPackage, name)); }
+    const bridgeSource = [path.join(options.sourceDir, 'bridge'), path.join(options.sourceDir, '..', 'bridge')].find(candidate => fs.existsSync(path.join(candidate, 'src', 'cli.mjs')));
+    if (bridgeSource) {
+      copyDir(path.join(bridgeSource, 'src'), path.join(stagedPackage, 'bridge', 'src'));
+      fs.copyFileSync(path.join(bridgeSource, 'package.json'), path.join(stagedPackage, 'bridge', 'package.json'));
+    }
+    for (const file of ['bin/ai-usage.js', 'out/cli.js']) {
+      if (!fs.statSync(path.join(stagedPackage, file), { throwIfNoEntry: false })?.isFile()) {
+        throw new Error(`Incomplete service package: missing ${file}`);
+      }
+    }
+    // `ai-usage service install` can run from this very directory. Finish copying
+    // before replacing it, and retain the old package if publishing the copy fails.
+    if (fs.existsSync(dir)) fs.renameSync(dir, previous);
+    try { fs.renameSync(stagedPackage, dir); replaced = true; }
+    catch (error) {
+      if (fs.existsSync(previous)) fs.renameSync(previous, dir);
+      throw error;
+    }
+  } finally {
+    // If even rollback failed (for example a disconnected drive), retain the backup for recovery.
+    if (replaced || !fs.existsSync(previous)) fs.rmSync(staging, { recursive: true, force: true });
   }
   fs.writeFileSync(launchScript(options.home), launchScriptText());
   const current: CurrentInstall = { version, dir, node: { command: options.node.command, args: options.node.args, env: options.node.env }, installedAt: new Date().toISOString() };
