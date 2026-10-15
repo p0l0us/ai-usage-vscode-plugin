@@ -35,8 +35,9 @@ export function readSettings(config: ServiceConfig, configuration = vscode.works
     if (value === undefined) { continue; }
     // A setting without a default that nobody set comes back as its type's empty value (0 for a number), which is
     // not a choice and may not even be valid for the service; one such value would make it reject the whole batch.
+    // The service's schema decides whether a default exists: VS Code may report that empty value as the default too.
     const inspected = configuration.inspect?.<unknown>(key);
-    if (inspected && inspected.defaultValue === undefined && [inspected.globalValue, inspected.workspaceValue, inspected.workspaceFolderValue]
+    if (inspected && entry.schema.default === undefined && [inspected.globalValue, inspected.workspaceValue, inspected.workspaceFolderValue]
       .every((candidate) => candidate === undefined)) { continue; }
     try {
       validatedConfig = setConfigValue(validatedConfig, entry.key, value);

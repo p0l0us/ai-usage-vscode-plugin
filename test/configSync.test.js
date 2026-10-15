@@ -13,7 +13,7 @@ Module._load = function(id, ...args) {
     window: { showWarningMessage: message => { warnings.push(message); return Promise.resolve(undefined); } },
     workspace: { getConfiguration: () => ({
       get: (key, fallback) => (settings.has(key) ? settings.get(key) : noDefault.has(key) ? noDefault.get(key) : fallback),
-      inspect: (key) => ({ key, defaultValue: noDefault.has(key) ? undefined : null, globalValue: settings.get(key) }),
+      inspect: (key) => ({ key, defaultValue: noDefault.has(key) ? noDefault.get(key) : null, globalValue: settings.get(key) }),
       update: async (key, value) => { updates.push([key, value]); settings.set(key, value); }
     }) }
   };
@@ -83,11 +83,12 @@ test('user settings are read for seeding, differences are found, and pulls write
 });
 
 test('a setting without a default that nobody set is not sent, so the service accepts the rest', () => {
-  settings.clear(); noDefault.clear();
+  settings.clear(); noDefault.clear(); warnings.length = 0;
   noDefault.set('aiUsage.refreshIntervalMinutes', 0);
   settings.set('aiUsage.claude.autoRotate.enabled', true);
   const values = readSettings(defaultConfig());
   assert.equal('refreshIntervalMinutes' in values, false);
+  assert.equal(warnings.length, 0, 'an unset setting is not reported as invalid, even with the 0 VS Code reports as its default');
   assert.equal(values['claude.autoRotate.enabled'], true);
   settings.set('aiUsage.refreshIntervalMinutes', 5);
   assert.equal(readSettings(defaultConfig()).refreshIntervalMinutes, 5, 'a value the user set is sent');

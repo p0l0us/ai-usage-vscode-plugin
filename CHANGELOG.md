@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.6.1 (2026-10-15)
+
+- No more "the setting aiUsage.refreshIntervalMinutes is ignored" warning when the setting was never set. A setting without a default that nobody set is skipped again before validation: the check relied on VS Code reporting no default for it, but VS Code reports its type's empty value (0), which fails the retired setting's "at least 1" rule. The service's own setting definitions now decide whether a default exists.
+
 ## 1.6.0 (2026-10-15)
 
 - The active account is read only through the native login and is never kept alive or checked from its profile home. Each profile home is its own Codex installation, so the active login was being exercised from two installations at once: the user's own Codex (extension, proxy, CLI) and the service's checks every 5 minutes plus an hourly keep-alive. OpenAI answered with `token_revoked: Encountered invalidated oauth token for user`; on 14 October every saved Codex login was revoked within 90 minutes and the pattern repeated after each re-login, always on the account that was, or had just become, the active one. The service now reads the active account over HTTPS with the native login (no CLI start, no token refresh; Claude's call takes a slot in the shared endpoint budget), the keep-alive sweep leaves the active login out, and a keep-alive named by hand for it is refused with the reason. `ai-usage keepalive --all` and the menu's **All accounts** mean every saved account other than the active one. An active profile whose login is not the native one is treated as before.
