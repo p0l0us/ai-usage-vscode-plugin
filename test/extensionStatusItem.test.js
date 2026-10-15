@@ -9,8 +9,10 @@ const ok = (u) => ({ kind: 'ok', usage: u });
 const err = (message = 'boom', title = 'Claude') => ({ kind: 'error', provider: 'claude', title, message });
 
 test('click commands: Claude and Codex open their accounts, Copilot the details', () => {
-  assert.deepEqual(si.clickCommand('claude'), { command: 'aiUsage.manageAuthProfiles', title: 'Manage accounts', arguments: ['claude'] });
-  assert.deepEqual(si.clickCommand('codex'), { command: 'aiUsage.manageAuthProfiles', title: 'Manage accounts', arguments: ['codex'] });
+  // No arguments: VS Code re-registers a command with arguments under a new id on every item update, so a click
+  // during the rotating-logo animation would name an id that is already gone.
+  assert.deepEqual(si.clickCommand('claude'), { command: 'aiUsage.manageAuthProfiles.claude', title: 'Manage accounts' });
+  assert.deepEqual(si.clickCommand('codex'), { command: 'aiUsage.manageAuthProfiles.codex', title: 'Manage accounts' });
   assert.deepEqual(si.clickCommand('copilot'), { command: 'aiUsage.showDetails', title: 'Show usage details' });
 });
 

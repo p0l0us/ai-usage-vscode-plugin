@@ -373,6 +373,11 @@ export function activate(context: vscode.ExtensionContext): void {
       }
     }
   }));
+  // The status bar items' click targets: argument-free, see `clickCommand`.
+  for (const provider of ['claude', 'codex'] as const) {
+    context.subscriptions.push(vscode.commands.registerCommand(`aiUsage.manageAuthProfiles.${provider}`,
+      () => vscode.commands.executeCommand('aiUsage.manageAuthProfiles', provider)));
+  }
   context.subscriptions.push(vscode.commands.registerCommand('aiUsage.manageAuthProfiles', async (value?: unknown) => {
     const initial = value === 'claude' || value === 'codex' ? value as AuthProvider : undefined;
     await accountsMenu.show(initial, {

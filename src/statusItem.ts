@@ -48,7 +48,7 @@ export function visibleUsage(provider: LiveProvider): LiveUsage | undefined {
 export function clickCommand(providerId: ProviderId): vscode.Command {
   return providerId === 'copilot'
     ? { command: 'aiUsage.showDetails', title: 'Show usage details' }
-    : { command: 'aiUsage.manageAuthProfiles', title: 'Manage accounts', arguments: [providerId] };
+    : { command: `aiUsage.manageAuthProfiles.${providerId}`, title: 'Manage accounts' };
 }
 
 /** Tooltip content before it becomes a `vscode.MarkdownString`. */

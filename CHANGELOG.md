@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.6.2 (2026-10-15)
+
+- Clicking the Claude or Codex status bar item while its usage is loading opens the Accounts menu again instead of failing with "Actual command not found, wanted to execute aiUsage.manageAuthProfiles /354". The click command carried the service as an argument, and VS Code re-registers such a command under a new id on every item update, which the rotating logo makes about 13 times a second. Each item now has its own argument-free command.
+
 ## 1.6.1 (2026-10-15)
 
 - No more "the setting aiUsage.refreshIntervalMinutes is ignored" warning when the setting was never set. A setting without a default that nobody set is skipped again before validation: the check relied on VS Code reporting no default for it, but VS Code reports its type's empty value (0), which fails the retired setting's "at least 1" rule. The service's own setting definitions now decide whether a default exists.
