@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.6.2 (unreleased)
+## 1.7.0 (2026-10-20)
 
 - The Codex status bar item shows how often OpenAI itself failed in the last hour. The account proxy relays every Codex request, so it sees OpenAI's answer to each: an error status, or an error event inside a successful stream, which is how "Selected model is at capacity. Please try a different model." (Codex's `server_overloaded`) arrives after the response started. Capacity and other server errors are counted; the item shows `$(warning) N` after the figures, its hover reads "OpenAI capacity errors: N in the last hour" with the latest message and model, and the log names each one with the model. Account quota answers and request errors are not counted. On 20 October one account at 44% of its weekly allowance lost 76 of 91 turns to such errors, and the symptom read as an exhausted account.
 - A Codex keep-alive that fails with "Selected model is at capacity. Please try a different model." is listed as **Model at capacity** instead of the vendor's text under "Keep-alive failed". Codex records this error as `server_overloaded`: the model has no capacity at that moment, which says nothing about the account's quota. Saved accounts at 1% and 18% of their weekly allowance carried the warning for hours and read as exhausted.
