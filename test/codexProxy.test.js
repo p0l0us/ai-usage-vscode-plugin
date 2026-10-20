@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
-const { CodexAccountProxy, CODEX_PROXY_SERVICE, isLoopbackHost, parseCodexLogin, probeCodexProxy, readCodexLogin, upstreamErrorDetail, accessTokenMayHaveExpired } = require('../out/codexProxy');
+const { CodexAccountProxy, CODEX_PROXY_SERVICE, SseErrorInspector, classifyUpstreamError, isLoopbackHost, parseCodexLogin, probeCodexProxy, readCodexLogin, requestModel, upstreamErrorDetail, upstreamErrorFields, accessTokenMayHaveExpired } = require('../out/codexProxy');
 
 const AUTH = 'https://api.openai.com/auth';
 const jwt = (claims) => `h.${Buffer.from(JSON.stringify(claims)).toString('base64url')}.s`;
@@ -312,4 +312,86 @@ test('an unreachable upstream is reported as 502 and a WebSocket upgrade is refu
     request.end();
   });
   assert.equal(upgrade, 404);
+});
+
+test('classifyUpstreamError tells OpenAI capacity, server and rate-limit failures from account quota and client errors', () => {
+  assert.equal(classifyUpstreamError('server_overloaded', 'Selected model is at capacity. Please try a different model.'), 'capacity');
+  assert.equal(classifyUpstreamError(undefined, undefined, 503), 'capacity');
+  assert.equal(classifyUpstreamError('server_error', 'An error occurred while processing your request. You can retry your request.'), 'serverError');
+  assert.equal(classifyUpstreamError(undefined, undefined, 502), 'serverError');
+  assert.equal(classifyUpstreamError('rate_limit_exceeded', 'Too many requests', 429), 'rateLimit');
+  assert.equal(classifyUpstreamError(undefined, undefined, 429), 'rateLimit');
+  assert.equal(classifyUpstreamError('usage_limit_reached', "You've hit your usage limit.", 429), undefined, 'the account quota is not an OpenAI failure');
+  assert.equal(classifyUpstreamError(undefined, 'Your workspace is out of credits.', 429), undefined);
+  assert.equal(classifyUpstreamError('invalid_request_error', 'Unsupported parameter', 400), undefined);
+  assert.equal(classifyUpstreamError(undefined, undefined, 400), undefined);
+  assert.equal(classifyUpstreamError('context_length_exceeded', 'Too long'), undefined);
+  assert.deepEqual(upstreamErrorFields('{"error":{"code":"server_error","message":"boom"}}'), { code: 'server_error', message: 'boom' });
+  assert.deepEqual(upstreamErrorFields('{"detail":"Internal error"}'), { code: undefined, message: 'Internal error' });
+  assert.equal(upstreamErrorFields('nope'), undefined);
+  assert.equal(requestModel('/v1/responses', Buffer.from('{"model":"gpt-6-astra","stream":true}')), 'gpt-6-astra');
+  assert.equal(requestModel('/v1/models', Buffer.from('')), undefined);
+});
+
+test('SseErrorInspector reads error events split across chunks and notices a missing final event', () => {
+  const a = new SseErrorInspector();
+  const text = 'event: response.created\ndata: {"type":"response.created"}\n\nevent: error\ndata: {"type":"error",\ndata: "code":"server_overloaded","message":"Selected model is at capacity."}\n\n';
+  for (let i = 0; i < text.length; i += 7) { a.feed(text.slice(i, i + 7)); }
+  a.end();
+  assert.deepEqual(a.errors, [{ code: 'server_overloaded', message: 'Selected model is at capacity.' }]);
+  assert.equal(a.terminal, true);
+  const b = new SseErrorInspector();
+  b.feed('data: {"type":"response.created"}\r\n\r\ndata: {"type":"response.output_text.delta","delta":"hi"}\r\n\r\n');
+  b.end();
+  assert.equal(b.terminal, false, 'the stream never reached its final event');
+  assert.deepEqual(b.errors, []);
+  const c = new SseErrorInspector();
+  c.feed('data: {"type":"response.failed","response":{"error":{"code":"server_error","message":"An error occurred"}}}\n\ndata: [DONE]\n\n');
+  c.end();
+  assert.deepEqual(c.errors, [{ code: 'server_error', message: 'An error occurred' }]);
+  assert.equal(c.terminal, true);
+  const d = new SseErrorInspector();
+  d.feed('data: {"type":"response.completed","response":{"id":"r1"}}');
+  d.end();
+  assert.equal(d.terminal, true, 'a final event without its blank line still counts');
+});
+
+test('OpenAI failures inside relayed streams, error statuses and streams cut short are counted for the last hour and logged with the model', async (t) => {
+  let clock = Date.parse('2026-10-20T06:00:00Z');
+  const scripts = [];
+  const f = await fixture(t, { now: () => clock, chatgptRespond: (record, res) => scripts.shift()(res) });
+  const stream = (events) => (res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    for (const event of events) { res.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`); }
+    res.end();
+  };
+  const json = (status, body) => (res) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)); };
+  scripts.push(
+    stream([{ type: 'response.created' }, { type: 'response.output_text.delta', delta: 'x' },
+      { type: 'error', code: 'server_overloaded', message: 'Selected model is at capacity. Please try a different model.' }]),
+    stream([{ type: 'response.created' }, { type: 'response.failed', response: { error: { code: 'server_error', message: 'An error occurred while processing your request.' } } }]),
+    stream([{ type: 'response.created' }, { type: 'response.completed', response: { id: 'r1' } }]),
+    stream([{ type: 'response.created' }]),
+    json(429, { error: { code: 'rate_limit_exceeded', message: 'Too many requests' } }),
+    json(429, { error: { code: 'usage_limit_reached', message: "You've hit your usage limit." } }),
+    json(503, {})
+  );
+  const answers = [];
+  for (let i = 0; i < 7; i++) { answers.push(await send(f.proxy, { body: '{"model":"gpt-6-astra","stream":true}' })); }
+  assert.deepEqual(answers.map((answer) => answer.status), [200, 200, 200, 200, 429, 429, 503], 'everything is still relayed as it came');
+  assert.match(answers[0].body, /server_overloaded/, 'the stream reaches Codex unchanged');
+  const summary = f.proxy.upstreamErrorSummary();
+  assert.equal(summary.capacity, 2, 'the in-stream server_overloaded and the 503');
+  assert.equal(summary.serverErrors, 2, 'the failed response and the stream that ended without its final event');
+  assert.equal(summary.rateLimits, 1, 'the usage-limit 429 is the account\'s quota, not an OpenAI failure');
+  assert.equal(summary.windowMs, 3_600_000);
+  assert.deepEqual(summary.last, { at: new Date(clock).toISOString(), kind: 'capacity', code: undefined, message: undefined, model: 'gpt-6-astra' });
+  assert.ok(f.logs.some((line) => /codex proxy #1: \/v1\/responses stream error from OpenAI \(capacity, server_overloaded, gpt-6-astra\): Selected model is at capacity/.test(line)), f.logs.join('\n'));
+  assert.ok(f.logs.some((line) => /codex proxy #4: \/v1\/responses stream error from OpenAI \(serverError, stream_ended_early, gpt-6-astra\)/.test(line)), f.logs.join('\n'));
+  assert.ok(f.logs.some((line) => /codex proxy #5: \/v1\/responses HTTP 429 from OpenAI \(rateLimit, rate_limit_exceeded, gpt-6-astra\): Too many requests/.test(line)), f.logs.join('\n'));
+  assert.ok(!f.logs.some((line) => /usage_limit_reached/.test(line)), 'quota answers are not logged as OpenAI failures');
+  // An hour later the window is empty; the entries themselves are kept for a day.
+  clock += 3_600_001;
+  assert.deepEqual(f.proxy.upstreamErrorSummary(), { windowMs: 3_600_000, capacity: 0, serverErrors: 0, rateLimits: 0 });
+  assert.equal(f.proxy.upstreamErrorSummary(24 * 3_600_000).capacity, 2);
 });

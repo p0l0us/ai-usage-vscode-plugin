@@ -163,7 +163,7 @@ account rotation** (`aiUsage.<service>.autoRotate.enabled`) are set in Settings,
 ![Keep-alive and rotation settings… item showing keep-alive on and rotation on with the leastWaste strategy](images/screenshots/accounts-keep-alive-settings-claude.png)
 
 - Claude sends `what is date today` using `haiku` every **2 hours** per saved account, in `~/.claude-tmp`.
-- Codex sends the same small request every **6 hours** per saved account, using `gpt-5.6-luna` in `~/.codex-tmp`, then
+- Codex sends the same small request every **6 hours** per saved account, using `gpt-6-luna` in `~/.codex-tmp`, then
   reads account limits through its CLI. Its model is configurable; an empty model setting uses the CLI default.
 - Both collect usage for inactive accounts. The authentication profile list shows each account's last usage,
   check time and errors. Model calls consume subscription usage and run while the shared runtime is running.

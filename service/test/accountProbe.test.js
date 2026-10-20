@@ -343,7 +343,7 @@ test('sign-in runs the vendor login and keeps a Codex login in its file', () => 
 });
 
 test('known keep-alive and usage errors read as a short description with advice', () => {
-  const { explainAccountProblem } = require('../out/accountProbe');
+  const { explainAccountProblem, isTransientProblem } = require('../out/accountProbe');
   const credits = explainAccountProblem('Keep-alive CLI exited with code 1: Your workspace is out of credits. Add credits to continue.');
   assert.equal(credits.label, 'Insufficient credits');
   assert.match(credits.advice, /Add credits/);
@@ -358,8 +358,29 @@ test('known keep-alive and usage errors read as a short description with advice'
   assert.equal(explainAccountProblem('Request failed: getaddrinfo ENOTFOUND api.anthropic.com').label, 'Network error');
   assert.equal(explainAccountProblem('Keep-alive timed out after 90 seconds.').label, 'Timed out');
   assert.equal(explainAccountProblem("Keep-alive CLI exited with code 1: The 'gpt-x' model is not supported when using Codex with a ChatGPT account.").label, 'Keep-alive model unavailable');
+  // Codex's `server_overloaded`: the model has no capacity for the moment, whatever the account's quota.
+  const capacity = explainAccountProblem('Keep-alive CLI exited with code 1: Selected model is at capacity. Please try a different model.');
+  assert.equal(capacity.label, 'Model at capacity');
+  assert.equal(capacity.known, true);
+  assert.equal(capacity.transient, true);
+  assert.match(capacity.advice, /repeated after the check interval/);
   const unknown = explainAccountProblem('Keep-alive CLI exited with code 2: Something odd happened.');
   assert.deepEqual(unknown, { label: 'Something odd happened', known: false });
+});
+
+test('passing failures are transient; failures that say something about the account are not', () => {
+  const { isTransientProblem } = require('../out/accountProbe');
+  for (const passing of ['Keep-alive CLI exited with code 1: Selected model is at capacity. Please try a different model.', 'Rate limited by the service.',
+    'Request failed: getaddrinfo ENOTFOUND api.anthropic.com', 'Keep-alive timed out after 90 seconds.', 'HTTP 503 Service Unavailable', 'Account check cancelled.']) {
+    assert.equal(isTransientProblem(passing), true, passing);
+  }
+  for (const lasting of ['Keep-alive CLI exited with code 1: Your workspace is out of credits. Add credits to continue.',
+    "Keep-alive CLI exited with code 1: You've hit your usage limit. Try again at 3:00 PM.",
+    'Keep-alive CLI exited with code 1: Your access token could not be refreshed because your refresh token was revoked. Please log out and sign in again.',
+    "Keep-alive CLI exited with code 1: The 'gpt-x' model is not supported when using Codex with a ChatGPT account.",
+    'Keep-alive CLI exited with code 2: Something odd happened.', undefined, '']) {
+    assert.equal(isTransientProblem(lasting), false, String(lasting));
+  }
 });
 
 test('Codex usage is read over HTTPS without starting the CLI, unless the earned-reset count is wanted or the token needs the CLI', async t => {

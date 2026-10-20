@@ -7409,9 +7409,9 @@
           },
           "aiUsage.codex.keepAlive.model": {
             "type": "string",
-            "default": "gpt-5.6-luna",
+            "default": "gpt-6-luna",
             "scope": "machine",
-            "description": "Subscription model used for the small keep-alive request (default: gpt-5.6-luna). Empty uses the Codex CLI default.",
+            "description": "Subscription model used for the small keep-alive request (default: gpt-6-luna). Empty uses the Codex CLI default.",
             "order": 9
           },
           "aiUsage.codex.autoRotate.fiveHourThresholdPercent": {

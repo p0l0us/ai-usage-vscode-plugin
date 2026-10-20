@@ -39,6 +39,137 @@ const EXPIRY_SLACK_MS = 60_000;
 /** Enough of an upstream error body to name the reason; the rest is dropped. */
 const MAX_ERROR_BODY_BYTES = 64 * 1024;
 
+// --- OpenAI's own failures, as seen while they are relayed ---------------------------------------------------
+
+/** How long relayed failures are remembered, how many at most, and the window the summary counts by default. */
+const UPSTREAM_ERROR_RETENTION_MS = 24 * 3_600_000;
+const MAX_UPSTREAM_ERRORS = 500;
+export const UPSTREAM_ERROR_WINDOW_MS = 3_600_000;
+/** An SSE event beyond this size is not an error event; it is skipped unread. */
+const MAX_SSE_EVENT_BYTES = 1024 * 1024;
+/** Codex puts `model` first in a Responses body; this much of it is enough to read the model without parsing all of it. */
+const MODEL_SCAN_BYTES = 4096;
+
+export type UpstreamErrorKind = 'capacity' | 'serverError' | 'rateLimit';
+export type UpstreamError = { at: number; kind: UpstreamErrorKind; code?: string; message?: string; status?: number; model?: string };
+/** Counts of OpenAI's failures relayed in the last `windowMs`, and the latest one. */
+export type UpstreamErrorSummary = {
+  windowMs: number;
+  capacity: number;
+  serverErrors: number;
+  rateLimits: number;
+  last?: { at: string; kind: UpstreamErrorKind; code?: string; message?: string; model?: string };
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function asString(value: unknown): string | undefined {
+  return typeof value === 'string' && value !== '' ? value : undefined;
+}
+
+/**
+ * What a failure says about OpenAI rather than about the request or the account. `capacity`: the model pool refused
+ * or dropped the work (Codex shows "Selected model is at capacity", its `server_overloaded`); `serverError`: any other
+ * failure on OpenAI's side; `rateLimit`: a 429 for request rate. Account quota (`usage_limit_reached`, no credits)
+ * and client-side errors (an invalid request) are nobody's outage: the usage readings and Codex report those.
+ */
+export function classifyUpstreamError(code: string | undefined, message: string | undefined, status?: number): UpstreamErrorKind | undefined {
+  const text = `${code ?? ''} ${message ?? ''}`;
+  if (/overloaded|at capacity|capacity unavailable/i.test(text)) { return 'capacity'; }
+  if (/usage_limit|usage_not_included|insufficient_quota|quota exceeded|out of credits|credits? (?:depleted|exhausted)|billing/i.test(text)) { return undefined; }
+  if (status === 429 || /rate_limit|rate limit|too many requests/i.test(text)) { return 'rateLimit'; }
+  if (status !== undefined) {
+    if (status === 503 || status === 529) { return 'capacity'; }
+    return status >= 500 ? 'serverError' : undefined;
+  }
+  if (/^(?:invalid|context_length|not_found|unsupported|model_not_found|unknown_parameter)/i.test(code ?? '')) { return undefined; }
+  return 'serverError';
+}
+
+/** `error.code` and `error.message` (or `detail`) of an OpenAI error body; undefined when there is nothing usable. */
+export function upstreamErrorFields(body: string): { code?: string; message?: string } | undefined {
+  try {
+    const parsed: unknown = JSON.parse(body);
+    const record = isRecord(parsed) ? parsed : {};
+    const error = isRecord(record.error) ? record.error : {};
+    const code = asString(error.code);
+    const message = asString(error.message) ?? asString(record.detail);
+    return code || message ? { code, message } : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** The `model` of a Responses request, for the log; undefined for other requests or unreadable bodies. */
+export function requestModel(pathname: string, body: Buffer): string | undefined {
+  if (!pathname.endsWith('/responses') || body.length === 0) { return undefined; }
+  const match = /"model"\s*:\s*"([^"\\]{1,100})"/.exec(body.subarray(0, MODEL_SCAN_BYTES).toString('utf8'));
+  return match?.[1];
+}
+
+/**
+ * Reads the server-sent events of a Responses stream as it passes through, to notice OpenAI's own error events
+ * (`error`, `response.failed`) and whether the stream reached its final event at all.
+ */
+export class SseErrorInspector {
+  private buffer = '';
+  private data: string[] = [];
+  private oversized = false;
+  /** The stream reached `response.completed`, `response.incomplete`, `response.failed`, `error` or `[DONE]`. */
+  terminal = false;
+  readonly errors: Array<{ code?: string; message?: string }> = [];
+
+  feed(chunk: Buffer | string): void {
+    this.buffer += typeof chunk === 'string' ? chunk : chunk.toString('utf8');
+    if (this.buffer.length > MAX_SSE_EVENT_BYTES) { this.buffer = ''; this.data = []; this.oversized = true; return; }
+    let newline = this.buffer.indexOf('\n');
+    while (newline >= 0) {
+      const line = this.buffer.slice(0, newline).replace(/\r$/, '');
+      this.buffer = this.buffer.slice(newline + 1);
+      newline = this.buffer.indexOf('\n');
+      if (line === '') { this.dispatch(); continue; }
+      if (!line.startsWith('data:')) { continue; }
+      const value = line.slice(5).replace(/^ /, '');
+      if (this.oversized) { continue; }
+      if (this.data.reduce((size, part) => size + part.length, value.length) > MAX_SSE_EVENT_BYTES) { this.data = []; this.oversized = true; }
+      else { this.data.push(value); }
+    }
+  }
+
+  /** The stream is over: an event still waiting for its blank line is read too. */
+  end(): void {
+    if (this.buffer !== '') { this.feed('\n'); this.buffer = ''; }
+    this.dispatch();
+  }
+
+  private dispatch(): void {
+    const data = this.data.join('\n');
+    const oversized = this.oversized;
+    this.data = [];
+    this.oversized = false;
+    if (oversized || data === '') { return; }
+    if (data.trim() === '[DONE]') { this.terminal = true; return; }
+    let event: Record<string, unknown>;
+    try {
+      const parsed: unknown = JSON.parse(data);
+      if (!isRecord(parsed)) { return; }
+      event = parsed;
+    } catch {
+      return;
+    }
+    const type = asString(event.type) ?? '';
+    if (type === 'response.completed' || type === 'response.incomplete') { this.terminal = true; return; }
+    if (type !== 'error' && type !== 'response.failed') { return; }
+    this.terminal = true;
+    const source = type === 'error'
+      ? (isRecord(event.error) ? event.error : event)
+      : (isRecord(event.response) && isRecord(event.response.error) ? event.response.error : undefined);
+    this.errors.push({ code: asString(source?.code), message: asString(source?.message) });
+  }
+}
+
 /** Request headers that describe the local hop or that the proxy sets itself. */
 const DROPPED_REQUEST_HEADERS = new Set([
   'host', 'connection', 'keep-alive', 'content-length', 'transfer-encoding', 'te', 'upgrade', 'expect',
@@ -243,6 +374,8 @@ export class CodexAccountProxy {
   private requests = 0;
   /** The last token OpenAI rejected after a refresh could not replace it, and until when it is left alone. */
   private rejected: { token: string; until: number } | undefined;
+  /** OpenAI's own failures relayed recently, oldest first; see `upstreamErrorSummary`. */
+  private upstreamErrorLog: UpstreamError[] = [];
 
   constructor(private readonly options: CodexProxyOptions) {}
 
@@ -358,8 +491,11 @@ export class CodexAccountProxy {
         await this.rejectLogin(res, upstream, login);
         return;
       }
+      // A connection OpenAI drops mid-stream ends Codex's response too, instead of raising an unhandled stream error.
+      upstream.on('error', () => { if (!res.writableFinished) { res.destroy(); } });
       res.writeHead(upstream.statusCode ?? 502, responseHeaders(upstream.headers));
       upstream.pipe(res);
+      this.observeUpstream(id, url.pathname, upstream, aborted.signal, requestModel(url.pathname, body));
     } catch (error) {
       if (aborted.signal.aborted) {
         return;
@@ -372,6 +508,71 @@ export class CodexAccountProxy {
         res.destroy();
       }
     }
+  }
+
+  /**
+   * OpenAI's own failures relayed in the last `windowMs` (an hour by default), with the latest one. Codex shows
+   * them as "Selected model is at capacity" or a failed turn; counted here they are told apart from the account's quota.
+   */
+  upstreamErrorSummary(windowMs = UPSTREAM_ERROR_WINDOW_MS, now = this.now()): UpstreamErrorSummary {
+    const recent = this.upstreamErrorLog.filter((entry) => now - entry.at <= windowMs);
+    const count = (kind: UpstreamErrorKind) => recent.filter((entry) => entry.kind === kind).length;
+    const last = recent[recent.length - 1];
+    return {
+      windowMs, capacity: count('capacity'), serverErrors: count('serverError'), rateLimits: count('rateLimit'),
+      ...(last ? { last: { at: new Date(last.at).toISOString(), kind: last.kind, code: last.code, message: last.message, model: last.model } } : {})
+    };
+  }
+
+  private recordUpstreamError(id: number, pathname: string, entry: Omit<UpstreamError, 'at'>): void {
+    const now = this.now();
+    this.upstreamErrorLog = [...this.upstreamErrorLog.filter((item) => now - item.at <= UPSTREAM_ERROR_RETENTION_MS), { ...entry, at: now }]
+      .slice(-MAX_UPSTREAM_ERRORS);
+    const what = entry.status !== undefined ? `HTTP ${entry.status}` : 'stream error';
+    const about = [entry.kind, entry.code, entry.model].filter(Boolean).join(', ');
+    this.options.log(`codex proxy #${id}: ${pathname} ${what} from OpenAI (${about})${entry.message ? `: ${entry.message.slice(0, 200)}` : ''}`);
+  }
+
+  /**
+   * Watches what OpenAI sends back while it is relayed: an error status, an error event inside a successful stream
+   * ("Selected model is at capacity" arrives that way, after the response started) or a stream that ends without its
+   * final event. Each is remembered for `upstreamErrorSummary` and logged once. Called after `pipe`, so the
+   * listeners added here never start the stream flowing before the response is attached.
+   */
+  private observeUpstream(id: number, pathname: string, upstream: http.IncomingMessage, signal: AbortSignal, model?: string): void {
+    const status = upstream.statusCode ?? 0;
+    if (status >= 400) {
+      const chunks: Buffer[] = [];
+      let size = 0;
+      upstream.on('data', (chunk: Buffer) => { if (size < MAX_ERROR_BODY_BYTES) { chunks.push(chunk); size += chunk.length; } });
+      upstream.once('end', () => {
+        const encoded = upstream.headers['content-encoding'] !== undefined && upstream.headers['content-encoding'] !== 'identity';
+        const detail = encoded ? undefined : upstreamErrorFields(Buffer.concat(chunks).toString('utf8'));
+        const kind = classifyUpstreamError(detail?.code, detail?.message, status);
+        if (kind) { this.recordUpstreamError(id, pathname, { kind, status, code: detail?.code, message: detail?.message, model }); }
+      });
+      return;
+    }
+    if (!/text\/event-stream/i.test(String(upstream.headers['content-type'] ?? ''))) { return; }
+    const inspector = new SseErrorInspector();
+    upstream.on('data', (chunk: Buffer) => inspector.feed(chunk));
+    let done = false;
+    const finish = (ended: boolean) => {
+      if (done) { return; }
+      done = true;
+      inspector.end();
+      for (const error of inspector.errors) {
+        const kind = classifyUpstreamError(error.code, error.message);
+        if (kind) { this.recordUpstreamError(id, pathname, { kind, code: error.code, message: error.message, model }); }
+      }
+      if (!inspector.terminal && !signal.aborted) {
+        this.recordUpstreamError(id, pathname, ended
+          ? { kind: 'serverError', code: 'stream_ended_early', message: 'The stream ended before its final event.', model }
+          : { kind: 'serverError', code: 'connection_lost', message: 'The connection to OpenAI was lost before the stream finished.', model });
+      }
+    };
+    upstream.once('end', () => finish(true));
+    upstream.once('error', () => finish(false));
   }
 
   private forward(req: http.IncomingMessage, url: URL, body: Buffer, login: CodexLogin, signal: AbortSignal): Promise<http.IncomingMessage> {

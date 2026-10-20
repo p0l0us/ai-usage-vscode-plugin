@@ -275,7 +275,7 @@ provider is selected (the AI Usage status bar keeps showing the usage), Codex's 
 `Rate limit: Unavailable` until the chat's first turn — it reads limits from a login the app-server no longer knows,
 and only learns them again from the rate-limit data the proxy passes back with each model response (verified with a
 proxied turn on 0.155.0) — chats opened before the proxy was enabled keep their previous path until you start a new
-chat, and failed Codex model requests are noted in the AI Usage log. The account service serves the port. A background service keeps it running when editor windows close. A user-wide ownership lease prevents another instance from serving a second proxy, even on a different port. The port must be an integer from 1024 to 65535; conflicts are reported. Turning the setting off restores `config.toml` to what it was. Only the managed block between two marker comments and the `model_provider` line are
+chat, and failed Codex model requests are noted in the AI Usage log. OpenAI's own failures the proxy relays — an error status, or an error event inside a successful stream, which is how "Selected model is at capacity" arrives — are counted for the last hour: the Codex status bar item shows `$(warning) N` after its figures, its hover reads "OpenAI capacity errors: N in the last hour" with the latest message and model, and the log names each one. Answers about the account's own quota and request errors are not counted. The account service serves the port. A background service keeps it running when editor windows close. A user-wide ownership lease prevents another instance from serving a second proxy, even on a different port. The port must be an integer from 1024 to 65535; conflicts are reported. Turning the setting off restores `config.toml` to what it was. Only the managed block between two marker comments and the `model_provider` line are
 touched. AI Usage's own usage checks pin `model_provider = "openai"` and are unaffected. The proxy answers only
 requests addressed to `127.0.0.1` that carry a token it writes into `config.toml`, so a web page on the same machine
 cannot use the login through it; anything that can read `auth.json` could use the login anyway. When the ChatGPT
@@ -515,7 +515,7 @@ in between two accounts. Once the wait runs out, the notification says that the 
 | `autoRotate.trigger` | `proactive` | `proactive` | `limit` switches only at a threshold; `proactive` also switches to a clearly better account (except with `sequential`). |
 | `autoRotate.minStayMinutes` | `15` | `15` | With `proactive`, how long a newly active account is kept before another proactive switch. |
 | `keepAlive.home` | `~/.claude-profile-{number}` | `~/.codex-profile-{number}` | Persistent account home template; must be separate from the native home. |
-| `keepAlive.model` | `haiku` | `gpt-5.6-luna` | Select a subscription model for the small request. |
+| `keepAlive.model` | `haiku` | `gpt-6-luna` | Select a subscription model for the small request. |
 | `cliPath` | `claude` | `codex` | CLI command or executable path. |
 
 Codex defaults to Luna for small background calls, following [OpenAI Docs model usage guidance](https://learn.chatgpt.com/docs/pricing).

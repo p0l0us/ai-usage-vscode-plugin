@@ -18,7 +18,7 @@ test('defaults match the extension settings: Claude rotates at 95/99.5, Codex at
   assert.equal(config.claude.autoRotate.updateUsageBeforeRotation, false);
   assert.equal(config.codex.autoRotate.updateUsageBeforeRotation, false);
   assert.equal(config.codex.keepAlive.periodHours, 6);
-  assert.equal(config.codex.keepAlive.model, 'gpt-5.6-luna');
+  assert.equal(config.codex.keepAlive.model, 'gpt-6-luna');
   assert.equal(config.claude.keepAlive.enabled, true);
   assert.equal(config.codex.keepAlive.enabled, true);
   assert.equal(config.claude.keepAlive.model, 'haiku');
@@ -202,4 +202,22 @@ test('new engine settings retain per-key revision conflicts and persisted user s
   assert.equal(reopened.config.codex.source, 'cli'); assert.equal(reopened.config.codex.checkIntervalMinutes, 5);
   assert.equal(reopened.config.claude.source, 'auto'); assert.equal(reopened.config.claude.checkIntervalMinutes, 10);
   assert.equal(reopened.view().scopes['codex.autoReset.confirmationRequired'], 'engine');
+});
+
+test('the former default Codex keep-alive model moves to the current one, unless it was chosen deliberately', (t) => {
+  const { ConfigAuthority } = require('../out/configStore');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-config-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 'config.json');
+  // A file written by an older service holds the former default without a revision for the key.
+  fs.writeFileSync(file, JSON.stringify({ version: 1, codex: { keepAlive: { model: 'gpt-5.6-luna' } }, revision: 3, revisions: { 'codex.cliPath': 2 } }));
+  assert.equal(new ConfigAuthority(file).config.codex.keepAlive.model, 'gpt-6-luna');
+  // The same value set by the user carries a revision and stays.
+  fs.writeFileSync(file, JSON.stringify({ version: 1, codex: { keepAlive: { model: 'gpt-5.6-luna' } }, revision: 3, revisions: { 'codex.keepAlive.model': 3 } }));
+  assert.equal(new ConfigAuthority(file).config.codex.keepAlive.model, 'gpt-5.6-luna');
+  // Another model is never touched.
+  fs.writeFileSync(file, JSON.stringify({ version: 1, codex: { keepAlive: { model: 'gpt-6-sol' } }, revision: 1, revisions: {} }));
+  assert.equal(new ConfigAuthority(file).config.codex.keepAlive.model, 'gpt-6-sol');
+  assert.equal(normalizeConfig({ codex: { keepAlive: { model: 'gpt-5.6-luna' } } }).codex.keepAlive.model, 'gpt-5.6-luna',
+    'the plain merge keeps the value; only the authority, which knows the revisions, moves it');
 });

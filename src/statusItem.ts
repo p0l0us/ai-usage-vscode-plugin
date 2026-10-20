@@ -1,6 +1,6 @@
 import type * as vscode from 'vscode';
 import { formatEarnedResets, formatResetIn, projectResetCredits } from '../service/out';
-import type { LiveResult, LiveUsage, ProviderId, RotationDiagnostics } from '../service/out';
+import type { LiveResult, LiveUsage, ProviderId, RotationDiagnostics, UpstreamErrorSummary } from '../service/out';
 import { rotationTooltipLines } from './usageClient';
 import { formatEarnedResetCount, formatUsagePercent } from './usageFormatting';
 import {
@@ -55,7 +55,7 @@ export function clickCommand(providerId: ProviderId): vscode.Command {
 export type TooltipModel =
   | { kind: 'text'; text: string }
   | { kind: 'rotation'; diagnostics: RotationDiagnostics }
-  | { kind: 'usage'; usage: LiveUsage; refreshError?: string; activeProfile?: string; diagnostics?: RotationDiagnostics };
+  | { kind: 'usage'; usage: LiveUsage; refreshError?: string; activeProfile?: string; diagnostics?: RotationDiagnostics; upstreamErrors?: UpstreamErrorSummary };
 
 /** What `renderLive` puts on the item. `undefined` fields leave the item's property as it was. */
 export type StatusItemModel =
@@ -79,6 +79,8 @@ export type StatusInputs = {
   now: Date;
   /** Why the account service cannot be reached; `undefined` while connected. */
   serviceProblem?: string;
+  /** OpenAI's own failures the Codex account proxy relayed in the last hour; undefined while the proxy is off or served by another service. */
+  upstreamErrors?: UpstreamErrorSummary;
 };
 
 /** Shown after the figures while loading when no logo is shown (name-only labels). */
@@ -195,11 +197,14 @@ function baseModel(provider: ModelProvider, inputs: StatusInputs, loading = fals
     provider.id === 'codex' && inputs.earnedResetsEnabled);
   const usageLabel = formatUsageLabel(usage, false, inputs.usageStyle, inputs.now);
   const worst = worstPercent(usage);
+  // OpenAI's failures of the last hour, after the figures: they explain failed turns that the quota does not.
+  const upstreamErrors = provider.id === 'codex' ? inputs.upstreamErrors : undefined;
+  const upstreamCount = upstreamErrors ? upstreamErrors.capacity + upstreamErrors.serverErrors : 0;
   return {
     visible: true,
-    text: text(`${usageLabel}${resetCount ? ` ${resetCount}` : ''}`, usage.title, loading),
+    text: text(`${usageLabel}${resetCount ? ` ${resetCount}` : ''}${upstreamCount ? ` $(warning) ${upstreamCount}` : ''}`, usage.title, loading),
     tooltip: { kind: 'usage', usage, refreshError: inputs.serviceProblem ?? (result?.kind === 'error' ? result.message : undefined),
-      activeProfile: provider.activeProfileName?.(), diagnostics: provider.diagnostics },
+      activeProfile: provider.activeProfileName?.(), diagnostics: provider.diagnostics, ...(upstreamErrors ? { upstreamErrors } : {}) },
     greyed: Boolean(inputs.serviceProblem) || inputs.now.getTime() - usage.fetchedAt.getTime() >= STALE_AFTER_MS,
     background: worst >= ERROR_PERCENT ? 'error' : worst >= WARNING_PERCENT ? 'warning' : null
   };
@@ -230,7 +235,7 @@ export function applyStatusItem(item: vscode.StatusBarItem, model: StatusItemMod
     item.tooltip = markdown;
   } else {
     item.tooltip = buildTooltip(new api.MarkdownString(undefined, true), tooltip.usage, now, tooltip.refreshError,
-      tooltip.activeProfile, tooltip.diagnostics);
+      tooltip.activeProfile, tooltip.diagnostics, tooltip.upstreamErrors);
   }
   if (model.command) {
     item.command = model.command;
@@ -247,7 +252,7 @@ export function applyStatusItem(item: vscode.StatusBarItem, model: StatusItemMod
 
 /** Fills the (empty) markdown string with the hover of a service: every window with its exact reset, details, account, rotation. */
 export function buildTooltip(md: vscode.MarkdownString, usage: LiveUsage, now: Date, refreshError?: string, activeProfile?: string,
-  diagnostics?: RotationDiagnostics): vscode.MarkdownString {
+  diagnostics?: RotationDiagnostics, upstreamErrors?: UpstreamErrorSummary): vscode.MarkdownString {
   if (refreshError) {
     const minutes = Math.round((now.getTime() - usage.fetchedAt.getTime()) / 60_000);
     md.appendMarkdown(`$(warning) **Refresh failed** (${refreshError}). Showing the reading from ${minutes} min ago.\n\n`);
@@ -279,6 +284,15 @@ export function buildTooltip(md: vscode.MarkdownString, usage: LiveUsage, now: D
       md.appendMarkdown(`${line}  \n`);
     }
   }
+  const upstreamLine = upstreamErrorsLine(upstreamErrors);
+  if (upstreamErrors && upstreamLine) {
+    md.appendMarkdown(`\n$(warning) ${upstreamLine}`);
+    if (upstreamErrors.last) {
+      md.appendMarkdown(`  \nLast ${new Date(upstreamErrors.last.at).toLocaleTimeString()}${upstreamErrors.last.model ? `, ${upstreamErrors.last.model}` : ''}: `);
+      md.appendText(upstreamErrors.last.message ?? upstreamErrors.last.code ?? upstreamErrors.last.kind);
+    }
+    md.appendMarkdown('  \nCounted by the Codex account proxy on the answers OpenAI gave; independent of the account\'s quota.\n');
+  }
   md.appendMarkdown(`\n_Updated ${usage.fetchedAt.toLocaleTimeString()}_`);
   if (usage.provider === 'claude' || usage.provider === 'codex') {
     md.appendMarkdown('\n\n$(key) ');
@@ -291,6 +305,25 @@ export function buildTooltip(md: vscode.MarkdownString, usage: LiveUsage, now: D
     }
   }
   return md;
+}
+
+/**
+ * "**OpenAI capacity errors: 3 in the last hour** · 1 other server error · 2 rate limits", or the server errors first
+ * when there were no capacity errors; undefined when nothing failed in the window.
+ */
+export function upstreamErrorsLine(summary: UpstreamErrorSummary | undefined): string | undefined {
+  if (!summary || !(summary.capacity || summary.serverErrors || summary.rateLimits)) { return undefined; }
+  const window = summary.windowMs === 3_600_000 ? 'the last hour' : `the last ${Math.round(summary.windowMs / 60_000)} minutes`;
+  const plural = (count: number, noun: string) => `${count} ${noun}${count === 1 ? '' : 's'}`;
+  const parts: string[] = [];
+  if (summary.capacity || !summary.serverErrors) {
+    parts.push(`**OpenAI capacity errors: ${summary.capacity} in ${window}**`);
+    if (summary.serverErrors) { parts.push(plural(summary.serverErrors, 'other server error')); }
+  } else {
+    parts.push(`**OpenAI server errors: ${summary.serverErrors} in ${window}**`);
+  }
+  if (summary.rateLimits) { parts.push(plural(summary.rateLimits, 'rate limit')); }
+  return parts.join(' · ');
 }
 
 /** Collects what `buildTooltip` writes, for a plain-text copy. */

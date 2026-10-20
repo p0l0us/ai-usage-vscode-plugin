@@ -141,10 +141,12 @@ export type AccountProblem = {
   /** One sentence on what it means or what to do, for a notification. */
   advice?: string;
   known: boolean;
+  /** The vendor or the connection failed for the moment; the same call is worth repeating soon. */
+  transient?: boolean;
 };
 
 /** Known vendor and extension errors, most specific first; the first match names the problem. */
-const KNOWN_PROBLEMS: Array<{ test: (raw: string) => boolean; label: string; advice: (raw: string) => string }> = [
+const KNOWN_PROBLEMS: Array<{ test: (raw: string) => boolean; label: string; advice: (raw: string) => string; transient?: boolean }> = [
   { test: isRevokedCredentialError, label: 'Invalid token', advice: () => 'The saved login no longer works. Sign in again for this profile.' },
   { test: (raw) => EXPIRED_LOGIN.test(raw) || UNREFRESHABLE_LOGIN.test(raw), label: 'Login expired',
     advice: (raw) => UNREFRESHABLE_LOGIN.test(raw)
@@ -156,34 +158,42 @@ const KNOWN_PROBLEMS: Array<{ test: (raw: string) => boolean; label: string; adv
       : 'No credits are left. Add credits, or wait for the usage limit to reset.' },
   { test: (raw) => /usage limit|limit (?:reached|exceeded)|hit your (?:usage )?limit|quota exceeded/i.test(raw), label: 'Usage limit reached',
     advice: () => 'Wait for the limit to reset, or switch to another account.' },
+  // Codex reports this as `server_overloaded`: the model has no capacity at that moment, whatever the account's quota.
+  { test: (raw) => /at capacity|capacity unavailable|server_overloaded/i.test(raw), label: 'Model at capacity', transient: true,
+    advice: () => 'The service has no capacity for the keep-alive model right now; the keep-alive is repeated after the check interval.' },
   { test: (raw) => /\bmodel\b.*(?:not supported|not found|does not exist|may not exist|not available|no access|not have access)|unsupported model/i.test(raw),
     label: 'Keep-alive model unavailable', advice: () => 'This account cannot use the configured keep-alive model. Choose another one in Settings.' },
-  { test: (raw) => /rate limited|too many requests|\b429\b/i.test(raw), label: 'Rate limited',
+  { test: (raw) => /rate limited|too many requests|\b429\b/i.test(raw), label: 'Rate limited', transient: true,
     advice: () => 'The service is limiting requests; the check is retried later.' },
-  { test: (raw) => /overloaded|internal server error|service unavailable|bad gateway|HTTP 5\d\d/i.test(raw), label: 'Service unavailable',
+  { test: (raw) => /overloaded|internal server error|service unavailable|bad gateway|HTTP 5\d\d/i.test(raw), label: 'Service unavailable', transient: true,
     advice: () => 'The service had a temporary problem; the check is retried later.' },
   { test: (raw) => /\b403\b|forbidden|permission denied|not allowed|access denied/i.test(raw), label: 'Access denied',
     advice: () => 'This account is not allowed to use the service.' },
-  { test: (raw) => /request failed|fetch failed|ENOTFOUND|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EAI_AGAIN|network/i.test(raw), label: 'Network error',
+  { test: (raw) => /request failed|fetch failed|ENOTFOUND|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EAI_AGAIN|network/i.test(raw), label: 'Network error', transient: true,
     advice: () => 'The service could not be reached. Check the connection; the check is retried later.' },
-  { test: (raw) => /timed out/i.test(raw), label: 'Timed out', advice: () => 'The CLI did not answer in time; the check is retried later.' },
+  { test: (raw) => /timed out/i.test(raw), label: 'Timed out', transient: true, advice: () => 'The CLI did not answer in time; the check is retried later.' },
   { test: (raw) => /CLI (?:"[^"]*" )?not found|could not start the keep-alive CLI/i.test(raw), label: 'CLI not found',
     advice: () => 'The CLI could not be started. Check its path in Settings.' },
   { test: (raw) => /temporarily paused after a provider error/i.test(raw), label: 'Paused after an error',
     advice: () => 'Checks resume after the provider check interval.' },
-  { test: (raw) => /usage endpoint is already being called/i.test(raw), label: 'Waiting for the usage endpoint',
+  { test: (raw) => /usage endpoint is already being called/i.test(raw), label: 'Waiting for the usage endpoint', transient: true,
     advice: () => 'Other checks are using the usage endpoint; this one is retried later.' },
   { test: (raw) => /saved credential is missing/i.test(raw), label: 'Saved login missing', advice: () => 'Save or import a login for this profile again.' },
-  { test: (raw) => /cancelled/i.test(raw), label: 'Cancelled', advice: () => 'The check was cancelled and runs again later.' }
+  { test: (raw) => /cancelled/i.test(raw), label: 'Cancelled', transient: true, advice: () => 'The check was cancelled and runs again later.' }
 ];
 
 /** Translates a keep-alive or usage-check error into a short, readable description, when it is a known one. */
 export function explainAccountProblem(raw: string): AccountProblem {
   for (const known of KNOWN_PROBLEMS) {
-    if (known.test(raw)) { return { label: known.label, advice: known.advice(raw), known: true }; }
+    if (known.test(raw)) { return { label: known.label, advice: known.advice(raw), known: true, ...(known.transient ? { transient: true } : {}) }; }
   }
   const reason = raw.replace(/^Keep-alive CLI exited with code \S+?:\s*/i, '').replace(/\.$/, '');
   return { label: reason || raw, known: false };
+}
+
+/** True for a passing failure (capacity, rate limit, network, timeout): the next attempt need not wait a whole period. */
+export function isTransientProblem(message: string | undefined): boolean {
+  return Boolean(message) && explainAccountProblem(message!).transient === true;
 }
 
 /** Interactive login for a staged account; Codex is told to keep the login in auth.json rather than a keyring. */

@@ -380,8 +380,8 @@ export const SETTINGS_CATALOG = [
   {
     "key": "codex.keepAlive.model",
     "type": "string",
-    "default": "gpt-5.6-luna",
-    "description": "Subscription model used for the small keep-alive request (default: gpt-5.6-luna). Empty uses the Codex CLI default."
+    "default": "gpt-6-luna",
+    "description": "Subscription model used for the small keep-alive request (default: gpt-6-luna). Empty uses the Codex CLI default."
   },
   {
     "key": "codex.autoRotate.fiveHourThresholdPercent",

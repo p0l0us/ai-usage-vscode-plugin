@@ -148,7 +148,7 @@ export function defaultProviderConfig(provider: AuthProvider): ProviderConfig {
     cliPath: provider,
     checkIntervalMinutes: 30,
     api: { minIntervalSeconds: 30 },
-    keepAlive: { enabled: true, periodHours: claude ? 2 : 6, model: claude ? 'haiku' : 'gpt-5.6-luna', home: `~/.${provider}-profile-{number}` },
+    keepAlive: { enabled: true, periodHours: claude ? 2 : 6, model: claude ? 'haiku' : 'gpt-6-luna', home: `~/.${provider}-profile-{number}` },
     autoReset: { enabled: !claude, confirmationRequired: false },
     terminateStaleDaemons: !claude,
     autoRotate: {
@@ -419,7 +419,10 @@ function readDocument(file: string): { document?: ConfigDocument; missing: boole
       if (typeof value === 'number' && Number.isInteger(value) && value >= 0) { revisions[key] = Math.min(value, revision); }
     }
   }
-  return { document: { config: normalizeConfig(parsed), revision, revisions }, missing: false, invalid: false, raw: parsed };
+  const config = normalizeConfig(parsed);
+  // The former default keep-alive model moves to the current one, unless it was chosen deliberately (the key then carries a revision).
+  if (config.codex.keepAlive.model === 'gpt-5.6-luna' && revisions['codex.keepAlive.model'] === undefined) { config.codex.keepAlive.model = 'gpt-6-luna'; }
+  return { document: { config, revision, revisions }, missing: false, invalid: false, raw: parsed };
 }
 
 function changedKeys(before: ServiceConfig, after: ServiceConfig): string[] {

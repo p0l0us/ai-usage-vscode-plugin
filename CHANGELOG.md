@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.6.2 (unreleased)
+
+- The Codex status bar item shows how often OpenAI itself failed in the last hour. The account proxy relays every Codex request, so it sees OpenAI's answer to each: an error status, or an error event inside a successful stream, which is how "Selected model is at capacity. Please try a different model." (Codex's `server_overloaded`) arrives after the response started. Capacity and other server errors are counted; the item shows `$(warning) N` after the figures, its hover reads "OpenAI capacity errors: N in the last hour" with the latest message and model, and the log names each one with the model. Account quota answers and request errors are not counted. On 20 October one account at 44% of its weekly allowance lost 76 of 91 turns to such errors, and the symptom read as an exhausted account.
+- A Codex keep-alive that fails with "Selected model is at capacity. Please try a different model." is listed as **Model at capacity** instead of the vendor's text under "Keep-alive failed". Codex records this error as `server_overloaded`: the model has no capacity at that moment, which says nothing about the account's quota. Saved accounts at 1% and 18% of their weekly allowance carried the warning for hours and read as exhausted.
+- A keep-alive that failed for a passing reason (the model at capacity, a rate limit, a network error, a timeout) is repeated after the check interval instead of a whole keep-alive period later, so the warning clears within minutes once the vendor recovers. A failure that says something about the account, such as no credits or a dead login, still waits for the next period.
+- The default Codex keep-alive model is `gpt-6-luna`, the current fast and affordable model, instead of `gpt-5.6-luna`, the one the capacity errors hit. An install whose setting still holds the former default is moved along; a value chosen deliberately stays.
+
 ## 1.6.2 (2026-10-15)
 
 - Clicking the Claude or Codex status bar item while its usage is loading opens the Accounts menu again instead of failing with "Actual command not found, wanted to execute aiUsage.manageAuthProfiles /354". The click command carried the service as an argument, and VS Code re-registers such a command under a new id on every item update, which the rotating logo makes about 13 times a second. Each item now has its own argument-free command.

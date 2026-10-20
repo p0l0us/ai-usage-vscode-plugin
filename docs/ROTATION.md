@@ -284,7 +284,9 @@ These apply to `soonestReset`, `evenPace` and `leastWaste`:
 - **A login problem disqualifies.** An account whose last keep-alive or usage check found a login problem (an
   expired or revoked login) is not switched to and costs the sweep nothing, until a later check of it succeeds: the
   next periodic keep-alive, or **Send keep-alive now…**. A keep-alive that failed for another reason, such as a CLI
-  error or no credits, says nothing about the stored usage and does not block a rotation. The notification that no candidate remains
+  error or no credits, says nothing about the stored usage and does not block a rotation. A keep-alive that failed for a
+  passing reason (the model at capacity, a rate limit, a network error, a timeout) is repeated after the check interval
+  instead of a whole keep-alive period later. The notification that no candidate remains
   names the accounts left out for that reason, and the accounts still at their limit by their last reading, with
   the time until their reset.
 - **Several weekly windows: the tightest one decides.** When both `7d` and `7d Fable` count, `soonestReset` uses the

@@ -1,4 +1,5 @@
 import { configFromSettings } from './configSync';
+import type { UpstreamErrorSummary } from '../service/out';
 import { readServiceUsage } from './usageClient';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -79,7 +80,8 @@ export function activate(context: vscode.ExtensionContext): void {
   // Saved profiles, keep-alives and rotation live in the account service, a background process this extension
   // installs and manages; see serviceManager.ts. The Accounts menus and the status bar are its clients.
   const services = new ServiceManager(context, log);
-  serviceState = { problem: () => services.problem(), hasView: (id) => Boolean(services.views[id as AuthProvider]) };
+  serviceState = { problem: () => services.problem(), hasView: (id) => Boolean(services.views[id as AuthProvider]),
+    codexUpstreamErrors: () => services.runtimeStatus.codexUpstreamErrors };
   activeServices = services;
   context.subscriptions.push(services);
   configureBridgeService(async () => { const client = await services.ensure(); if (!client) throw new Error('The AI Usage service is unavailable.'); return client; });
@@ -774,7 +776,8 @@ async function updateChipContext(provider: LiveProvider, enabled: boolean): Prom
 }
 
 /** The account service connection as `renderLive` needs it; set on activation. */
-let serviceState: { problem(): string | undefined; hasView(id: ProviderId): boolean } = { problem: () => undefined, hasView: () => false };
+let serviceState: { problem(): string | undefined; hasView(id: ProviderId): boolean; codexUpstreamErrors(): UpstreamErrorSummary | undefined } =
+  { problem: () => undefined, hasView: () => false, codexUpstreamErrors: () => undefined };
 
 /** Before an account switch clears the readings, keeps what the item showed until the new account's first reading. */
 function keepPrevious(provider: LiveProvider): void {
@@ -815,7 +818,8 @@ function liveModel(provider: LiveProvider, now: Date): StatusItemModel {
     usageStyle: statusBarStyle(workspaceConfig()).usage,
     earnedResetsEnabled: workspaceConfig().get<boolean>(CODEX_EARNED_RESETS_SETTING, true),
     now,
-    serviceProblem: serviceState.problem()
+    serviceProblem: serviceState.problem(),
+    upstreamErrors: provider.id === 'codex' ? serviceState.codexUpstreamErrors() : undefined
   });
 }
 

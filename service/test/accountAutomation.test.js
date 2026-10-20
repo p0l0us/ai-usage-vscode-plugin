@@ -359,6 +359,38 @@ test('failed keep-alive attempts still persist schedule instead of retrying ever
   assert.match(f.service.usageDetail('claude', 'a'), /Unavailable/);
 });
 
+test('a keep-alive that failed for a passing reason is repeated after the check interval; other failures wait a whole period', async t => {
+  const capacity = 'Keep-alive CLI exited with code 1: Selected model is at capacity. Please try a different model.';
+  const credits = 'Keep-alive CLI exited with code 1: Your workspace is out of credits. Add credits to continue.';
+  const f = fixture(t, { values: { a: [10, 10] }, keepAliveErrors: { b: capacity, c: credits }, settings: { codex: { enabled: true } } });
+  const keepAlives = () => f.calls.filter(call => call[0] === 'codex' && call[2]).map(call => call[1]);
+  await f.service.tick();
+  assert.deepEqual(keepAlives(), ['a', 'b', 'c']);
+  assert.match(f.service.usageDetail('codex', 'b'), /Model at capacity/, 'the vendor text is replaced by the known label');
+  assert.match(f.service.usageDetail('codex', 'c'), /Insufficient credits/);
+  // One check interval later (10 minutes here), only the keep-alive that hit the capacity error is repeated.
+  f.calls.length = 0;
+  f.advance(600001);
+  await f.service.tick();
+  assert.deepEqual(keepAlives(), ['b'], 'b again; a succeeded and c failed for a lasting reason');
+  assert.match(f.service.usageDetail('codex', 'b'), /Model at capacity/, 'still failing');
+  // The vendor recovers: the next repeat succeeds and the warning goes away.
+  delete f.options.keepAliveErrors.b;
+  f.calls.length = 0;
+  f.advance(600001);
+  await f.service.tick();
+  assert.deepEqual(keepAlives(), ['b']);
+  assert.doesNotMatch(f.service.usageDetail('codex', 'b'), /capacity/);
+  // Back on the regular period: nothing after another check interval, everything after a whole period.
+  f.calls.length = 0;
+  f.advance(600001);
+  await f.service.tick();
+  assert.deepEqual(keepAlives(), []);
+  f.advance(6 * HOUR);
+  await f.service.tick();
+  assert.deepEqual(keepAlives(), ['a', 'b', 'c']);
+});
+
 test('manual keep-alive runs while disabled, updates account stats, and resets its periodic schedule', async t => {
   const f = fixture(t);
   const result = await f.service.sendKeepAliveNow('codex', 'b');

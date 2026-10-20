@@ -6,6 +6,7 @@ import {
   installService, launcherDir, logFile, processAlive, readCurrentInstall, readServiceInfo, restartService, serviceHome, serviceStatus, startService, startServiceHost,
   stopService, uninstallService, serviceManuallyStopped, clearManualServiceStop
 } from '../service/out';
+import type { RuntimeStatus } from '../service/out';
 import { ConfigSync, readSeedSettings } from './configSync';
 import { pickWithBack } from './quickPick';
 import { ProfileStoreKind, STORE_TITLES, clientAccess, directAccess, transferProfiles, vscodeProfileCount } from './vscodeProfiles';
@@ -40,7 +41,7 @@ export class ServiceManager implements vscode.Disposable {
   private shutdown?: Promise<void>;
   private takeoverTimer?: ReturnType<typeof setTimeout>;
   private settingsQueue = Promise.resolve();
-  runtimeStatus: { codexProxyActive: boolean } = { codexProxyActive: false };
+  runtimeStatus: RuntimeStatus = { codexProxyActive: false };
   private connecting?: Promise<ServiceClient | undefined>;
   private readonly eventEmitter = new vscode.EventEmitter<ServiceEvent>();
   private readonly stateEmitter = new vscode.EventEmitter<AuthProvider | undefined>();

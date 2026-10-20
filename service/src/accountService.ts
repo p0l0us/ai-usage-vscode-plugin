@@ -1086,7 +1086,7 @@ export class AccountService {
         if (!resolved.cli) throw new Error(resolved.reason);
         return method === 'mcp.register' ? registerMcpServer(provider, resolved.cli, mcpCommand(this.options.home)) : unregisterMcpServer(provider, resolved.cli);
       }
-      case 'runtime.status': return { codexProxyActive: this.runtime.proxy.active };
+      case 'runtime.status': return { codexProxyActive: this.runtime.proxy.active, codexUpstreamErrors: this.runtime.proxy.upstreamErrorSummary() };
       // The calling connection's workspace goes with the request, never another window's or a union of them.
       case 'bridge.ensure': return this.runtime.bridge.ensure(this.bridgeContext(clientId));
       case 'bridge.connection': return this.runtime.bridge.connection(this.bridgeContext(clientId));

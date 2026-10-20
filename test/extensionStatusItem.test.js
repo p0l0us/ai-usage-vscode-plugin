@@ -122,6 +122,32 @@ test('Codex shows the earned reset count after the figures only when known and e
     inputs({ now: NOW })).text, /refresh/, 'only Codex has earned resets');
 });
 
+test('Codex shows the OpenAI failures the account proxy relayed in the last hour after the figures, and the hover explains them', () => {
+  const u = usage({ provider: 'codex', title: 'Codex', fetchedAt: NOW });
+  const errors = { windowMs: 3_600_000, capacity: 3, serverErrors: 1, rateLimits: 0,
+    last: { at: NOW.toISOString(), kind: 'capacity', code: 'server_overloaded', message: 'Selected model is at capacity. Please try a different model.', model: 'gpt-6-astra' } };
+  const model = si.statusItemModel(provider('codex', { last: ok(u) }), inputs({ upstreamErrors: errors }));
+  assert.match(model.text, /^\$\(openai\) 17% \(\d+h\) 26% \(3d\) \$\(warning\) 4$/, 'capacity and server errors together');
+  assert.equal(model.tooltip.upstreamErrors, errors);
+  assert.equal(model.background, null, 'the quota colour is untouched');
+  const quiet = { windowMs: 3_600_000, capacity: 0, serverErrors: 0, rateLimits: 2 };
+  assert.doesNotMatch(si.statusItemModel(provider('codex', { last: ok(u) }), inputs({ upstreamErrors: quiet })).text, /warning/, 'rate limits alone stay in the hover');
+  assert.doesNotMatch(si.statusItemModel(provider('codex', { last: ok(u) }), inputs()).text, /warning/, 'nothing without the proxy');
+  assert.doesNotMatch(si.statusItemModel(provider('claude', { last: ok(usage()) }), inputs({ upstreamErrors: errors })).text, /warning/, 'only Codex has the proxy');
+  assert.equal(si.upstreamErrorsLine(errors), '**OpenAI capacity errors: 3 in the last hour** · 1 other server error');
+  assert.equal(si.upstreamErrorsLine(quiet), '**OpenAI capacity errors: 0 in the last hour** · 2 rate limits');
+  assert.equal(si.upstreamErrorsLine({ windowMs: 600_000, capacity: 0, serverErrors: 2, rateLimits: 0 }), '**OpenAI server errors: 2 in the last 10 minutes**');
+  assert.equal(si.upstreamErrorsLine({ windowMs: 3_600_000, capacity: 0, serverErrors: 0, rateLimits: 0 }), undefined);
+  assert.equal(si.upstreamErrorsLine(undefined), undefined);
+  const md = si.buildTooltip(new api.MarkdownString(undefined, true), u, NOW, undefined, 'Work', undefined, errors);
+  assert.match(md.value, /\n\$\(warning\) \*\*OpenAI capacity errors: 3 in the last hour\*\* · 1 other server error {2}\n/);
+  assert.ok(md.value.includes(`Last ${NOW.toLocaleTimeString()}, gpt-6-astra: \\TEXT(Selected model is at capacity. Please try a different model.)`), md.value);
+  assert.match(md.value, /independent of the account's quota\.\n\n_Updated/);
+  const none = si.buildTooltip(new api.MarkdownString(undefined, true), u, NOW, undefined, 'Work', undefined, { windowMs: 3_600_000, capacity: 0, serverErrors: 0, rateLimits: 0 });
+  assert.doesNotMatch(none.value, /OpenAI/);
+  assert.doesNotMatch(si.tooltipPlainText(u, NOW, 'Work'), /OpenAI/);
+});
+
 test('the tooltip of a usage reading lists windows with exact resets, the plan, details and the profile', () => {
   const u = usage({ subtitle: 'me@example.com', plan: 'Max', details: ['Extra: 5', 'plain line'], fetchedAt: NOW,
     windows: [{ label: '5h', usedPercent: 17.4, resetsAt: minutes(180) }, { label: '7d Fable', usedPercent: 50 }] });

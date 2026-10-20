@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { writeTextAtomically } from './authFiles';
 import { ServiceConfig } from './configStore';
-import { CODEX_PROXY_SERVICE, CodexAccountProxy, probeCodexProxy } from './codexProxy';
+import { CODEX_PROXY_SERVICE, CodexAccountProxy, UpstreamErrorSummary, probeCodexProxy } from './codexProxy';
 import {
   applyCodexProxyProviderToFile,
   codexConfigPath,
@@ -53,6 +53,11 @@ export class CodexProxyRuntime  {
   /** True while Codex chats reach the active login through a proxy, served by this window or another one. */
   get active(): boolean {
     return this.status === 'serving' || this.status === 'shared';
+  }
+
+  /** OpenAI's own failures relayed in the last hour; undefined unless this service serves the proxy itself. */
+  upstreamErrorSummary(windowMs?: number): UpstreamErrorSummary | undefined {
+    return this.status === 'serving' ? this.proxy?.upstreamErrorSummary(windowMs) : undefined;
   }
 
   /** Brings the proxy and `config.toml` in line with the settings; safe to call from every tick. */

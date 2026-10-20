@@ -7,7 +7,7 @@ import { createHash, randomUUID } from 'crypto';
 import { AuthProvider, StoredCredential, writeJsonAtomically } from './authFiles';
 import { CacheEntry, deserializeUsage } from './cache';
 import { formatResetRemaining, LiveResult, LiveUsage, usageHasExpiredReset, UsageWindow } from './live';
-import { AccountLock, ProbeSettings, ProbeResult, acquireAccountLock, explainAccountProblem, isLoginProblem, needsSignIn, probeAccount, resetCodexAccount } from './accountProbe';
+import { AccountLock, ProbeSettings, ProbeResult, acquireAccountLock, explainAccountProblem, isLoginProblem, isTransientProblem, needsSignIn, probeAccount, resetCodexAccount } from './accountProbe';
 import { sleep } from './apiBudget';
 import type { ActivationChange } from './profileStore';
 import { HistoryAccount, HistoryCandidate, ReadingSource, RotationSnapshot, UsageHistory, usageSnapshot } from './usageHistory';
@@ -457,6 +457,17 @@ export class AccountAutomation {
     return this.profiles.readActiveUsage !== undefined && this.profiles.activeProfileId(provider) === id && await this.profiles.matchesNative(provider, id);
   }
 
+  /**
+   * When the account's next periodic keep-alive is due. One that failed for a passing reason (the model at capacity,
+   * a rate limit, the network) is repeated after the check interval rather than a whole period later, so its warning
+   * does not stand for hours over an account that is fine.
+   */
+  private keepAliveDueAt(state: AccountState, settings: AutomationSettings): number {
+    if (state.lastKeepAliveAt === undefined) { return 0; }
+    const wait = isTransientProblem(state.keepAliveError) ? Math.min(settings.intervalMs, settings.checkIntervalMs) : settings.intervalMs;
+    return state.lastKeepAliveAt + wait;
+  }
+
   /** How fast each window of `usage` is being used, from the account's earlier readings. */
   private rates(provider: AuthProvider, id: string, usage: LiveUsage): Map<string, number> {
     return usageRates(this.read(provider, id).samples, usage);
@@ -667,8 +678,7 @@ export class AccountAutomation {
         const now = this.now();
         // A due keep-alive already reads usage. Let the sweep do that once, while
         // still refreshing other accounts (including the native active login).
-        if (betweenKeepAlives && settings.enabled && !profile.disabled &&
-          (state.lastKeepAliveAt === undefined || now - state.lastKeepAliveAt >= settings.intervalMs) &&
+        if (betweenKeepAlives && settings.enabled && !profile.disabled && now >= this.keepAliveDueAt(state, settings) &&
           !await this.inUseNatively(provider, profile.id)) continue;
         const resetSinceCheck = usage?.windows.some(window => window.resetsAt &&
           window.resetsAt.getTime() <= now && window.resetsAt.getTime() > (state.checkedAt ?? 0));
@@ -793,7 +803,7 @@ export class AccountAutomation {
           // The active login is kept fresh by the user's own use; a keep-alive would exercise it from a second installation.
           if (await this.inUseNatively(provider, profile.id)) { continue; }
           const state = this.read(provider, profile.id);
-          if (state.lastKeepAliveAt !== undefined && this.now() - state.lastKeepAliveAt < settings.intervalMs) { continue; }
+          if (this.now() < this.keepAliveDueAt(state, settings)) { continue; }
           // Persist before starting so a failed call or window restart cannot create a retry storm.
           this.write(provider, profile.id, { ...state, lastKeepAliveAt: this.now() });
           await this.checkAccount(provider, profile.id, settings, true);

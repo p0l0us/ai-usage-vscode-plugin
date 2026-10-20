@@ -12,6 +12,12 @@ import type { McpCommand, McpRegistration, RegistrationOutcome } from './mcpRegi
 import type { BridgeConnection } from './bridgeRuntime';
 import type { ProcessInfo } from './codexProcesses';
 import type { SessionTokenUsage } from './sessionTokens';
+import type { UpstreamErrorSummary } from './codexProxy';
+
+export type { UpstreamErrorKind, UpstreamErrorSummary } from './codexProxy';
+
+/** What the engine's runtime does for Codex: whether the account proxy relays chats, and OpenAI's failures it saw in the last hour (only from a proxy this service serves). */
+export type RuntimeStatus = { codexProxyActive: boolean; codexUpstreamErrors?: UpstreamErrorSummary };
 
 /** The wire contract is independent of the package version. Additive v1 changes accept older clients. */
 export const SERVICE_PROTOCOL_VERSION = 1;
@@ -70,7 +76,7 @@ export type ServiceCommands = {
   'history.info': { params: undefined; result: HistoryInfo };
   'history.summary': { params: { days?: number }; result: HistorySummaryResult };
   'history.export': { params: { kind: HistoryExportKind }; result: { text: string; extension: string } };
-  'runtime.status': { params: undefined; result: { codexProxyActive: boolean } };
+  'runtime.status': { params: undefined; result: RuntimeStatus };
   'runtime.staleCodex': { params: { switchedAt: number; parentPid: number }; result: ProcessInfo[] };
   'mcp.registration': { params: { provider: AuthProvider }; result: { launcher: string; command: McpCommand; cli?: string; reason?: string; registration: McpRegistration } };
   'mcp.register': { params: { provider: AuthProvider }; result: RegistrationOutcome };
