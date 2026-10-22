@@ -148,6 +148,12 @@ export const SETTINGS_CATALOG = [
     "description": "How often (minutes) Claude usage is checked; defaults to 30 minutes. In `auto` this is also the maximum age of a usable cached or local reading. Claude accepts fractional minutes down to 0.25; endpoint calls still respect the shared API budget and backoff. The separate account-file interval in seconds applies only to `accountFile` and `both`."
   },
   {
+    "key": "claude.checkInactiveAccounts",
+    "type": "boolean",
+    "default": false,
+    "description": "**Check inactive Claude accounts.** Off (default): saved accounts other than the active one are assumed unused, so their usage cannot change except by a window reset, which rotation already counts as fresh. They are read only by their keep-alive (`#aiUsage.claude.keepAlive.enabled#`, every `#aiUsage.claude.keepAlive.periodHours#` hours), which also finds a login that stopped working, and by a check you start yourself. The active account is read every `#aiUsage.claude.checkIntervalMinutes#` as before. On: every saved account is also read every `#aiUsage.claude.checkIntervalMinutes#`, which helps when an account is used from another computer but exercises each login far more often. With keep-alives off and this off, inactive readings stay as they were."
+  },
+  {
     "key": "claude.accountFile.checkIntervalSeconds",
     "type": "number",
     "min": 5,
@@ -338,6 +344,12 @@ export const SETTINGS_CATALOG = [
     "max": 1440,
     "default": 30,
     "description": "How often (minutes) Codex usage is checked; defaults to 30 minutes. In `auto` this is also the maximum age of a usable cached or local reading. With `both` this is also the maximum age of a session-log record before the usage endpoint fills the gap."
+  },
+  {
+    "key": "codex.checkInactiveAccounts",
+    "type": "boolean",
+    "default": false,
+    "description": "**Check inactive Codex accounts.** Off (default): saved accounts other than the active one are assumed unused, so their usage cannot change except by a window reset, which rotation already counts as fresh. They are read only by their keep-alive (`#aiUsage.codex.keepAlive.enabled#`, every `#aiUsage.codex.keepAlive.periodHours#` hours), which also finds a login that stopped working, and by a check you start yourself. The active account is read every `#aiUsage.codex.checkIntervalMinutes#` as before. On: every saved account is also read every `#aiUsage.codex.checkIntervalMinutes#`, which helps when an account is used from another computer but exercises each login far more often. With keep-alives off and this off, inactive readings stay as they were."
   },
   {
     "key": "codex.keepAlive.enabled",

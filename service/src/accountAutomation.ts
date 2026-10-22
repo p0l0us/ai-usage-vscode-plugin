@@ -45,6 +45,8 @@ export type AutomationSettings = ProbeSettings & RotationLimits & {
   minStayMs?: number;
   intervalMs: number;
   checkIntervalMs: number;
+  /** False: the periodic usage round reads only the active account; the others are read by keep-alives only. */
+  checkInactiveAccounts?: boolean;
 };
 
 export type KeepAliveNowResult = {
@@ -673,6 +675,9 @@ export class AccountAutomation {
         // A disabled profile is left alone unless it is the active one, whose reading rotation still needs.
         if (profile.disabled && profile.id !== active) continue;
         const settings = this.settings(provider);
+        // Unused accounts do not change by themselves: their keep-alive reads them, and a reset window counts as fresh.
+        // Their readings outlive a restart, so not even the service's startup round reads them.
+        if (profile.id !== active && settings.checkInactiveAccounts === false) continue;
         const state = this.read(provider, profile.id);
         const usage = deserializeUsage(state);
         const now = this.now();

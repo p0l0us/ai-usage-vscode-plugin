@@ -60,9 +60,10 @@ function fixture(t, options = {}) {
   return { root, home, service, logs, events, probes, probeHomes, values, claudeHome, call: (method, params) => service.handle(method, params) };
 }
 
-test('startup refreshes every saved account with keep-alive and rotation off, and cached views publish updates', async t => {
+test('with inactive checks on, startup refreshes every saved account with keep-alive and rotation off, and cached views publish updates', async t => {
   const f = fixture(t, { ownership: { held: () => true, assertHeld() {} }, values: { 'acc-1': [30, 5], c: [20, 5] } });
-  await f.call('config.set', { values: { 'claude.autoRotate.enabled': false, 'codex.autoRotate.enabled': false,
+  await f.call('config.set', { values: { 'claude.checkInactiveAccounts': true, 'codex.checkInactiveAccounts': true,
+    'claude.autoRotate.enabled': false, 'codex.autoRotate.enabled': false,
     'codex.autoReset.enabled': false, 'bridge.autoStart': false, 'copilot.enabled': false } });
   const saved = await f.call('profiles.saveNative', { provider: 'claude', name: 'Work' });
   await f.call('profiles.importCredential', { provider: 'claude', name: 'Backup', credential: claudeLogin('b') });

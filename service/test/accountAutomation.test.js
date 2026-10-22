@@ -112,6 +112,26 @@ test('99.5% default threshold preserves precision and checks both periods', () =
   assert.equal(eligibleAccount(expired), false);
 });
 
+test('with inactive checks off, the usage round reads only the active account and keep-alives read the others', async t => {
+  const f = fixture(t, { values: { a: [10, 10] }, settings: { claude: { checkInactiveAccounts: false } } });
+  await f.service.refreshUsage('claude');
+  assert.deepEqual(f.calls, [['claude', 'a', false]], 'inactive accounts are not read on the check interval');
+  f.observe('claude', [['5h', 10, 0.1], ['7d', 10, 120]], 'b');
+  f.advance(0.2 * HOUR);
+  await f.service.refreshUsage('claude');
+  assert.deepEqual(f.calls.slice(1), [['claude', 'a', false]], 'not even after one of their windows reset');
+  await f.service.refreshUsage('claude', true);
+  assert.deepEqual(f.calls.slice(2), [['claude', 'a', false]], 'nor by the startup round');
+  await f.service.readUsageNow('claude', 'b');
+  assert.deepEqual(f.calls.slice(3), [['claude', 'b', false]], 'a check asked for by hand still reads one');
+  f.calls.length = 0;
+  f.settings.claude.enabled = true;
+  f.advance(HOUR);
+  await f.service.tick();
+  assert.deepEqual(f.calls.filter(([, id]) => id !== 'a'), [['claude', 'b', true], ['claude', 'c', true]],
+    'keep-alives still check the inactive accounts, with no extra usage reads between them');
+});
+
 test('saved-account monitoring refreshes after resets, preserves cache across restarts, and respects holds and backoff', async t => {
   const f = fixture(t, { values: { a: [10, 10] }, settings: { claude: { checkIntervalMs: 2 * HOUR } } });
   await f.service.refreshUsage('claude', true);

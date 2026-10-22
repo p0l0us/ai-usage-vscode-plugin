@@ -106,6 +106,9 @@ test('automation settings bound intervals and honor Codex strategy, trigger and 
   assert.equal(codex.resetAware, true);
   assert.equal(codex.updateUsageBeforeRotation, false);
   assert.equal(claude.updateUsageBeforeRotation, false);
+  assert.equal(codex.checkInactiveAccounts, false, 'inactive accounts are left to their keep-alives by default');
+  assert.equal(claude.checkInactiveAccounts, false);
+  assert.equal(automationSettings(setConfigValue(config, 'codex.checkInactiveAccounts', true), 'codex').checkInactiveAccounts, true);
   assert.equal(codex.autoReset, true);
   assert.equal(codex.intervalMs, 6 * 3_600_000);
   assert.equal(strategySummary(config, 'claude'), 'leastWaste, proactive, 5h ≥ 95%, 7d ≥ 99.5%');

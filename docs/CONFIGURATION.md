@@ -82,6 +82,14 @@ for details.
   `aiUsage.claude.api.minIntervalSeconds` and by any limit the endpoint advertises. The active account is read more
   often than this as it approaches a rotation threshold, down to once a minute; see
   [What starts a rotation](ROTATION.md#what-starts-a-rotation).
+- `aiUsage.<claude|codex>.checkInactiveAccounts` (off): whether saved accounts other than the active one are also
+  read every `checkIntervalMinutes`. Off, they are assumed unused: their usage can only change by a window reset,
+  which rotation already counts as fresh, so they are read only by their keep-alive (every
+  `keepAlive.periodHours`), which also finds a login that stopped working, and by a check or keep-alive started by hand (Accounts menu,
+  `ai-usage`, MCP `refresh_usage`); the service's startup round skips them too.
+  Turn it on when an account is also used from another computer. With keep-alives off as well, inactive readings
+  stay as they were. Each read of an inactive Codex account exercises its login from its profile home; on
+  21–22 October 2026 four inactive logins checked every 5 minutes were revoked by OpenAI within days.
 - `aiUsage.updateIntervalMinutes` (1): how often every window re-reads the cache and redraws the status bar and
   chat chip details. Applies to all sources.
 

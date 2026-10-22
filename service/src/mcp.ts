@@ -139,6 +139,7 @@ export function rotationPolicy(config: ServiceConfig, now: Date): RotationPolicy
     const own = config[provider];
     settings[`${provider}.enabled`] = own.enabled;
     settings[`${provider}.checkIntervalMinutes`] = own.checkIntervalMinutes;
+    settings[`${provider}.checkInactiveAccounts`] = own.checkInactiveAccounts;
     settings[`${provider}.keepAlive.enabled`] = own.keepAlive.enabled;
     for (const key of ['enabled', 'strategy', 'trigger', 'fiveHourThresholdPercent', 'weeklyThresholdPercent', 'minStayMinutes', 'updateUsageBeforeRotation'] as const) {
       settings[`${provider}.autoRotate.${key}`] = own.autoRotate[key];

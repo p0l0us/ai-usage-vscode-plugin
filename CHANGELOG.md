@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.8.0 (2026-10-22)
+
+- New settings `aiUsage.claude.checkInactiveAccounts` and `aiUsage.codex.checkInactiveAccounts` (**Check inactive accounts**, off by default). Saved accounts other than the active one are no longer read on every check interval: nobody is assumed to use them, so their usage can only change by a window reset, which rotation already counts as fresh. Their keep-alive reads them on its own schedule (every 6 hours for Codex, 2 for Claude) and still finds a login that stopped working; a check or keep-alive started by hand, from the Accounts menu, `ai-usage` or MCP `refresh_usage`, still reads one. The service's startup round leaves them alone too, since their readings outlive a restart. The active account is read as before. Turn the setting on when an account is also used from another computer. With Codex checked every 5 minutes, each inactive login was exercised from its profile home about 12 times an hour; four such logins were revoked by OpenAI (`token_revoked`) on 21 and 22 October, while none of them was in use.
+
 ## 1.7.0 (2026-10-20)
 
 - The Codex status bar item shows how often OpenAI itself failed in the last hour. The account proxy relays every Codex request, so it sees OpenAI's answer to each: an error status, or an error event inside a successful stream, which is how "Selected model is at capacity. Please try a different model." (Codex's `server_overloaded`) arrives after the response started. Capacity and other server errors are counted; the item shows `$(warning) N` after the figures, its hover reads "OpenAI capacity errors: N in the last hour" with the latest message and model, and the log names each one with the model. Account quota answers and request errors are not counted. On 20 October one account at 44% of its weekly allowance lost 76 of 91 turns to such errors, and the symptom read as an exhausted account.
