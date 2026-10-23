@@ -96,7 +96,7 @@ export type ServiceCommands = {
 
 export type SerializedWindow = { label: string; usedPercent: number; resetsAt?: string };
 export type SerializedUsage = { source?: LiveUsage['source']; provider: ProviderId; title: string; plan?: string; subtitle?: string; windows: SerializedWindow[];
-  resetCredits?: { availableCount: number; earliestExpiresAt?: number; totalCount?: number }; details?: string[]; fetchedAt: string };
+  resetCredits?: { availableCount: number; earliestExpiresAt?: number; totalCount?: number }; creditsObservedAt?: number; details?: string[]; fetchedAt: string };
 
 export type AccountProblemView = {
   /** Which check failed. */

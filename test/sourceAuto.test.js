@@ -69,7 +69,7 @@ test('monitor auto respects minute policy, deduplicates and preserves conservati
   config.claude.accountFile.checkIntervalSeconds = 5;
   assert.equal(usageSettings(config, 'claude').checkIntervalMs, 5000);
   assert.equal(usageSettings(config, 'claude').apiCheckIntervalMs, intervalMs);
-  assert.equal(usageSettings(config, 'codex').checkIntervalMs, intervalMs);
+  assert.equal(usageSettings(config, 'codex').checkIntervalMs, 5000);
   const observed = []; let source = 'sessionLog'; let reads = 0;
   const monitor = new UsageMonitor({ directory: f.home, config: () => config,
     budget: new ApiCallBudget(path.join(f.home, 'budget.json'), () => 0, () => now), now: () => now,
@@ -134,18 +134,18 @@ test('monitor auto adds the CLI earned resets to a Codex reading without them, s
   const monitor = new UsageMonitor({ directory: f.home, config: () => config,
     budget: new ApiCallBudget(path.join(f.home, 'budget.json'), () => 0, () => clock), now: () => clock,
     identity: () => account, log: () => {},
-    fetch: async provider => ({ kind: 'ok', usage: { ...reading(provider).usage, fetchedAt: new Date(clock), source: 'sessionLog' } }),
+    fetch: async provider => ({ kind: 'ok', usage: { ...reading(provider).usage, fetchedAt: new Date(clock), source: 'sessionLog', windows: [{ label: '5h', usedPercent: 20, resetsAt: new Date(clock + intervalMs) }] } }),
     codexCredits: async cliPath => { creditReads.push(cliPath); return credits; } });
   t.after(() => monitor.dispose());
   const first = await monitor.read('codex', true);
   assert.deepEqual(first.result.usage.resetCredits, credits, 'a session-log reading carries the CLI count');
   clock += 60_000; credits = { availableCount: 2 };
-  assert.equal((await monitor.read('codex', true)).result.usage.resetCredits.availableCount, 3, 'reused within five minutes');
+  assert.equal((await monitor.read('codex', true)).result.usage.resetCredits.availableCount, 3, 'reused within one hour');
   assert.equal(creditReads.length, 1);
   account = 'second-login';
   assert.equal((await monitor.read('codex', true)).result.usage.resetCredits.availableCount, 2, 'another login is read again');
-  clock += 5 * 60_000; credits = undefined;
-  assert.equal((await monitor.read('codex', true)).result.usage.resetCredits, undefined, 'after five minutes it is read again; none reported, none shown');
+  clock += 60 * 60_000; credits = undefined;
+  assert.equal((await monitor.read('codex', true)).result.usage.resetCredits, undefined, 'after one hour it is read again; none reported, none shown');
   assert.equal(creditReads.length, 3);
   assert.deepEqual(creditReads, [config.codex.cliPath, config.codex.cliPath, config.codex.cliPath]);
 });

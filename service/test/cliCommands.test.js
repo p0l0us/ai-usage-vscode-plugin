@@ -528,7 +528,7 @@ test('usage, rotation-weights and the config command', async (t) => {
   result = await run('get', 'claude.autoRotate.strategy', '--json');
   assert.equal(result.stdout, '"leastWaste"\n');
   result = await run('config', 'get', 'claude.keepAlive.periodHours');
-  assert.equal(result.stdout, 'claude.keepAlive.periodHours = 2\n');
+  assert.equal(result.stdout, 'claude.keepAlive.periodHours = 1\n');
   result = await run('config', 'claude.keepAlive.periodHours', '3');
   assert.equal(result.stdout, '✓ claude.keepAlive.periodHours = 3\n');
   assert.equal((await run('config', 'claude.keepAlive.periodHours', '--json')).stdout, '3\n', 'a number stays a number');

@@ -1,4 +1,6 @@
 import { randomUUID, createHash } from 'crypto';
+import { UsageCoordinator, usageAccountKey, credentialGeneration } from './usageCoordinator';
+import { RequestDiagnostics, traceRequests } from './requestDiagnostics';
 import { projectQuota, projectResetCredits, StatusFilter, StatusRead, StatusSnapshot, StatusProvider, StatusNative, StatusCursor } from './statusProjection';
 import { mcpCli, mcpCommand, readMcpRegistration, registerMcpServer, unregisterMcpServer } from './mcpRegistration';
 import { findStaleCodexProcesses, StaleDaemonSweep } from './codexProcesses';
@@ -19,7 +21,7 @@ import {
 } from './accountProbe';
 import { deserializeUsage } from './cache';
 import { ConfigAuthority, ConfigPatchResult, ConfigView, ServiceConfig, automationSettings, configFileOf, getConfigValue, strategySummary } from './configStore';
-import { LiveUsage, LiveResult, ProviderId, claudeConfigDir, fetchCodexUsage, newestValidUsage, refreshCodexNativeLogin, resolveCli, verifyCodexNativeAccount } from './live';
+import { LiveUsage, LiveResult, ProviderId, CodexRpcError, claudeConfigDir, fetchCodexUsage, newestValidUsage, refreshCodexNativeLogin, resolveCli, verifyCodexNativeAccount } from './live';
 import { ExportedProfile, ImportPlan, parseProfileExport, serializeProfileExport } from './profileTransfer';
 import { ActivationOutcome, PrivateProfileBackend, ProfileMetadata, ProfileStore, PROVIDERS, TITLES, importOutcome } from './profileStore';
 import { ProfileHomes } from './profileHomes';
@@ -179,6 +181,8 @@ export class AccountService {
   private readonly sessionDirectories = new Map<number, Partial<Record<AuthProvider, string>>>();
   /** Checks requested by hand that may be cancelled, by the token the client chose. */
   private readonly cancels = new Map<string, AbortController>();
+  private readonly usageCoordinator: UsageCoordinator;
+  private readonly requestDiagnostics: RequestDiagnostics;
 
   constructor(private readonly options: AccountServiceOptions) {
     this.log = options.log;
@@ -198,6 +202,9 @@ export class AccountService {
     this.store.verifyActivation = (provider, credential, expected) => this.verifyActivation(provider, credential, expected);
     const states = stateDir(options.home);
     this.statesDir = states;
+    this.requestDiagnostics = new RequestDiagnostics(path.join(states, 'request-diagnostics.json'), this.now);
+    this.usageCoordinator = new UsageCoordinator(path.join(states, 'request-admission.json'), this.now,
+      (provider, metric) => this.requestDiagnostics.record(provider, metric));
     this.profileHomes = new ProfileHomes(states, key => getConfigValue(this.config, key.replace(/^aiUsage\./, '')));
     this.claudeBudget = new ApiCallBudget(path.join(states, 'claude-api-budget.json'),
       () => Math.min(600, Math.max(0, this.config.claude.api.minIntervalSeconds)) * 1000);
@@ -206,14 +213,14 @@ export class AccountService {
       profiles: (provider) => this.store.profiles(provider),
       activeProfileId: (provider) => this.store.activeProfileId(provider),
       credential: (provider, id) => this.accountCredential(provider, id),
-      probeSettings: (provider, id, settings) => ({ ...settings, home: this.accountHome(provider, id), persistent: true }),
+      probeSettings: (provider, id, settings) => ({ ...settings, accountKey: id, home: this.accountHome(provider, id), persistent: true }),
       refreshedCredential: async (provider, id, before, after) => {
         await this.store.refreshedCredential(provider, id, before, after);
         const stored = await this.store.credential(provider, id);
         if (stored) this.profileHomes.acknowledge(provider, this.accountHome(provider, id), stored);
       },
       matchesNative: (provider, id) => this.store.matchesNative(provider, id),
-      readActiveUsage: (provider) => this.readNativeUsage(provider),
+      readActiveUsage: (provider, manual) => this.readNativeUsage(provider, manual),
       activateProfile: async (provider, id, automatic) => {
         try { await this.activate(provider, id, Boolean(automatic)); return true; }
         catch (error) { this.log(`${provider}: could not activate ${id}: ${error instanceof Error ? error.message : String(error)}`); return false; }
@@ -221,8 +228,35 @@ export class AccountService {
     };
     this.automation = new AccountAutomation(path.join(states, 'account-usage'), profiles, (provider) => automationSettings(this.config, provider),
       async () => { /* The switch itself already announced the activation. */ }, this.log,
-      (provider, credential, settings, keepAlive, signal) => probe(provider, credential, settings, keepAlive, signal, provider === 'claude' ? this.claudeBudget : undefined),
-      this.now, options.reset);
+      async (provider, credential, settings, keepAlive, signal) => {
+        const key = usageAccountKey(provider, credential, settings.accountKey);
+        const blocked = this.usageCoordinator.blocked(provider, key);
+        if (blocked) return { credential, result: blocked };
+        let outcome: Awaited<ReturnType<typeof probe>> | undefined;
+        const collect = async () => {
+          outcome = await probe(provider, credential, settings, keepAlive, signal, provider === 'claude' ? this.claudeBudget : undefined);
+          return outcome.result;
+        };
+        if (keepAlive) {
+          const result = await traceRequests(metric => this.requestDiagnostics.record(provider, metric), collect);
+          this.usageCoordinator.observe(key, result);
+          return outcome!;
+        }
+        const result = await this.usageCoordinator.read(provider, key, collect,
+          { credits: settings.creditsRead, generation: credentialGeneration(credential), manual: settings.manual });
+        return outcome ?? { credential, result };
+      },
+      this.now, async (credential, settings, idempotencyKey, signal) => {
+        const key = usageAccountKey('codex', credential, settings.accountKey ?? this.store.activeProfileId('codex'));
+        const blocked = this.usageCoordinator.blocked('codex', key);
+        if (blocked?.kind === 'error') throw new Error(blocked.message);
+        try {
+          const outcome = await traceRequests(metric => this.requestDiagnostics.record('codex', metric),
+            () => (options.reset ?? resetCodexAccount)(credential, settings, idempotencyKey, signal));
+          this.usageCoordinator.observe(key, outcome.result);
+          return outcome;
+        } catch (error) { this.noteCodexFailure(key, error); throw error; }
+      });
     this.automation.resetContext = () => this.configAuthority.revision;
     this.automation.onAccountChecked = provider => this.emit({ event: 'stateChanged', provider });
     this.automation.onResetConfirmation = decision => this.emit({ event: 'resetConfirmation', decision });
@@ -235,6 +269,8 @@ export class AccountService {
     };
     this.automation.onNoCandidate = (provider, detail) => this.emit({ event: 'noCandidate', provider, detail });
     this.automation.onEarnedReset = (id, outcome, available) => {
+      this.usageMonitor.invalidateCredits();
+      this.usageCoordinator.invalidate(this.nativeRequestKey('codex'));
       this.emit({ event: 'stateChanged', provider: 'codex' });
       if (outcome === 'reset') {
         const name = this.store.profile('codex', id)?.name ?? id;
@@ -243,6 +279,16 @@ export class AccountService {
     };
     this.usageMonitor = new UsageMonitor({ directory: states, config: () => this.config, budget: this.claudeBudget,
       log: this.log, now: this.now, fetch: options.fetchUsage, identity: options.usageIdentity,
+      accountKey: provider => this.nativeRequestKey(provider),
+      remote: (provider, fetch, credits, manual) => {
+        const generation = nativeUsageIdentity(provider);
+        return this.usageCoordinator.read(provider, this.nativeRequestKey(provider), fetch,
+          { credits, manual, generation, isCurrent: () => generation === nativeUsageIdentity(provider) });
+      },
+      storedActive: async provider => {
+        const id = this.store.activeProfileId(provider);
+        return id && await this.store.matchesNative(provider, id) ? this.automation.usage(provider, id) : undefined;
+      },
       runFetch: async (provider, fetch) => {
         if (provider === 'copilot') return fetch();
         if (this.automation.heldFor(provider)) return undefined;
@@ -260,7 +306,11 @@ export class AccountService {
     this.runtime = new ServiceRuntime(options.home, () => this.config, options.version, this.log,
       message => this.emit({ event: 'notice', level: 'warning', message }),
       () => [...new Set([...this.foldersByClient.values()].flat())],
-      () => this.automation.withAccountLock('codex', () => refreshCodexNativeLogin(this.config.codex.cliPath), { waitMs: MANUAL_CHECK_WAIT_MS }));
+      () => this.automation.withAccountLock('codex', () => {
+        if (this.usageCoordinator.blocked('codex', this.nativeRequestKey('codex'))) return Promise.resolve(false);
+        return traceRequests(metric => this.requestDiagnostics.record('codex', metric),
+          () => refreshCodexNativeLogin(this.config.codex.cliPath, undefined, undefined, error => this.noteCodexFailure(this.nativeRequestKey('codex'), error)));
+      }, { waitMs: MANUAL_CHECK_WAIT_MS }));
     this.runtime.ownership = options.ownership;
     this.history = new UsageHistory(this.historyDirectory(), this.historyOptions(), this.log, this.now);
     this.automation.history = this.history;
@@ -305,6 +355,13 @@ export class AccountService {
     }
     if (provider !== 'copilot' && active !== this.store.activeProfileId(provider)) {
       return this.retainStatus(provider, serializeUsageState({ identity: (this.options.usageIdentity ?? nativeUsageIdentity)(provider), result: { kind: 'unavailable', provider, reason: 'The active account changed; waiting for its reading.' } }), clientId);
+    }
+    if (provider !== 'copilot' && state.result.kind === 'ok') {
+      const retryAt = this.usageCoordinator.nextAllowedAt(this.nativeRequestKey(provider));
+      state.result = { kind: 'ok', usage: { ...state.result.usage, details: [...(state.result.usage.details ?? []).filter(line => !/^(Requests this UTC hour:|Provider retry after:|Background network requests are paused)/.test(line)),
+        ...(retryAt > this.now() ? [`Provider retry after: ${new Date(retryAt).toISOString()}`] : []),
+        ...(!this.config[provider].backgroundNetwork ? ['Background network requests are paused.'] : []),
+        this.requestDiagnostics.summary(provider)] } };
     }
     return this.retainStatus(provider, { ...serializeUsageState(state), profileId: nativeMatches ? active : undefined }, clientId, statusContext, statusCopilotAccount, accountAttributed);
   }
@@ -748,7 +805,7 @@ export class AccountService {
     }
     if (this.timer) {
       await Promise.all(PROVIDERS.map(async provider => {
-        if (!this.config[provider].enabled) return;
+        if (!this.config[provider].enabled || !this.config[provider].backgroundNetwork) return;
         try { await this.automation.refreshUsage(provider, refreshAll); }
         catch (error) { this.log(`${provider}: saved-account usage refresh deferred: ${String(error)}`); }
       }));
@@ -820,10 +877,27 @@ export class AccountService {
    * The native login's usage over HTTPS, for the active account: the login the user's own CLI holds, read from its
    * own home, with no CLI start and no token refresh; Claude's call takes a slot in the shared endpoint budget.
    */
-  private async readNativeUsage(provider: AuthProvider): Promise<LiveResult> {
-    if (this.options.readNativeUsage) { return this.options.readNativeUsage(provider); }
-    if (this.options.fetchUsage) { return this.options.fetchUsage(provider, {}); }
-    return provider === 'claude' ? claudeUsage(claudeConfigDir(), new AbortController().signal, this.claudeBudget) : fetchCodexUsage();
+  private async readNativeUsage(provider: AuthProvider, manual = false): Promise<LiveResult> {
+    const generation = nativeUsageIdentity(provider);
+    return this.usageCoordinator.read(provider, this.nativeRequestKey(provider), async () => {
+      if (this.options.readNativeUsage) return this.options.readNativeUsage(provider);
+      if (this.options.fetchUsage) return this.options.fetchUsage(provider, {});
+      const result = await (provider === 'claude' ? claudeUsage(claudeConfigDir(), new AbortController().signal, this.claudeBudget) : fetchCodexUsage());
+      return result.kind === 'ok' ? { kind: 'ok', usage: { ...result.usage, source: 'api' } } : result;
+    }, { manual, generation, isCurrent: () => generation === nativeUsageIdentity(provider) });
+  }
+
+  private nativeRequestKey(provider: AuthProvider): string {
+    let credential: StoredCredential | undefined;
+    try { credential = readNativeCredential(provider); } catch { /* Missing login is isolated. */ }
+    return usageAccountKey(provider, credential, this.store.nativeIsUnsaved(provider)
+      ? this.options.usageIdentity?.(provider) : this.store.activeProfileId(provider) ?? this.options.usageIdentity?.(provider));
+  }
+
+  private noteCodexFailure(key: string, error: unknown): void {
+    if (error instanceof CodexRpcError) this.usageCoordinator.observe(key, { kind: 'error', provider: 'codex', title: 'Codex',
+      message: error.message, status: error.status, code: error.code, retryAfterMs: error.retryAfterMs,
+      transient: error.status === undefined || error.status === 429 || error.status >= 500 });
   }
 
   private async accountCredential(provider: AuthProvider, id: string): Promise<StoredCredential | undefined> {
@@ -855,8 +929,15 @@ export class AccountService {
 
   private async verifyActivation(provider: AuthProvider, credential: StoredCredential, expected: CredentialIdentity) {
     if (provider === 'codex') {
+      const key = usageAccountKey(provider, credential, this.store.activeProfileId(provider));
+      const blocked = this.usageCoordinator.blocked(provider, key);
+      if (blocked?.kind === 'error') return { status: 'unverified' as const, detail: blocked.message };
       // A fresh app-server must see the login that was just written; report a mismatch instead of success.
-      return (this.options.verifyCodex ?? verifyCodexNativeAccount)(credential, this.config.codex.cliPath || 'codex');
+      const result = await traceRequests(metric => this.requestDiagnostics.record(provider, metric),
+        () => (this.options.verifyCodex ?? verifyCodexNativeAccount)(credential, this.config.codex.cliPath || 'codex'));
+      if (result.errorStatus === 429 || result.retryAfterMs !== undefined) this.usageCoordinator.observe(key,
+        { kind: 'error', provider, title: provider, message: result.detail, status: result.errorStatus, retryAfterMs: result.retryAfterMs });
+      return result;
     }
     // Claude Code renders /status and /usage identity from its separate account file. Keep that metadata and its
     // account-bound caches aligned with the exact OAuth token that activation just wrote.
@@ -876,6 +957,7 @@ export class AccountService {
    * attempt, so a token the CLI refreshed in the meantime is used, and a later switch simply retargets the retry.
    */
   private async retryClaudeAccountMetadata(): Promise<void> {
+    if (!this.config.claude.enabled || !this.config.claude.backgroundNetwork) return;
     const pending = this.claudeMetadataRetry;
     if (!pending || this.now() < pending.nextAttemptAt) { return; }
     const expected = this.store.activeIdentity('claude');
@@ -921,6 +1003,11 @@ export class AccountService {
   }
 
   private afterConfigChange(changed: string[], source: string): void {
+    for (const provider of PROVIDERS) {
+      if (changed.some(key => [`${provider}.source`, `${provider}.cliPath`, `${provider}.checkIntervalMinutes`].includes(key))) {
+        this.usageCoordinator.invalidate(this.nativeRequestKey(provider));
+      }
+    }
     if (changed.some((key) => key.startsWith('history.'))) { this.applyHistoryConfig(); }
     this.emit({ event: 'configChanged', config: this.config, revision: this.configAuthority.revision, changed, source } as ServiceEvent);
     this.background(() => this.runtime.sync());

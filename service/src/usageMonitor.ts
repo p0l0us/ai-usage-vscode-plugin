@@ -5,9 +5,10 @@ import { readNativeCredential, AuthProvider } from './authFiles';
 import { SharedCache, deserializeUsage } from './cache';
 import { ServiceConfig, UsageSource } from './configStore';
 import { GitHubAccount, LiveResult, LiveUsage, ProviderId, fetchClaudeUsage, fetchClaudeUsageCli,
-  fetchClaudeUsageFromAccountFile, fetchCodexUsage, fetchCodexUsageCli, fetchCodexResetCreditsCli,
+  fetchClaudeUsageFromAccountFile, fetchCodexUsage, fetchCodexUsageCli,
   fetchCodexUsageFromSessionLog, fetchCopilotUsage, fetchLocalThenApi, fetchAutoUsage, isFreshUsage, newestValidUsage } from './live';
 import { SerializedUsage } from './protocol';
+import { UsageCoordinator, usageAccountKey, credentialGeneration } from './usageCoordinator';
 
 export type UsageContext = { accounts?: GitHubAccount[]; workspaceOwners?: string[] };
 export type UsageState = { result: LiveResult; lastGood?: LiveUsage; identity: string };
@@ -28,7 +29,7 @@ export function usageSettings(config: ServiceConfig, provider: ProviderId): { so
   const apiCheckIntervalMs = Math.max(provider === 'claude' ? 0.25 : 1, own.checkIntervalMinutes) * 60_000;
   // `auto` reads the free local account file this often too, so rotation sees the active account within seconds.
   return { source: own.source, apiCheckIntervalMs, checkIntervalMs: provider === 'claude' && ['auto', 'both', 'accountFile'].includes(own.source)
-    ? Math.max(5, config.claude.accountFile.checkIntervalSeconds) * 1000 : apiCheckIntervalMs };
+    ? Math.max(5, config.claude.accountFile.checkIntervalSeconds) * 1000 : provider === 'codex' && ['auto', 'both', 'sessionLog'].includes(own.source) ? 5_000 : apiCheckIntervalMs };
 }
 function hash(value: unknown): string { return createHash('sha256').update(JSON.stringify(value)).digest('hex'); }
 /** Opaque key, never a credential. Changes even for native logins that were never saved as profiles. */
@@ -37,14 +38,16 @@ export function nativeUsageIdentity(provider: AuthProvider): string {
 }
 
 /** Shared polling policy for the daemon, embedded service and standalone extension fallback. */
-/** How long an earned-reset count read for the status bar is reused; well inside the 15-minute display freshness. */
-const CODEX_CREDITS_REUSE_MS = 5 * 60_000;
+/** Credit read cadence is independent of the shorter display freshness. */
+const CODEX_CREDITS_REUSE_MS = 60 * 60_000;
 
 export class UsageMonitor {
   private readonly cache: SharedCache;
+  private readonly coordinator: UsageCoordinator;
   private readonly inFlight = new Map<string, Promise<UsageState>>();
   private readonly states = new Map<string, UsageState>();
   private readonly nextCheck = new Map<string, number>();
+  private readonly lastPolicy = new Map<ProviderId, string>();
   private readonly fallbacks: Record<AuthProvider, ApiCallBudget>;
   private readonly cliFallbacks: Record<AuthProvider, ApiCallBudget>;
   private disposed = false;
@@ -53,15 +56,19 @@ export class UsageMonitor {
   constructor(private readonly options: {
     directory: string; config: () => ServiceConfig; budget: ApiCallBudget; log: (message: string) => void;
     identity?: (provider: AuthProvider) => string;
+    accountKey?: (provider: AuthProvider) => string;
     runFetch?: (provider: ProviderId, fetch: () => Promise<LiveResult | undefined>) => Promise<LiveResult | undefined>;
     fetch?: (provider: ProviderId, context: UsageContext, known?: LiveUsage) => Promise<LiveResult>;
     observe?: (provider: AuthProvider, usage: LiveUsage, attributable: boolean, identity: string) => Promise<void>;
     changed?: (provider: ProviderId) => void;
+    storedActive?: (provider: AuthProvider) => Promise<LiveUsage | undefined>;
+    remote?: (provider: AuthProvider, fetch: () => Promise<LiveResult>, credits: boolean, manual: boolean) => Promise<LiveResult>;
     now?: () => number;
     /** Reads the native Codex login's earned resets; defaults to the CLI unless `fetch` is stubbed. */
     codexCredits?: (cliPath: string) => Promise<LiveUsage['resetCredits']>;
   }) {
     this.cache = new SharedCache(path.join(options.directory, 'live-usage.json'));
+    this.coordinator = new UsageCoordinator(path.join(options.directory, 'request-admission.json'), options.now);
     this.fallbacks = Object.fromEntries((['claude', 'codex'] as const).map(provider => [provider,
       new ApiCallBudget(path.join(options.directory, `${provider}-fallback-budget.json`), () => usageSettings(options.config(), provider).apiCheckIntervalMs, options.now)
     ])) as Record<AuthProvider, ApiCallBudget>;
@@ -70,6 +77,16 @@ export class UsageMonitor {
     ])) as Record<AuthProvider, ApiCallBudget>;
   }
   dispose(): void { this.disposed = true; }
+  invalidateCredits(): void {
+    this.codexCredits = undefined;
+    this.cache.update(`credits:${this.requestAccountKey('codex')}`, () => undefined);
+  }
+  private requestAccountKey(provider: AuthProvider): string {
+    if (this.options.accountKey) return this.options.accountKey(provider);
+    let credential;
+    try { credential = readNativeCredential(provider); } catch { /* No native login. */ }
+    return usageAccountKey(provider, credential, this.options.identity?.(provider));
+  }
   private identity(provider: ProviderId, context: UsageContext): string {
     return provider === 'copilot' ? hash({ accounts: context.accounts ?? [], owners: [...(context.workspaceOwners ?? [])].sort(), account: this.options.config().copilot.account })
       : (this.options.identity ?? nativeUsageIdentity)(provider);
@@ -77,7 +94,10 @@ export class UsageMonitor {
   async read(provider: ProviderId, force = false, context: UsageContext = {}): Promise<UsageState> {
     const settings = usageSettings(this.options.config(), provider);
     const identity = this.identity(provider, context);
+    const creditsIdentity = provider === 'codex' ? this.requestAccountKey(provider) : identity;
     const policy = hash([settings, provider === 'copilot' ? '' : this.options.config()[provider].cliPath]);
+    const policyChanged = this.lastPolicy.has(provider) && this.lastPolicy.get(provider) !== policy;
+    this.lastPolicy.set(provider, policy);
     const key = `${provider}:${policy}:${identity}`;
     const unavailable: UsageState = { identity, result: { kind: 'unavailable', provider, reason: 'Waiting for a usage reading.' } };
     if (this.disposed || !this.options.config()[provider].enabled) return unavailable;
@@ -85,23 +105,49 @@ export class UsageMonitor {
     if (pending) return pending;
     const now = (this.options.now ?? Date.now)();
     const entry = this.cache.read(key);
-    const lastGood = newestValidUsage(this.states.get(key)?.lastGood, deserializeUsage(entry), now);
+    const stored = !policyChanged && provider !== 'copilot' && !['sessionLog', 'accountFile'].includes(settings.source) && this.options.storedActive
+      ? await this.options.storedActive(provider) : undefined;
+    if (identity !== this.identity(provider, context)) return unavailable;
+    const lastGood = newestValidUsage(newestValidUsage(this.states.get(key)?.lastGood, deserializeUsage(entry), now), stored, now);
     const previous = this.states.get(key);
     let current = previous ? { ...previous, lastGood, result: previous.result.kind === 'ok' && !lastGood ? unavailable.result : previous.result } :
       { ...unavailable, ...(lastGood ? { result: { kind: 'ok' as const, usage: lastGood }, lastGood } : {}) };
+    if (stored && lastGood === stored && !force && isFreshUsage(stored, provider, settings.apiCheckIntervalMs, now)) {
+      current = { identity, result: { kind: 'ok', usage: stored }, lastGood: stored };
+      if (!['auto', 'both'].includes(settings.source)) return current;
+    }
     const staleAuto = settings.source === 'auto' && current.result.kind === 'ok' &&
       !isFreshUsage(current.result.usage, provider, settings.apiCheckIntervalMs, now);
     if (staleAuto) current = { ...current, result: unavailable.result };
     if (!force && !staleAuto && (this.nextCheck.get(key) ?? (lastGood ? lastGood.fetchedAt.getTime() + settings.checkIntervalMs : 0)) > now) return current;
-    if (settings.source !== 'auto' && entry?.nextAllowedAt && entry.nextAllowedAt > now) return { ...current, result: { kind: 'error', provider, title: provider,
+    if (!['auto', 'both', 'sessionLog', 'accountFile'].includes(settings.source) && entry?.nextAllowedAt && entry.nextAllowedAt > now) return { ...current, result: { kind: 'error', provider, title: provider,
       message: `${entry.lastError ?? 'Usage check failed'} — retrying after ${new Date(entry.nextAllowedAt).toISOString()}`, transient: true } };
+    const joined = this.inFlight.get(key);
+    if (joined) return joined;
     const task = (async (): Promise<UsageState> => {
       if (!this.cache.tryLock(key, now)) return current;
       let result: LiveResult;
       try {
         const collect = async () => {
           if (provider === 'claude' && ['api', 'cli'].includes(settings.source) && !this.options.budget.reserve(now)) return undefined;
-          return this.options.fetch ? this.options.fetch(provider, context, lastGood) : this.fetch(provider, context, lastGood);
+          let value = this.options.fetch
+            ? await (provider === 'copilot' || ['sessionLog', 'accountFile'].includes(settings.source)
+              ? this.options.fetch(provider, context, lastGood)
+              : this.remote(provider, () => this.options.fetch!(provider, context, lastGood), false, force))
+            : await this.fetch(provider, context, lastGood, force);
+          if (provider === 'codex' && identity === this.identity(provider, context) && value.kind === 'ok' && settings.source !== 'sessionLog' &&
+            (force || this.options.config().codex.backgroundNetwork !== false)) {
+            if (value.usage.resetCredits) {
+              const at = value.usage.creditsObservedAt ?? value.usage.fetchedAt.getTime();
+              const credits = value.usage.resetCredits;
+              this.codexCredits = { identity: creditsIdentity, at, credits };
+              this.cache.update(`credits:${creditsIdentity}`, entry => ({ ...entry, creditsCheckedAt: at, credits }));
+            } else {
+              const cached = await this.nativeCodexCredits(creditsIdentity, force);
+              if (cached?.credits) value = { kind: 'ok', usage: { ...value.usage, resetCredits: cached.credits, creditsObservedAt: cached.at } };
+            }
+          }
+          return value;
         };
         const value = await (this.options.runFetch ? this.options.runFetch(provider, collect) : collect());
         if (!value) { this.cache.release(key); return current; }
@@ -109,11 +155,7 @@ export class UsageMonitor {
         if (settings.source === 'auto' && result.kind === 'ok' && !isFreshUsage(result.usage, provider, settings.apiCheckIntervalMs, (this.options.now ?? Date.now)())) {
           result = { kind: 'unavailable', provider, reason: 'No fresh valid usage reading is available.' };
         }
-        // Only the CLI reports earned resets; a session-log or endpoint reading gets them from a spaced CLI read.
-        if (provider === 'codex' && settings.source === 'auto' && result.kind === 'ok' && !result.usage.resetCredits) {
-          const credits = await this.nativeCodexCredits(identity);
-          if (credits) result = { kind: 'ok', usage: { ...result.usage, resetCredits: credits } };
-        }
+
       }
       catch (error) { result = { kind: 'error', provider, title: provider, message: error instanceof Error ? error.message : String(error), transient: true }; }
       this.nextCheck.set(key, now + settings.checkIntervalMs);
@@ -147,29 +189,66 @@ export class UsageMonitor {
     return task;
   }
   /** Earned resets of the native Codex login, read through the CLI at most every `CODEX_CREDITS_REUSE_MS` per login. */
-  private async nativeCodexCredits(identity: string): Promise<LiveUsage['resetCredits']> {
+  private async nativeCodexCredits(identity: string, force: boolean): Promise<{ identity: string; at: number; credits: LiveUsage['resetCredits'] } | undefined> {
+    const generation = this.identity('codex', {});
     const now = (this.options.now ?? Date.now)();
-    const cached = this.codexCredits;
-    if (cached && cached.identity === identity && now - cached.at < CODEX_CREDITS_REUSE_MS) return cached.credits;
-    const read = this.options.codexCredits ?? (this.options.fetch ? undefined : fetchCodexResetCreditsCli);
-    if (!read) return undefined;
+    const saved = this.cache.read(`credits:${identity}`);
+    const cached = this.codexCredits?.identity === identity ? this.codexCredits : saved?.creditsCheckedAt === undefined
+      ? undefined : { identity, at: saved.creditsCheckedAt, credits: saved.credits };
+    if (cached && cached.identity === identity && now - cached.at < CODEX_CREDITS_REUSE_MS) return cached;
+    const read = this.options.codexCredits;
+    if (!read && this.options.fetch) return undefined;
     let credits: LiveUsage['resetCredits'];
-    try { credits = await read(this.options.config().codex.cliPath); } catch { credits = undefined; }
+    try {
+      if (read) credits = await read(this.options.config().codex.cliPath);
+      else {
+        const result = await this.remote('codex', () => fetchCodexUsageCli(this.options.config().codex.cliPath), true, force);
+        credits = result.kind === 'ok' ? result.usage.resetCredits : undefined;
+      }
+    } catch { credits = undefined; }
+    if (generation !== this.identity('codex', {})) return undefined;
     // A failed read is remembered too, so a missing CLI is not started again on every local reading.
     this.codexCredits = { identity, at: now, credits };
-    return credits;
+    this.cache.update(`credits:${identity}`, entry => ({ ...entry, creditsCheckedAt: now, credits }));
+    return this.codexCredits;
   }
 
-  private async fetch(provider: ProviderId, context: UsageContext, known?: LiveUsage): Promise<LiveResult> {
+  private async remote(provider: AuthProvider, fetch: () => Promise<LiveResult>, credits: boolean, force: boolean): Promise<LiveResult> {
+    if (!force && this.options.config()[provider].backgroundNetwork === false) return { kind: 'unavailable', provider, reason: 'Background network requests are paused.' };
+    const generation = this.identity(provider, {});
+    let result: LiveResult;
+    if (this.options.remote) result = await this.options.remote(provider, fetch, credits, force);
+    else {
+      let credential;
+      try { credential = readNativeCredential(provider); } catch { /* No native login. */ }
+      result = await this.coordinator.read(provider, usageAccountKey(provider, credential, this.options.identity?.(provider)), fetch,
+        { credits, manual: force, generation: credentialGeneration(credential), reuseMs: this.options.fetch ? 0 : 5000,
+          isCurrent: () => generation === this.identity(provider, {}) });
+    }
+    if (provider === 'codex' && generation === this.identity(provider, {}) && result.kind === 'ok' && result.usage.source !== 'sessionLog') {
+      this.cache.recordSuccess(`authoritative:${generation}`, result.usage);
+    }
+    return result;
+  }
+
+  private async fetch(provider: ProviderId, context: UsageContext, known?: LiveUsage, force = false): Promise<LiveResult> {
     const config = this.options.config();
     const { source, apiCheckIntervalMs } = usageSettings(config, provider);
     if (provider === 'copilot') return fetchCopilotUsage(async () => context.accounts ?? [], {
       workspaceOwners: context.workspaceOwners ?? [], preferredLogin: config.copilot.account || undefined, log: this.options.log });
     if (source === 'auto') {
+      // Session creation metadata cannot establish the authentication of a later turn. Display local hints, but
+      // reconcile against an account-scoped reading at the configured deadline even while such hints arrive.
+      const localCodex = provider === 'codex' ? await fetchCodexUsageFromSessionLog() : undefined;
+      const authority = provider === 'codex' ? newestValidUsage(
+        known?.source === 'api' || known?.source === 'cli' ? known : undefined,
+        deserializeUsage(this.cache.read(`authoritative:${this.identity(provider, {})}`)), (this.options.now ?? Date.now)()) : known;
+      const authorityFresh = authority && isFreshUsage(authority, provider, apiCheckIntervalMs, (this.options.now ?? Date.now)());
       const result = await fetchAutoUsage({ provider, known, intervalMs: apiCheckIntervalMs, now: this.options.now,
-        local: () => provider === 'claude' ? fetchClaudeUsageFromAccountFile() : fetchCodexUsageFromSessionLog(),
-        api: () => provider === 'claude' ? fetchClaudeUsage(undefined, this.options.budget) : fetchCodexUsage(),
-        cli: () => provider === 'claude' ? fetchClaudeUsageCli(config.claude.cliPath) : fetchCodexUsageCli(config.codex.cliPath),
+        ...(provider === 'codex' ? { known: authority } : {}),
+        local: () => provider === 'claude' ? fetchClaudeUsageFromAccountFile() : Promise.resolve(authorityFresh ? localCodex! : { kind: 'unavailable', provider }),
+        api: () => this.remote(provider, () => provider === 'claude' ? fetchClaudeUsage(undefined, this.options.budget) : fetchCodexUsage(), false, force),
+        cli: () => this.remote(provider, () => provider === 'claude' ? fetchClaudeUsageCli(config.claude.cliPath) : fetchCodexUsageCli(config.codex.cliPath), true, force),
         apiSpacing: this.fallbacks[provider], cliSpacing: this.cliFallbacks[provider],
         budget: provider === 'claude' ? this.options.budget : undefined });
       // Only an endpoint's rate signal blocks it further; the spacing above already paces every other retry, and a
@@ -180,23 +259,21 @@ export class UsageMonitor {
         this.cliFallbacks[provider].observe({ retryAfterMs }, (this.options.now ?? Date.now)());
         if (provider === 'claude') this.options.budget.observe({ retryAfterMs }, (this.options.now ?? Date.now)());
       }
+      if (localCodex?.kind === 'ok' && isFreshUsage(localCodex.usage, provider, apiCheckIntervalMs, (this.options.now ?? Date.now)()) &&
+        (result.kind !== 'ok' || localCodex.usage.fetchedAt > result.usage.fetchedAt)) return localCodex;
       return result;
     }
     if (provider === 'claude') {
       if (source === 'accountFile') return fetchClaudeUsageFromAccountFile();
-      if (source === 'cli') return fetchClaudeUsageCli(config.claude.cliPath);
+      if (source === 'cli') return this.remote(provider, () => fetchClaudeUsageCli(config.claude.cliPath), false, force);
       if (source === 'both') return fetchLocalThenApi({ known, apiCheckIntervalMs, fallback: this.fallbacks.claude, budget: this.options.budget,
-        local: () => fetchClaudeUsageFromAccountFile(), api: () => fetchClaudeUsage(undefined, this.options.budget) });
-      return fetchClaudeUsage(undefined, this.options.budget);
+        local: () => fetchClaudeUsageFromAccountFile(), api: () => this.remote(provider, () => fetchClaudeUsage(undefined, this.options.budget), false, force) });
+      return this.remote(provider, () => fetchClaudeUsage(undefined, this.options.budget), false, force);
     }
-    if (source === 'cli') return fetchCodexUsageCli(config.codex.cliPath);
+    if (source === 'cli') return this.remote(provider, () => fetchCodexUsageCli(config.codex.cliPath), true, force);
     const result = source === 'sessionLog' ? await fetchCodexUsageFromSessionLog() : source === 'both'
       ? await fetchLocalThenApi({ known, apiCheckIntervalMs, fallback: this.fallbacks.codex,
-        local: () => fetchCodexUsageFromSessionLog(), api: () => fetchCodexUsage() }) : await fetchCodexUsage();
-    if (result.kind === 'ok' && source !== 'sessionLog') {
-      const credits = await fetchCodexResetCreditsCli(config.codex.cliPath);
-      if (credits) result.usage.resetCredits = credits;
-    }
+        local: () => fetchCodexUsageFromSessionLog(), api: () => this.remote(provider, () => fetchCodexUsage(), false, force) }) : await this.remote(provider, () => fetchCodexUsage(), false, force);
     return result;
   }
 }

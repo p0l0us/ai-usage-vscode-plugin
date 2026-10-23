@@ -379,36 +379,45 @@ test('failed keep-alive attempts still persist schedule instead of retrying ever
   assert.match(f.service.usageDetail('claude', 'a'), /Unavailable/);
 });
 
-test('a keep-alive that failed for a passing reason is repeated after the check interval; other failures wait a whole period', async t => {
-  const capacity = 'Keep-alive CLI exited with code 1: Selected model is at capacity. Please try a different model.';
-  const credits = 'Keep-alive CLI exited with code 1: Your workspace is out of credits. Add credits to continue.';
-  const f = fixture(t, { values: { a: [10, 10] }, keepAliveErrors: { b: capacity, c: credits }, settings: { codex: { enabled: true } } });
-  const keepAlives = () => f.calls.filter(call => call[0] === 'codex' && call[2]).map(call => call[1]);
-  await f.service.tick();
-  assert.deepEqual(keepAlives(), ['a', 'b', 'c']);
-  assert.match(f.service.usageDetail('codex', 'b'), /Model at capacity/, 'the vendor text is replaced by the known label');
-  assert.match(f.service.usageDetail('codex', 'c'), /Insufficient credits/);
-  // One check interval later (10 minutes here), only the keep-alive that hit the capacity error is repeated.
-  f.calls.length = 0;
-  f.advance(600001);
-  await f.service.tick();
-  assert.deepEqual(keepAlives(), ['b'], 'b again; a succeeded and c failed for a lasting reason');
-  assert.match(f.service.usageDetail('codex', 'b'), /Model at capacity/, 'still failing');
-  // The vendor recovers: the next repeat succeeds and the warning goes away.
-  delete f.options.keepAliveErrors.b;
-  f.calls.length = 0;
-  f.advance(600001);
-  await f.service.tick();
-  assert.deepEqual(keepAlives(), ['b']);
-  assert.doesNotMatch(f.service.usageDetail('codex', 'b'), /capacity/);
-  // Back on the regular period: nothing after another check interval, everything after a whole period.
-  f.calls.length = 0;
-  f.advance(600001);
-  await f.service.tick();
-  assert.deepEqual(keepAlives(), []);
-  f.advance(6 * HOUR);
-  await f.service.tick();
-  assert.deepEqual(keepAlives(), ['a', 'b', 'c']);
+test('manual account reads cannot bypass a persisted server retry deadline', async t => {
+  const f = fixture(t); let calls = 0;
+  f.service.probe = async () => { calls++; return { credential: {}, result: { kind: 'error', provider: 'codex', title: 'Codex',
+    message: 'Rate limited', status: 429, transient: true, retryAfterMs: HOUR } }; };
+  await f.service.readUsageNow('codex', 'b');
+  await f.service.readUsageNow('codex', 'b'); assert.equal(calls, 1);
+  const restarted = f.make(); t.after(() => restarted.dispose());
+  f.advance(31 * 60000);
+  assert.match((await restarted.readUsageNow('codex', 'b')).usageError, /paused until/);
+  assert.equal(f.calls.length, 0);
+});
+
+test('background pause stops automatic work while manual checks remain available', async t => {
+  const f = fixture(t, { settings: { codex: { enabled: true, autoRotate: true, backgroundNetwork: false } } });
+  await f.service.refreshUsage('codex', true); await f.service.tick(); assert.equal(f.calls.length, 0);
+  await f.service.readUsageNow('codex', 'b'); assert.equal(f.calls.length, 1);
+});
+
+test('new keep-alive schedules are staggered and survive restart', async t => {
+  const f = fixture(t, { settings: { codex: { enabled: true, keepAliveStaggerMs: 300000 } } });
+  await f.service.tick(); assert.equal(f.calls.length, 0);
+  const deadlines = ['a','b','c'].map(id => f.service.accountState('codex', id).nextKeepAliveAt);
+  assert.equal(new Set(deadlines).size, 3);
+  const restarted = f.make(); t.after(() => restarted.dispose());
+  await restarted.tick(); assert.equal(f.calls.length, 0);
+  assert.deepEqual(['a','b','c'].map(id => restarted.accountState('codex', id).nextKeepAliveAt), deadlines);
+  f.advance(300001); await restarted.tick(); assert.equal(f.calls.filter(call => call[2]).length, 3);
+});
+
+test('model failures with successful quota never accelerate the keep-alive cadence', async t => {
+  const f = fixture(t, { values: { a: [10, 10] }, keepAliveErrors: { b: 'Selected model is at capacity.' }, settings: { codex: { enabled: true } } });
+  const calls = () => f.calls.filter(call => call[0] === 'codex' && call[2]).map(call => call[1]);
+  await f.service.tick(); assert.deepEqual(calls(), ['a', 'b', 'c']);
+  f.calls.length = 0; f.advance(600001); await f.service.tick(); assert.deepEqual(calls(), []);
+  f.service.dispose(); const restarted = f.make();
+  await restarted.tick(); assert.deepEqual(calls(), [], 'schedule survives restart');
+  f.advance(6 * HOUR); await restarted.tick(); assert.deepEqual(calls(), ['a', 'b', 'c']);
+  f.calls.length = 0; f.advance(6 * HOUR); await restarted.tick();
+  assert.deepEqual(calls(), ['a', 'c'], 'a repeated model failure increases the wait');
 });
 
 test('manual keep-alive runs while disabled, updates account stats, and resets its periodic schedule', async t => {

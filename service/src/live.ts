@@ -4,6 +4,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { claudeAccountFile } from './accountIdentity';
 import { readNativeCredential } from './authFiles';
+import { countRequest } from './requestDiagnostics';
 
 /**
  * Live usage readers for locally installed AI CLIs and GitHub Copilot. This module must stay free of
@@ -29,6 +30,8 @@ export type LiveUsage = {
   windows: UsageWindow[];
   /** Earned Codex rate-limit reset credits, when app-server reports them. */
   resetCredits?: { availableCount: number; earliestExpiresAt?: number; totalCount?: number };
+  /** Epoch ms of the credit observation, independent of a later quota observation. */
+  creditsObservedAt?: number;
   /** Extra tooltip lines. */
   details?: string[];
   fetchedAt: Date;
@@ -46,6 +49,7 @@ export type LiveResult =
       message: string;
       /** HTTP status when the failure came from a response. */
       status?: number;
+      code?: string | number;
       /** True for rate limits, server errors and network failures: worth backing off and retrying. */
       transient?: boolean;
       /** Server-requested wait from a Retry-After header. */
@@ -263,6 +267,7 @@ async function fetchJson(url: string, headers: Record<string, string>): Promise<
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   try {
+    countRequest('http');
     const response = await fetch(url, { headers, signal: controller.signal });
     const text = await response.text();
     let body: unknown = undefined;
@@ -757,7 +762,22 @@ export function resolveCli(command: string): string | undefined {
 }
 
 type CodexRpcRequest = { method: string; params?: unknown };
-type CodexRpcMessage = { id?: number; result?: unknown; error?: { message?: string } };
+type CodexRpcMessage = { id?: number; result?: unknown; error?: { message?: string; code?: number | string;
+  data?: { status?: number; statusCode?: number; retryAfterMs?: number; retry_after_seconds?: number; code?: string } } };
+
+export class CodexRpcError extends Error {
+  readonly status?: number;
+  readonly code?: number | string;
+  readonly retryAfterMs?: number;
+  constructor(method: string, error: NonNullable<CodexRpcMessage['error']>) {
+    super(`${method} failed: ${error.message ?? 'unknown error'}`);
+    this.code = error.data?.code ?? error.code;
+    const status = error.data?.status ?? error.data?.statusCode;
+    this.status = Number.isInteger(status) && status! >= 400 && status! <= 599 ? status : undefined;
+    const retry = error.data?.retryAfterMs ?? (error.data?.retry_after_seconds === undefined ? undefined : error.data.retry_after_seconds * 1000);
+    this.retryAfterMs = retry !== undefined && Number.isFinite(retry) && retry >= 0 ? retry : undefined;
+  }
+}
 
 /**
  * Runs `codex app-server` over stdio, sends `initialize`, then each request in order in the same
@@ -765,6 +785,7 @@ type CodexRpcMessage = { id?: number; result?: unknown; error?: { message?: stri
  */
 function codexRpc(cli: string, requests: CodexRpcRequest[], env: NodeJS.ProcessEnv = process.env, cwd?: string): Promise<unknown[]> {
   return new Promise((resolve, reject) => {
+    countRequest('process');
     // `model_provider` pins Codex's built-in provider: while the AI Usage account proxy is selected in config.toml
     // (`requires_openai_auth = false`), Codex would otherwise answer these login and rate-limit questions with "no login".
     const child = spawn(cli, ['app-server', '-c', 'cli_auth_credentials_store="file"', '-c', 'model_provider="openai"'],
@@ -772,29 +793,39 @@ function codexRpc(cli: string, requests: CodexRpcRequest[], env: NodeJS.ProcessE
     let buffer = '';
     let stderr = '';
     let settled = false;
+    let expectedId = 1;
+    let complete: (() => void) | undefined;
+    let killTimer: NodeJS.Timeout | undefined;
     const results: unknown[] = [];
     const finish = (fn: () => void) => {
       if (!settled) {
         settled = true;
         clearTimeout(timer);
-        fn();
+        complete = fn;
         child.kill();
+        // Keep the caller's credential lock until the owned process has stopped writing its home.
+        killTimer = setTimeout(() => child.kill('SIGKILL'), 1000);
+        killTimer.unref();
       }
     };
     const timer = setTimeout(() => finish(() => reject(new Error('codex app-server did not answer in time'))), CODEX_CLI_TIMEOUT_MS);
     const send = (id: number, request: CodexRpcRequest) => {
       if (!settled) {
+        countRequest('rpc');
         child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method: request.method, params: request.params ?? {} }) + '\n');
       }
     };
 
     child.on('error', (error) => finish(() => reject(error)));
+    child.on('close', () => { clearTimeout(killTimer); complete?.(); });
     // Without a listener, a write into a pipe the app-server already closed (EPIPE) is an uncaught error that ends the service.
     child.stdin.on('error', (error) => finish(() => reject(new Error(`codex app-server closed its input (${error.message})${stderr.trim() ? `: ${stderr.trim().slice(0, 200)}` : ''}`))));
     child.on('exit', (code) => finish(() => reject(new Error(`codex app-server exited (${code ?? 'signal'}): ${stderr.trim().slice(0, 200)}`))));
-    child.stderr.on('data', (chunk) => (stderr += String(chunk)));
+    child.stderr.on('data', (chunk) => { stderr = (stderr + String(chunk)).slice(-8192); });
     child.stdout.on('data', (chunk) => {
+      if (settled) return;
       buffer += String(chunk);
+      if (buffer.length > 2 * 1024 * 1024) { finish(() => reject(new Error('Codex RPC output exceeded the size limit.'))); return; }
       let newline = buffer.indexOf('\n');
       while (newline >= 0) {
         const line = buffer.slice(0, newline).trim();
@@ -809,23 +840,27 @@ function codexRpc(cli: string, requests: CodexRpcRequest[], env: NodeJS.ProcessE
         } catch {
           continue;
         }
-        if (typeof message.id !== 'number' || message.id < 1 || message.id > requests.length + 1) {
+        if (message.id !== expectedId) {
           continue;
         }
         // id 1 is `initialize`; request n is sent with id n + 1.
         const index = message.id - 2;
         if (message.error) {
           const name = index < 0 ? 'initialize' : requests[index].method;
-          finish(() => reject(new Error(`${name} failed: ${message.error?.message ?? 'unknown error'}`)));
+          finish(() => reject(new CodexRpcError(name, message.error!)));
           return;
         }
         if (index >= 0) {
           results[index] = message.result ?? {};
+        } else {
+          child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'initialized', params: {} }) + '\n');
         }
+        expectedId++;
         if (index + 1 < requests.length) {
           send(message.id + 1, requests[index + 1]);
         } else {
           finish(() => resolve(results));
+          return;
         }
       }
     });
@@ -890,6 +925,8 @@ export type CodexAuthStatus = {
 };
 
 export type CodexAccountVerification = {
+  errorStatus?: number;
+  retryAfterMs?: number;
   /** `match`/`mismatch` when the identity could be compared; `unverified` when it could not. */
   status: 'match' | 'mismatch' | 'unverified';
   /** Account id Codex reported, when its token was available. */
@@ -982,6 +1019,10 @@ export async function verifyCodexNativeAccount(
     status = result as CodexAuthStatus;
   } catch (error) {
     failures.push(describeError(error));
+    if (!(error instanceof CodexRpcError && (error.code === -32601 || /unknown method|method.*not found|unsupported/i.test(error.message)))) {
+      return { status: 'unverified', detail: `Codex login verification failed: ${describeError(error)}`,
+        ...(error instanceof CodexRpcError ? { errorStatus: error.status, retryAfterMs: error.retryAfterMs } : {}) };
+    }
   }
   if (!status || (!status.authMethod && status.authToken === undefined)) {
     try {
@@ -989,6 +1030,8 @@ export async function verifyCodexNativeAccount(
       status = result as CodexAuthStatus;
     } catch (error) {
       failures.push(describeError(error));
+      return { status: 'unverified', detail: `Codex app-server could not be asked for its login: ${failures.join('; ')}`,
+        ...(error instanceof CodexRpcError ? { errorStatus: error.status, retryAfterMs: error.retryAfterMs } : {}) };
     }
   }
   if (!status) {
@@ -1003,7 +1046,8 @@ export async function verifyCodexNativeAccount(
  * proxy delegates to it after an upstream 401 instead of calling the OAuth endpoint. Resolves to whether Codex
  * answered; never throws.
  */
-export async function refreshCodexNativeLogin(command = 'codex', home = codexHomeDir(), env: NodeJS.ProcessEnv = process.env): Promise<boolean> {
+export async function refreshCodexNativeLogin(command = 'codex', home = codexHomeDir(), env: NodeJS.ProcessEnv = process.env,
+  onFailure?: (error: unknown) => void): Promise<boolean> {
   const cli = resolveCli(command);
   if (!cli) {
     return false;
@@ -1011,7 +1055,8 @@ export async function refreshCodexNativeLogin(command = 'codex', home = codexHom
   try {
     await codexRpc(cli, [{ method: 'getAuthStatus', params: { includeToken: false, refreshToken: true } }], { ...env, CODEX_HOME: home });
     return true;
-  } catch {
+  } catch (error) {
+    onFailure?.(error);
     return false;
   }
 }
@@ -1042,7 +1087,9 @@ export async function fetchCodexUsageCli(command = 'codex', home = codexHomeDir(
   try {
     response = await codexRpcRateLimits(cli, { ...env, CODEX_HOME: home }, cwd);
   } catch (error) {
-    return { kind: 'error', provider, title: CODEX_TITLE, message: `Codex CLI: ${describeError(error)}`, transient: true };
+    return { kind: 'error', provider, title: CODEX_TITLE, message: `Codex CLI: ${describeError(error)}`,
+      ...(error instanceof CodexRpcError ? { status: error.status, code: error.code, retryAfterMs: error.retryAfterMs,
+        transient: error.status === undefined || isTransientStatus(error.status) } : { transient: true }) };
   }
   const limits = response.rateLimits;
   const windows = codexWindowsFromRpc(limits);
@@ -1052,7 +1099,8 @@ export async function fetchCodexUsageCli(command = 'codex', home = codexHomeDir(
   return {
     kind: 'ok',
     usage: { provider, title: CODEX_TITLE, plan: limits?.planType ?? readCodexAuth(home)?.plan, windows,
-      resetCredits: codexResetCredits(response), details: ['Source: Codex CLI (app-server)'], fetchedAt: new Date() }
+      resetCredits: codexResetCredits(response), creditsObservedAt: Date.now(), source: 'cli',
+      details: ['Source: Codex CLI (app-server)'], fetchedAt: new Date() }
   };
 }
 
@@ -1066,6 +1114,7 @@ type CodexLogRateLimits = {
 
 function newestFiles(dir: string, limit: number): string[] {
   const results: Array<{ file: string; mtime: number }> = [];
+  let visited = 0;
   const walk = (current: string, depth: number) => {
     let entries: fs.Dirent[];
     try {
@@ -1073,7 +1122,8 @@ function newestFiles(dir: string, limit: number): string[] {
     } catch {
       return;
     }
-    for (const entry of entries) {
+    for (const entry of entries.sort((a, b) => b.name.localeCompare(a.name))) {
+      if (++visited > 8192) break;
       const full = path.join(current, entry.name);
       if (entry.isDirectory() && depth < 4) {
         walk(full, depth + 1);
@@ -1090,40 +1140,44 @@ function newestFiles(dir: string, limit: number): string[] {
   return results.sort((a, b) => b.mtime - a.mtime).slice(0, limit).map((entry) => entry.file);
 }
 
-/** Reads the tail of a file and returns the last rate_limits record in it, if any. */
+type LogReading = { limits: CodexLogRateLimits; at: Date };
+type LogCursor = { generation: string; size: number; mtime: number; pending: Buffer; reading?: LogReading };
+const logCursors = new Map<string, LogCursor>();
+/** Bounded incremental tail reader. An append preserves metadata; truncation/replacement invalidates it. */
 function lastRateLimitsIn(file: string): { limits: CodexLogRateLimits; at: Date } | undefined {
-  let text: string;
   try {
-    const size = fs.statSync(file).size;
-    const start = Math.max(0, size - 512 * 1024);
+    const stat = fs.statSync(file), size = stat.size;
+    const generation = `${stat.dev}:${stat.ino}:${stat.birthtimeMs}`;
+    let cursor = logCursors.get(file);
+    if (cursor && cursor.generation === generation && cursor.size === size && cursor.mtime === stat.mtimeMs) return cursor.reading;
+    if (!cursor || cursor.generation !== generation || size < cursor.size || (size === cursor.size && cursor.mtime !== stat.mtimeMs)) cursor = undefined;
+    const start = Math.max(cursor?.size ?? 0, size - 512 * 1024);
     const fd = fs.openSync(file, 'r');
+    let data: Buffer;
     try {
       const buffer = Buffer.alloc(size - start);
-      fs.readSync(fd, buffer, 0, buffer.length, start);
-      text = buffer.toString('utf8');
+      const read = fs.readSync(fd, buffer, 0, buffer.length, start);
+      data = Buffer.concat([start === cursor?.size ? cursor.pending : Buffer.alloc(0), buffer.subarray(0, read)]);
     } finally {
       fs.closeSync(fd);
     }
+    const end = data.lastIndexOf(10);
+    let reading = cursor?.reading;
+    for (const line of data.subarray(0, end + 1).toString('utf8').split('\n')) {
+      if (!line.includes('"rate_limits"')) continue;
+      try {
+        const record = JSON.parse(line) as { timestamp?: string; payload?: { rate_limits?: CodexLogRateLimits | null } };
+        const limits = record.payload?.rate_limits, at = toDate(record.timestamp);
+        if (limits && (limits.primary || limits.secondary) && at && at.getTime() <= Date.now() && (!reading || at >= reading.at)) reading = { limits, at };
+      } catch { /* Partial tail start or invalid record. */ }
+    }
+    if (logCursors.size >= 24 && !logCursors.has(file)) logCursors.delete(logCursors.keys().next().value!);
+    logCursors.set(file, { generation, size, mtime: stat.mtimeMs, pending: data.subarray(Math.max(end + 1, data.length - 512 * 1024)), reading });
+    return reading;
   } catch {
+    logCursors.delete(file);
     return undefined;
   }
-  const lines = text.split('\n');
-  for (let index = lines.length - 1; index >= 0; index--) {
-    const line = lines[index];
-    if (!line.includes('"rate_limits"')) {
-      continue;
-    }
-    try {
-      const record = JSON.parse(line) as { timestamp?: string; payload?: { rate_limits?: CodexLogRateLimits | null } };
-      const limits = record.payload?.rate_limits;
-      if (limits && (limits.primary || limits.secondary)) {
-        return { limits, at: toDate(record.timestamp) ?? new Date(fs.statSync(file).mtimeMs) };
-      }
-    } catch {
-      // partial line at the buffer start; keep going
-    }
-  }
-  return undefined;
 }
 
 export async function fetchCodexUsageFromSessionLog(): Promise<LiveResult> {
@@ -1161,6 +1215,7 @@ export async function fetchCodexUsageFromSessionLog(): Promise<LiveResult> {
       title: CODEX_TITLE,
       plan: best.limits.plan_type ?? readCodexAuth()?.plan,
       windows,
+      source: 'sessionLog',
       details: [`Source: Codex session log (recorded ${best.at.toLocaleString()})`],
       // The reading is as old as the last Codex turn, not as the moment we read the file.
       fetchedAt: best.at

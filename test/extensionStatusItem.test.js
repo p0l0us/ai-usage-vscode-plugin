@@ -154,7 +154,7 @@ test('the tooltip of a usage reading lists windows with exact resets, the plan, 
   const md = si.buildTooltip(new api.MarkdownString(undefined, true), u, NOW, undefined, 'Work');
   assert.equal(md.supportThemeIcons, true);
   assert.equal(md.value,
-    '**Claude · me@example.com** · Max\n\n' +
+    '**Claude · me@example.com** · Max\n\nObserved 0 min ago.\n\n' +
     `- **5-hour window**: 17% used · resets in 3h (${minutes(180).toLocaleString()})\n` +
     '- **7-day window · Fable**: 50% used\n' +
     '\nExtra: 5  \nplain line  \n' +
@@ -261,7 +261,7 @@ test('the plain-text tooltip carries the status bar hover without Markdown or ic
   const text = si.tooltipPlainText(usage({ provider: 'codex', title: 'Codex', subtitle: 'me@example.com', plan: 'Pro', fetchedAt: NOW, details: ['Source: Codex CLI'],
     resetCredits: { availableCount: 2 } }), NOW, 'Codex account 1');
   assert.doesNotMatch(text, /\*\*|\$\(|_Updated/);
-  assert.match(text, /^Codex · me@example\.com · Pro\n\n• 5-hour window: 17% used · resets in 3h \(/);
+  assert.match(text, /^Codex · me@example\.com · Pro\n\nObserved 0 min ago\.\n\n• 5-hour window: 17% used · resets in 3h \(/);
   assert.match(text, /\n• Earned resets: 2 available/);
   assert.match(text, /\nSource: Codex CLI\n\nUpdated .*\n\nAuthentication profile: Codex account 1$/);
 });

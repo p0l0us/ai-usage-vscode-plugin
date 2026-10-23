@@ -30,11 +30,13 @@ for (const mode of ['background', 'embedded']) {
         { sources: { local: 'error', api: 'unavailable', cli: 'fresh' }, attempts: ['local', 'api', 'cli'], source: 'cli' },
         { sources: { local: 'unavailable', api: '429', cli: 'fresh' }, attempts: ['local', 'api'] }
       ]) {
-        // A policy revision isolates each scenario's identity-keyed cached reading.
-        setFixture(f.home, { sources: scenario.sources }); fs.writeFileSync(file, '');
+        // A provider's background poll must not consume the other provider's scenario or inherit its 429.
+        // Clear before publishing the new scenario so a concurrent poll's new evidence cannot be erased.
+        const scenarioId = `${provider}:${scenario.attempts.join('-')}:${scenario.source || 'rate'}`;
+        fs.writeFileSync(file, ''); setFixture(f.home, { sources: { [provider]: scenario.sources }, scenarioId });
         await client.setConfig({ [`${provider}.cliPath`]: 'synthetic-' + scenario.attempts.join('-') + (scenario.source || '-rate') });
         const view = await client.liveUsage(provider, true);
-        const rows = fs.readFileSync(file, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse).filter(row => row.provider === provider);
+        const rows = fs.readFileSync(file, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse).filter(row => row.provider === provider && row.scenarioId === scenarioId);
         const attempts = rows.map(row => row.source);
         assert.ok(rows.length > 0);
         // The forced read walks the sources in cost order; background polls only re-read the free local source.
@@ -45,7 +47,7 @@ for (const mode of ['background', 'embedded']) {
           assert.equal(view.result.kind, 'ok'); assert.equal(view.result.usage.source, scenario.source);
           assert.equal(Date.parse(view.result.usage.fetchedAt), JSON.parse(fs.readFileSync(path.join(f.home, 'fixture.json'), 'utf8')).now - 1000);
           await client.liveUsage(provider, true);
-          const after = fs.readFileSync(file, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse).filter(row => row.provider === provider);
+          const after = fs.readFileSync(file, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse).filter(row => row.provider === provider && row.scenarioId === scenarioId);
           assert.deepEqual([...new Set(after.slice(attempts.length).map(row => row.source))].filter(source => source !== 'local'), [],
             'fresh engine cache avoids every endpoint and CLI call');
         } else { assert.equal(view.result.kind, 'error'); assert.equal(view.result.status, 429); }

@@ -17,7 +17,7 @@ Each provider has a `source` setting that selects where the account service read
 | Setting | Options | Default | Notes |
 |---|---|---|---|
 | `aiUsage.claude.source` | `auto`, `both`, `cli`, `api`, `accountFile` | `auto` | `cli` runs Claude Code's own `/usage` (set `aiUsage.claude.cliPath` if it is not on PATH): no model is called and nothing is billed, but Claude Code reaches the usage endpoint to answer it, so it is spaced like `api`. `accountFile` reads the usage Claude Code itself cached in `~/.claude.json` — no network call, so it can be polled every few seconds (`aiUsage.claude.accountFile.checkIntervalSeconds`), but it is only as fresh as Claude Code's own last request, and Claude Code drops that cache on an account switch until something asks it for usage again. |
-| `aiUsage.codex.source` | `auto`, `both`, `cli`, `api`, `sessionLog` | `auto` | `cli` runs `codex app-server` (set `aiUsage.codex.cliPath` if it is not on PATH). Explicit `both`, `cli` and `api` modes also read earned-reset availability through app-server; `auto` does not launch it to enrich a successful cheaper reading. `sessionLog` makes no extra status-bar request, but is only as fresh as your last Codex turn; account automation may still check a saved active profile when auto-reset is on. |
+| `aiUsage.codex.source` | `auto`, `both`, `cli`, `api`, `sessionLog` | `auto` | `cli` runs `codex app-server` (set `aiUsage.codex.cliPath` if it is not on PATH). Quota and earned-reset credits are collected together when app-server is used. Other sources reuse a credit-only lookup for up to an hour, with independent credit freshness. `sessionLog` makes no extra status-bar request, but is only as fresh as your last Codex turn; account automation may still check a saved active profile when auto-reset is on. |
 | `aiUsage.copilot.source` | `api` | `api` | The Copilot CLI has no headless usage command. |
 
 `auto` tries an identity-keyed shared cache, the local account file (Claude) or session log (Codex), the direct
@@ -26,13 +26,11 @@ Claude's `/usage` still calls the same endpoint, so spawning it costs more work 
 Readings retain their original timestamps. A reading must be younger than `checkIntervalMinutes`, contain usable
 quota windows and have no expired reset; future timestamps are rejected. Provider budgets and backoff still apply,
 including to CLI paths that reach the same endpoint. Codex session logs cannot identify a saved account, so they do
-not update saved-profile usage. Auto does not make an extra app-server call just to collect earned-reset credits.
-Usage source polling sends no model prompt. Account keep-alives and rotation checks retain their separate settings
-and can make model calls; selecting `auto` does not enable them.
+not update saved-profile usage. Codex auto inspects recent session logs every five seconds, but ambiguous logs do not postpone the configured deadline for an account-specific endpoint reading. An hourly app-server lookup can supply earned-reset credits when a cheaper source does not report them.
+Usage source polling and rotation checks send no model prompt. Keep-alives retain their separate settings and can make model calls; selecting `auto` does not enable them.
 
-Claude and Codex default to **30 minutes** (`aiUsage.<provider>.checkIntervalMinutes`). Auto uses minutes for both
-freshness and checks; Claude's separate `accountFile.checkIntervalSeconds` applies to explicit `accountFile` and
-`both`. Existing saved source selections and intervals, including `both`, 10 or 5 minutes, stay unchanged; only
+Claude and Codex default to **30 minutes** (`aiUsage.<provider>.checkIntervalMinutes`). Auto uses minutes for
+endpoint freshness; local inspection is independent. Claude's `accountFile.checkIntervalSeconds` applies to `auto`, `accountFile` and `both`, and Codex local inspection runs every five seconds. Existing saved source selections and intervals, including `both`, 10 or 5 minutes, stay unchanged; only
 missing settings receive the new defaults. Copilot keeps its existing API source and five-minute interval.
 
 `both` combines the two: the local file is re-read on every check and used while its reading is no older than that
@@ -76,20 +74,18 @@ for details.
 
 ## Intervals
 
-- `aiUsage.<service>.checkIntervalMinutes` (Claude 10, Codex 5, Copilot 5): how often that service's source is
+- `aiUsage.<service>.checkIntervalMinutes` (Claude 30, Codex 30, Copilot 5): how often that service's source is
   called and the result stored in the shared on-disk cache. One call serves every open window. Claude's accepts
   fractional minutes down to 0.25 (15 seconds); its endpoint calls are still spaced by
   `aiUsage.claude.api.minIntervalSeconds` and by any limit the endpoint advertises. The active account is read more
   often than this as it approaches a rotation threshold, down to once a minute; see
   [What starts a rotation](ROTATION.md#what-starts-a-rotation).
 - `aiUsage.<claude|codex>.checkInactiveAccounts` (off): whether saved accounts other than the active one are also
-  read every `checkIntervalMinutes`. Off, they are assumed unused: their usage can only change by a window reset,
-  which rotation already counts as fresh, so they are read only by their keep-alive (every
-  `keepAlive.periodHours`), which also finds a login that stopped working, and by a check or keep-alive started by hand (Accounts menu,
-  `ai-usage`, MCP `refresh_usage`); the service's startup round skips them too.
+  read every `checkIntervalMinutes`. Off, background reads of inactive accounts occur with their keep-alive (every
+  `keepAlive.periodHours`), which also finds a login that stopped working. Explicit checks remain available from the Accounts menu,
+  `ai-usage` and MCP `refresh_usage`; the service's startup round skips inactive accounts.
   Turn it on when an account is also used from another computer. With keep-alives off as well, inactive readings
-  stay as they were. Each read of an inactive Codex account exercises its login from its profile home; on
-  21–22 October 2026 four inactive logins checked every 5 minutes were revoked by OpenAI within days.
+  stay as they were. Other devices can consume the same quota between checks; old readings are not proof of unused allowance. Token revocations reported during frequent checks do not establish their cause or prove an account suspension.
 - `aiUsage.updateIntervalMinutes` (1): how often every window re-reads the cache and redraws the status bar and
   chat chip details. Applies to all sources.
 
@@ -106,6 +102,16 @@ for details.
   (`anthropic-ratelimit-requests-remaining`/`-reset`, or `Retry-After`): whatever quota a response reports is
   spread over the rest of its window. A refresh that arrives too early shows the cached reading and says when the
   next call is due. `0` leaves only the service's own limits.
+
+## Request admission and background traffic
+
+`aiUsage.claude.backgroundNetwork` and `aiUsage.codex.backgroundNetwork` default to `true`. Turning a provider off here pauses scheduled network reads, keep-alives, earned resets and automatic rotation. Local and cached usage remain available. Explicit refresh, keep-alive and rotation commands still work; requests already in progress are allowed to finish. This setting does not pause your own CLI inference or the account proxy serving it.
+
+Status polling, saved-account checks and native-login reads share account-scoped retry state. An advertised `Retry-After` is respected in full, including after restart or a manual refresh. Token refresh does not reset a cooldown when the account identity can be established. Fresh authoritative readings are reused before another background call. Explicit refreshes and required pre-switch verification recheck the provider, subject to that cooldown.
+
+The tooltip shows the observation age and source. Codex credit counts retain a separate observation timestamp: after fifteen minutes they are shown as stale, even if newer quota data has arrived. A credit-only lookup is reused for up to an hour; a completed redemption invalidates it. An unknown or stale count is not an inferred zero. Switching still uses a fresh bounded app-server process to verify the login Codex actually loaded, following its [initialization protocol](https://learn.chatgpt.com/docs/app-server#initialization).
+
+Usage details also show counts for the current UTC hour: direct HTTP attempts, RPC requests, CLI process starts, model attempts, cache hits and suppressed requests. These are separate operations; a CLI may make upstream requests that AI Usage cannot count. The service keeps 72 hourly buckets in `state/request-diagnostics.json` under its service home. The file contains aggregate provider counts, not credentials or account identifiers.
 
 ## Other settings
 
@@ -510,12 +516,13 @@ in between two accounts. Once the wait runs out, the notification says that the 
 
 | Setting suffix (`aiUsage.claude.` / `aiUsage.codex.`) | Claude default | Codex default | Purpose |
 | --- | --- | --- | --- |
+| `backgroundNetwork` | `true` | `true` | Allow scheduled provider traffic. Off pauses automatic reads, keep-alives, resets and rotation; explicit commands remain available. |
 | `keepAlive.enabled` | `true` | `true` | Periodically check every saved account, including inactive ones, with the smallest model; this also keeps their logins refreshed. The active login is never kept alive and never checked from its profile home: it is read through the native login, where it is in use, so one login is never exercised from two installations at once. Between keep-alives, saved Codex accounts are read over HTTPS with their stored token (no `codex app-server` start, no token refresh); the earned-reset count, which only the CLI reports, is read with the hourly keep-alive or, with keep-alives off, by one CLI read an hour. |
 | `autoRotate.enabled` | `true` | `true` | Switch accounts automatically at a threshold or, with `proactive`, when another account scores clearly better. |
 | `autoReset.enabled` | — | `true` | Automatically redeem an earned Codex rate-limit reset credit when the active saved account is limited and the timing rules favor a reset. |
 | `autoRotate.updateUsageBeforeRotation` | `false` | `false` | Read the target account's usage right before a rotation switch (a usage call, never a keep-alive). Off: stored readings decide, a window that has reset since counts as fresh. |
 | `autoRotate.resetAware` | — | `true` | Avoid automatic Codex switches in the five minutes before a reported quota reset; recheck after it. |
-| `keepAlive.periodHours` | `2` | `6` | Per-account keep-alive period, minimum 0.25 hours. |
+| `keepAlive.periodHours` | `1` | `1` | Per-account keep-alive period, minimum 0.25 hours. |
 | `autoRotate.fiveHourThresholdPercent` | `95` | `100` | Threshold for the 5h window; Codex's default rotates only on a used-up window. |
 | `autoRotate.weeklyThresholdPercent` | `99.5` | `99` | Threshold for the weekly windows (`7d`, and `7d Fable` when it counts). |
 | `autoRotate.modelLimits` | `auto` | — | Whether `7d Fable` counts: `auto` (when Claude Code's `model` is Fable or unset), `always`, `never`. |
@@ -528,6 +535,8 @@ in between two accounts. Once the wait runs out, the notification says that the 
 
 Codex defaults to Luna for small background calls, following [OpenAI Docs model usage guidance](https://learn.chatgpt.com/docs/pricing).
 Use a model available to your subscription; an empty Codex model setting selects the CLI default.
+
+New keep-alive schedules are spread across the first five minutes and persisted across restarts. A failed prompt waits at least the configured period before another automatic prompt; repeated failures increase the delay up to 24 hours (or the configured period, if longer). A successful quota read does not erase a model failure. A credential known to require sign-in stops automatic checks until it is replaced.
 
 Every keep-alive asks exactly `what is date today`. Requests use a separate working directory and CLI home,
 with inherited authentication and provider routing overrides removed. Claude tools and custom hooks are disabled;

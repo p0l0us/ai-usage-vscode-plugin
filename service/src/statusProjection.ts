@@ -3,7 +3,7 @@ import type { ProviderId } from './live';
 
 /** Conservative local display policy, not a provider-guaranteed credit TTL. */
 export const RESET_CREDIT_FRESHNESS_MS = 15 * 60_000;
-export type CreditReading = { fetchedAt: string | Date; resetCredits?: { availableCount: number; earliestExpiresAt?: number; totalCount?: number } };
+export type CreditReading = { fetchedAt: string | Date; creditsObservedAt?: number; resetCredits?: { availableCount: number; earliestExpiresAt?: number; totalCount?: number } };
 type CreditFacts = { observedAt: string; validUntil: string; earliestExpiresAt?: number; totalCount?: number };
 export type ResetCreditProjection =
   | ({ state: 'known'; availableCount: number } & CreditFacts)
@@ -15,12 +15,13 @@ function count(value: unknown): value is number { return typeof value === 'numbe
 
 /** Identity-matched readings only: callers must not supply another account's fallback. */
 export function projectResetCredits(primary?: CreditReading, now = Date.now(), fallback?: CreditReading): ResetCreditProjection {
+  const observedAt = (reading: CreditReading) => reading.creditsObservedAt ?? timestamp(reading.fetchedAt);
   const readings = [primary, fallback].filter((reading): reading is CreditReading => !!reading?.resetCredits);
   if (!readings.length || !Number.isFinite(now)) return { state: 'unknown' };
   // An invalid report time cannot be safely ordered behind an older usable report.
-  if (readings.some(reading => !Number.isFinite(timestamp(reading.fetchedAt)))) return { state: 'unknown' };
-  const latest = readings.reduce((a, b) => timestamp(a.fetchedAt) >= timestamp(b.fetchedAt) ? a : b);
-  const observed = timestamp(latest.fetchedAt), credits = latest.resetCredits!;
+  if (readings.some(reading => !Number.isFinite(observedAt(reading)))) return { state: 'unknown' };
+  const latest = readings.reduce((a, b) => observedAt(a) >= observedAt(b) ? a : b);
+  const observed = observedAt(latest), credits = latest.resetCredits!;
   if (observed > now || !count(credits.availableCount) ||
     (credits.earliestExpiresAt !== undefined && (!Number.isFinite(credits.earliestExpiresAt) || credits.earliestExpiresAt <= 0 || !Number.isFinite(credits.earliestExpiresAt * 1000) || credits.earliestExpiresAt * 1000 > 8.64e15))) return { state: 'unknown' };
   const validUntil = Math.min(observed + RESET_CREDIT_FRESHNESS_MS, credits.earliestExpiresAt === undefined ? Infinity : credits.earliestExpiresAt * 1000);

@@ -18,6 +18,9 @@ export type CacheEntry = {
   lastError?: string;
   /** Epoch ms when some window started a fetch; lets other windows wait instead of duplicating it. */
   fetchingSince?: number;
+  creditsCheckedAt?: number;
+  credits?: LiveUsage['resetCredits'];
+  authGeneration?: string;
 };
 
 type SerializedUsage = Omit<LiveUsage, 'fetchedAt' | 'windows'> & {
@@ -82,8 +85,9 @@ export class SharedCache {
     let nextAllowedAt = now;
     this.update(key, (entry) => {
       const failures = (entry.failures ?? 0) + 1;
-      const wait = retryAfterMs ?? Math.min(BACKOFF_MAX_MS, BACKOFF_MIN_MS * 2 ** (failures - 1));
-      nextAllowedAt = now + Math.max(BACKOFF_MIN_MS, Math.min(BACKOFF_MAX_MS, wait));
+      const wait = retryAfterMs !== undefined && Number.isFinite(retryAfterMs) && retryAfterMs >= 0
+        ? retryAfterMs : Math.min(BACKOFF_MAX_MS, BACKOFF_MIN_MS * 2 ** Math.min(30, failures - 1));
+      nextAllowedAt = Math.max(entry.nextAllowedAt ?? 0, now + Math.max(BACKOFF_MIN_MS, wait));
       return { usage: entry.usage, failures, lastError: message, nextAllowedAt };
     });
     return nextAllowedAt;

@@ -1,4 +1,5 @@
 import { spawn } from 'child_process';
+import { countRequest } from './requestDiagnostics';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -8,6 +9,8 @@ import { LiveResult, consumeCodexResetCredit, fetchClaudeUsage, fetchCodexUsage,
 
 export type ProbeSettings = {
   home: string; cliPath: string; model: string; persistent?: boolean;
+  accountKey?: string;
+  manual?: boolean;
   /** Codex: also read the earned-reset count, which only the CLI reports; otherwise the usage endpoint is read over HTTPS without starting the CLI. */
   creditsRead?: boolean;
 };
@@ -235,6 +238,8 @@ export function runKeepAlive(cli: string, args: string[], home: string, env: Nod
     if (signal.aborted) { reject(new Error('Account check cancelled.')); return; }
     // Output is kept (bounded) so a failure can say why, e.g. a usage limit or an unsupported model.
     // Claude Code prints such errors to stdout in --print mode; Codex prints them to stderr.
+    countRequest('process');
+    countRequest('model');
     const child = spawn(cli, args, { cwd: home, env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
     let stderr = '';
     let stdout = '';
@@ -275,7 +280,7 @@ export async function claudeUsage(home: string, signal: AbortSignal, budget?: Ap
 async function codexUsage(settings: ProbeSettings, home: string, env: NodeJS.ProcessEnv, keepAlive: boolean, fetchers: CodexUsageFetchers): Promise<LiveResult> {
   if (keepAlive || settings.creditsRead) { return fetchers.cli(settings.cliPath, home, env, home); }
   const direct = await fetchers.http(home);
-  if (direct.kind === 'error' && (direct.status === 401 || direct.status === 403 || /expired/i.test(direct.message))) {
+  if (direct.kind === 'error' && direct.retryAfterMs === undefined && (direct.status === 401 || /expired/i.test(direct.message))) {
     // An expired login is refreshed by the CLI; a rejected one gets one CLI attempt, which also says why.
     return fetchers.cli(settings.cliPath, home, env, home);
   }

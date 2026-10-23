@@ -185,8 +185,8 @@ export const SETTINGS_CATALOG = [
     "type": "number",
     "min": 0.25,
     "max": 168,
-    "default": 2,
-    "description": "**Claude keep-alive period in hours.** Each saved Claude account is checked once per period. The schedule persists across window restarts."
+    "default": 1,
+    "description": "**Claude keep-alive period in hours.** Each saved Claude account other than the active one is checked once per period (hourly by default): the vendor CLI sends one short prompt with `#aiUsage.claude.keepAlive.model#` from the account's own home (`#aiUsage.claude.keepAlive.home#`) and records the usage it reports. The schedule persists across window restarts."
   },
   {
     "key": "claude.keepAlive.model",
@@ -274,6 +274,12 @@ export const SETTINGS_CATALOG = [
     "type": "boolean",
     "default": false,
     "description": "Advanced: show every saved account’s rotation score, candidate order, eligibility and the reason the current account is kept in the status bar tooltip. Computed by the service when enabled, or by the same shared engine inside VS Code otherwise."
+  },
+  {
+    "key": "claude.backgroundNetwork",
+    "type": "boolean",
+    "default": true,
+    "description": "Allow scheduled Claude network requests, keep-alives, earned resets and automatic rotation. Turn off to keep local/cached usage while pausing background traffic. Explicit manual actions still work and respect provider retry deadlines."
   },
   {
     "key": "claudeConfig.env.maxConcurrentSubagents",
@@ -386,8 +392,8 @@ export const SETTINGS_CATALOG = [
     "type": "number",
     "min": 0.25,
     "max": 168,
-    "default": 6,
-    "description": "**Codex keep-alive period in hours.** Each saved Codex account is checked once per period. The schedule persists across window restarts."
+    "default": 1,
+    "description": "**Codex keep-alive period in hours.** Each saved Codex account other than the active one is checked once per period (hourly by default): the vendor CLI sends one short prompt with `#aiUsage.codex.keepAlive.model#` from the account's own home (`#aiUsage.codex.keepAlive.home#`) and records the usage it reports. The schedule persists across window restarts."
   },
   {
     "key": "codex.keepAlive.model",
@@ -484,6 +490,12 @@ export const SETTINGS_CATALOG = [
     "type": "boolean",
     "default": false,
     "description": "Advanced: show every saved account’s rotation score, candidate order, eligibility and the reason the current account is kept in the status bar tooltip. Computed by the service when enabled, or by the same shared engine inside VS Code otherwise."
+  },
+  {
+    "key": "codex.backgroundNetwork",
+    "type": "boolean",
+    "default": true,
+    "description": "Allow scheduled Codex network requests, keep-alives, earned resets and automatic rotation. Turn off to keep local/cached usage while pausing background traffic. Explicit manual actions still work and respect provider retry deadlines."
   },
   {
     "key": "codexConfig.agents.maxConcurrentThreadsPerSession",

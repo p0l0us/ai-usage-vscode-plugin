@@ -17,7 +17,8 @@ test('defaults match the extension settings: Claude rotates at 95/99.5, Codex at
   assert.equal(config.codex.autoReset.enabled, true);
   assert.equal(config.claude.autoRotate.updateUsageBeforeRotation, false);
   assert.equal(config.codex.autoRotate.updateUsageBeforeRotation, false);
-  assert.equal(config.codex.keepAlive.periodHours, 6);
+  assert.equal(config.codex.keepAlive.periodHours, 1);
+  assert.equal(config.claude.keepAlive.periodHours, 1);
   assert.equal(config.codex.keepAlive.model, 'gpt-6-luna');
   assert.equal(config.claude.keepAlive.enabled, true);
   assert.equal(config.codex.keepAlive.enabled, true);
@@ -110,7 +111,7 @@ test('automation settings bound intervals and honor Codex strategy, trigger and 
   assert.equal(claude.checkInactiveAccounts, false);
   assert.equal(automationSettings(setConfigValue(config, 'codex.checkInactiveAccounts', true), 'codex').checkInactiveAccounts, true);
   assert.equal(codex.autoReset, true);
-  assert.equal(codex.intervalMs, 6 * 3_600_000);
+  assert.equal(codex.intervalMs, 3_600_000);
   assert.equal(strategySummary(config, 'claude'), 'leastWaste, proactive, 5h ≥ 95%, 7d ≥ 99.5%');
   assert.equal(strategySummary(config, 'codex'), 'leastWaste, proactive, 5h ≥ 100%, 7d ≥ 99%, reset-aware');
   const tuned = setConfigValue(setConfigValue(config, 'codex.autoRotate.strategy', 'evenPace'), 'codex.autoRotate.trigger', 'limit');
@@ -223,4 +224,16 @@ test('the former default Codex keep-alive model moves to the current one, unless
   assert.equal(new ConfigAuthority(file).config.codex.keepAlive.model, 'gpt-6-sol');
   assert.equal(normalizeConfig({ codex: { keepAlive: { model: 'gpt-5.6-luna' } } }).codex.keepAlive.model, 'gpt-5.6-luna',
     'the plain merge keeps the value; only the authority, which knows the revisions, moves it');
+});
+test('the former default keep-alive periods move to an hour, a deliberately chosen one stays', t => {
+  const { ConfigAuthority } = require('../out/configStore');
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-usage-period-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const file = path.join(directory, 'config.json');
+  fs.writeFileSync(file, JSON.stringify({ version: 1, claude: { keepAlive: { periodHours: 2 } }, codex: { keepAlive: { periodHours: 6 } }, revision: 3, revisions: {} }));
+  let config = new ConfigAuthority(file).config;
+  assert.deepEqual([config.claude.keepAlive.periodHours, config.codex.keepAlive.periodHours], [1, 1]);
+  fs.writeFileSync(file, JSON.stringify({ version: 1, claude: { keepAlive: { periodHours: 2 } }, codex: { keepAlive: { periodHours: 6 } }, revision: 3, revisions: { 'claude.keepAlive.periodHours': 2, 'codex.keepAlive.periodHours': 3 } }));
+  config = new ConfigAuthority(file).config;
+  assert.deepEqual([config.claude.keepAlive.periodHours, config.codex.keepAlive.periodHours], [2, 6]);
 });

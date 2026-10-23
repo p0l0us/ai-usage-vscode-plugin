@@ -21,6 +21,7 @@ export type ModelLimits = 'auto' | 'always' | 'never';
 
 export type ProviderConfig = {
   enabled: boolean;
+  backgroundNetwork: boolean;
   source: UsageSource;
   accountFile: { checkIntervalSeconds: number };
   proxy: { enabled: boolean; port: number };
@@ -147,12 +148,12 @@ for (const entry of SETTINGS_CATALOG) {
 export function defaultProviderConfig(provider: AuthProvider): ProviderConfig {
   const claude = provider === 'claude';
   return {
-    enabled: true, source: 'auto', accountFile: { checkIntervalSeconds: 15 }, proxy: { enabled: false, port: 43117 },
+    enabled: true, backgroundNetwork: true, source: 'auto', accountFile: { checkIntervalSeconds: 15 }, proxy: { enabled: false, port: 43117 },
     cliPath: provider,
     checkIntervalMinutes: 30,
     checkInactiveAccounts: false,
     api: { minIntervalSeconds: 30 },
-    keepAlive: { enabled: true, periodHours: claude ? 2 : 6, model: claude ? 'haiku' : 'gpt-6-luna', home: `~/.${provider}-profile-{number}` },
+    keepAlive: { enabled: true, periodHours: 1, model: claude ? 'haiku' : 'gpt-6-luna', home: `~/.${provider}-profile-{number}` },
     autoReset: { enabled: !claude, confirmationRequired: false },
     terminateStaleDaemons: !claude,
     autoRotate: {
@@ -338,6 +339,8 @@ export function automationSettings(config: ServiceConfig, provider: AuthProvider
   const claude = provider === 'claude';
   const clampPercent = (value: number, fallback: number) => Number.isFinite(value) ? Math.min(100, Math.max(1, value)) : fallback;
   return {
+    backgroundNetwork: own.enabled && own.backgroundNetwork,
+    keepAliveStaggerMs: 5 * 60_000,
     enabled: own.keepAlive.enabled,
     autoRotate: own.autoRotate.enabled,
     autoReset: provider === 'codex' && own.autoReset.enabled,
@@ -427,6 +430,10 @@ function readDocument(file: string): { document?: ConfigDocument; missing: boole
   const config = normalizeConfig(parsed);
   // The former default keep-alive model moves to the current one, unless it was chosen deliberately (the key then carries a revision).
   if (config.codex.keepAlive.model === 'gpt-5.6-luna' && revisions['codex.keepAlive.model'] === undefined) { config.codex.keepAlive.model = 'gpt-6-luna'; }
+  // So does the former default keep-alive period (Claude 2 hours, Codex 6) to the hourly one.
+  for (const [provider, former] of [['claude', 2], ['codex', 6]] as const) {
+    if (config[provider].keepAlive.periodHours === former && revisions[`${provider}.keepAlive.periodHours`] === undefined) { config[provider].keepAlive.periodHours = 1; }
+  }
   return { document: { config, revision, revisions }, missing: false, invalid: false, raw: parsed };
 }
 

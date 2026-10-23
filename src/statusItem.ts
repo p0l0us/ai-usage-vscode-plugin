@@ -259,6 +259,7 @@ export function buildTooltip(md: vscode.MarkdownString, usage: LiveUsage, now: D
   }
   const heading = usage.subtitle ? `${usage.title} · ${usage.subtitle}` : usage.title;
   md.appendMarkdown(`**${heading}**${usage.plan ? ` · ${usage.plan}` : ''}\n\n`);
+  md.appendMarkdown(`Observed ${Math.max(0, Math.floor((now.getTime() - usage.fetchedAt.getTime()) / 60_000))} min ago${usage.source ? ` · Source: ${usage.source}` : ''}.\n\n`);
   // The details panel shows one compact row per service, so the full window names and exact reset
   // times live here.
   for (const window of usage.windows) {

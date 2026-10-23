@@ -6,6 +6,7 @@ import {
   StoredCredential,
   extractCredential,
   isSameCredentialOwner,
+  codexUsersConflict,
   nativeCredentialLocation,
   readNativeCredential,
   writeJsonAtomically,
@@ -561,7 +562,8 @@ export class ProfileStore {
     }
     if (!owners.length) {
       const accountId = nativeAccountId(provider, native);
-      if (accountId) { owners.push(...providerState.profiles.filter((profile) => profile.accountId === accountId)); }
+      if (accountId) { owners.push(...providerState.profiles.filter((profile) => profile.accountId === accountId &&
+        (provider !== 'codex' || !codexUsersConflict(this.readSecret(provider, profile.id, state) ?? {}, native)))); }
     }
     const owner = owners.length === 1 ? owners[0] : owners.find((profile) => profile.id === providerState.activeProfileId);
     let changed = false;

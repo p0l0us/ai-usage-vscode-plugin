@@ -7,7 +7,7 @@ import { createHash, randomUUID } from 'crypto';
 import { AuthProvider, StoredCredential, writeJsonAtomically } from './authFiles';
 import { CacheEntry, deserializeUsage } from './cache';
 import { formatResetRemaining, LiveResult, LiveUsage, usageHasExpiredReset, UsageWindow } from './live';
-import { AccountLock, ProbeSettings, ProbeResult, acquireAccountLock, explainAccountProblem, isLoginProblem, isTransientProblem, needsSignIn, probeAccount, resetCodexAccount } from './accountProbe';
+import { AccountLock, ProbeSettings, ProbeResult, acquireAccountLock, explainAccountProblem, isLoginProblem, needsSignIn, probeAccount, resetCodexAccount } from './accountProbe';
 import { sleep } from './apiBudget';
 import type { ActivationChange } from './profileStore';
 import { HistoryAccount, HistoryCandidate, ReadingSource, RotationSnapshot, UsageHistory, usageSnapshot } from './usageHistory';
@@ -31,6 +31,8 @@ export type RotationLimits = {
 };
 
 export type AutomationSettings = ProbeSettings & RotationLimits & {
+  backgroundNetwork?: boolean;
+  keepAliveStaggerMs?: number;
   enabled: boolean;
   autoRotate: boolean;
   autoReset?: boolean;
@@ -74,13 +76,17 @@ export interface AutomationProfiles {
    * exercised from its profile home: the same login from a second installation is what the vendor may treat as a
    * compromised session. Undefined: the active account is read like any other.
    */
-  readActiveUsage?(provider: AuthProvider): Promise<LiveResult>;
+  readActiveUsage?(provider: AuthProvider, manual?: boolean): Promise<LiveResult>;
 }
 
 /** One past reading of an account: when it was taken and what each window showed, kept to measure usage rates. */
 export type UsageSample = { at: number; windows: Array<{ label: string; usedPercent: number; resetsAt?: number }> };
 
 export type AccountState = CacheEntry & {
+  serverBlockedUntil?: number;
+  nextKeepAliveAt?: number;
+  modelFailures?: number;
+  authBlockedFor?: string;
   lastKeepAliveAt?: number;
   checkedAt?: number;
   keepAliveError?: string;
@@ -381,6 +387,7 @@ export class AccountAutomation {
 
   /** A reading that belongs to no known profile (Codex session logs) showed the limit; the next sweep reads the active account. */
   private readonly limitHint = new Set<AuthProvider>();
+  private readonly lastLimitHint = new Map<AuthProvider, string>();
   /** The account lock this process holds per service; every check made under it renews it. */
   private readonly locks = new Map<AuthProvider, AccountLock>();
   /** Per service whose lock `withAccountLock` holds: the checks queued under it, which run one at a time. */
@@ -460,14 +467,11 @@ export class AccountAutomation {
   }
 
   /**
-   * When the account's next periodic keep-alive is due. One that failed for a passing reason (the model at capacity,
-   * a rate limit, the network) is repeated after the check interval rather than a whole period later, so its warning
-   * does not stand for hours over an account that is fine.
+   * A failing model never retries more often than the configured successful cadence.
    */
   private keepAliveDueAt(state: AccountState, settings: AutomationSettings): number {
     if (state.lastKeepAliveAt === undefined) { return 0; }
-    const wait = isTransientProblem(state.keepAliveError) ? Math.min(settings.intervalMs, settings.checkIntervalMs) : settings.intervalMs;
-    return state.lastKeepAliveAt + wait;
+    return Math.max(state.nextKeepAliveAt ?? 0, state.lastKeepAliveAt + settings.intervalMs);
   }
 
   /** How fast each window of `usage` is being used, from the account's earlier readings. */
@@ -610,7 +614,8 @@ export class AccountAutomation {
     if (previous && previous.fetchedAt > usage.fetchedAt) { return; }
     const counted = this.countResetCredits(provider, state, usage);
     this.write(provider, id, { ...state, usage: this.serialize(counted.usage), resetCreditTotal: counted.total,
-      checkedAt: usage.fetchedAt.getTime(), lastError: undefined, samples: addSample(state.samples, counted.usage) });
+      checkedAt: usage.source === 'sessionLog' ? state.checkedAt : usage.fetchedAt.getTime(),
+      lastError: usage.source === 'sessionLog' ? state.lastError : undefined, samples: addSample(state.samples, counted.usage) });
     this.history?.reading(provider, this.account(provider, id), usage, 'status', true);
     // A reading that reaches a threshold, or will before the account can be read again, starts rotation now, not on
     // the next minute's tick.
@@ -625,6 +630,10 @@ export class AccountAutomation {
    */
   hintLimit(provider: AuthProvider, usage: LiveUsage): void {
     const settings = this.settings(provider);
+    if (settings.backgroundNetwork === false) return;
+    const signature = JSON.stringify([this.profiles.activeProfileId(provider), usage.fetchedAt, usage.windows]);
+    if (this.lastLimitHint.get(provider) === signature) return;
+    this.lastLimitHint.set(provider, signature);
     if ((!settings.autoRotate && !settings.autoReset) || !atLimit(usage, settings)) { this.limitHint.delete(provider); return; }
     if (!this.limitHint.has(provider)) { this.log(`${provider}: the status bar reading is at a rotation threshold; checking the active account`); }
     this.limitHint.add(provider);
@@ -658,7 +667,7 @@ export class AccountAutomation {
 
   /** Refresh saved accounts without model prompts, respecting holds, account locks and provider backoff. */
   async refreshUsage(provider: AuthProvider, force = false): Promise<void> {
-    if (this.disposed || this.paused || this.holds.has(provider)) return;
+    if (this.disposed || this.paused || this.holds.has(provider) || this.settings(provider).backgroundNetwork === false) return;
     // This instance's own sweep reads what falls due between its keep-alives; another instance's is waited for briefly.
     if (this.locks.has(provider)) return;
     await this.withAccountLock(provider, () => this.refreshDue(provider, force), { waitMs: REFRESH_LOCK_WAIT_MS });
@@ -672,6 +681,7 @@ export class AccountAutomation {
       const profiles = [...this.profiles.profiles(provider)].sort((a, b) => Number(b.id === active) - Number(a.id === active));
       for (const profile of profiles) {
         if (this.disposed || this.paused || this.holds.has(provider)) break;
+        if (this.settings(provider).backgroundNetwork === false) break;
         // A disabled profile is left alone unless it is the active one, whose reading rotation still needs.
         if (profile.disabled && profile.id !== active) continue;
         const settings = this.settings(provider);
@@ -704,7 +714,8 @@ export class AccountAutomation {
   /** After a new sign-in replaced a profile's login: forget the dead one's errors and read its usage right away. */
   credentialReplaced(provider: AuthProvider, id: string): Promise<KeepAliveNowResult> {
     return this.checkNow(provider, id, false, (state) =>
-      ({ ...state, lastError: undefined, keepAliveError: undefined, nextAllowedAt: undefined, problemNotified: undefined }));
+      ({ ...state, lastError: undefined, keepAliveError: undefined, nextAllowedAt: state.serverBlockedUntil,
+        authBlockedFor: undefined, problemNotified: undefined }));
   }
 
   private async checkNow(provider: AuthProvider, id: string, keepAlive: boolean,
@@ -791,6 +802,7 @@ export class AccountAutomation {
 
   private async checkProvider(provider: AuthProvider): Promise<void> {
     const settings = this.settings(provider);
+    if (settings.backgroundNetwork === false && !this.forced.has(provider)) return;
     if (!settings.enabled && !settings.autoRotate && !settings.autoReset) { return; }
     if (this.holds.has(provider)) { return; }
     // A keep-alive sent by hand holds the lock for its whole sweep.
@@ -803,11 +815,17 @@ export class AccountAutomation {
       if (settings.autoRotate || settings.autoReset) { await this.rotate(provider, settings); }
       if (settings.enabled) {
         for (const profile of this.profiles.profiles(provider)) {
-          if (this.disposed || this.paused || this.holds.has(provider) || !this.settings(provider).enabled) { break; }
+          if (this.disposed || this.paused || this.holds.has(provider) || !this.settings(provider).enabled || this.settings(provider).backgroundNetwork === false) { break; }
           if (profile.disabled) { continue; }
           // The active login is kept fresh by the user's own use; a keep-alive would exercise it from a second installation.
           if (await this.inUseNatively(provider, profile.id)) { continue; }
-          const state = this.read(provider, profile.id);
+          let state = this.read(provider, profile.id);
+          if (state.lastKeepAliveAt === undefined && state.nextKeepAliveAt === undefined && settings.keepAliveStaggerMs) {
+            const offset = createHash('sha256').update(`${provider}:${profile.id}`).digest().readUInt32BE(0) % settings.keepAliveStaggerMs;
+            state = { ...state, nextKeepAliveAt: this.now() + offset };
+            this.write(provider, profile.id, state);
+          }
+          if (state.nextKeepAliveAt && this.now() < state.nextKeepAliveAt) continue;
           if (this.now() < this.keepAliveDueAt(state, settings)) { continue; }
           // Persist before starting so a failed call or window restart cannot create a retry storm.
           this.write(provider, profile.id, { ...state, lastKeepAliveAt: this.now() });
@@ -832,8 +850,17 @@ export class AccountAutomation {
     { ignoreBackoff?: boolean; verifying?: boolean; announce?: boolean; source?: ReadingSource } = {}
   ): Promise<KeepAliveNowResult> {
     const previous = this.read(provider, id);
+    if (previous.serverBlockedUntil && previous.serverBlockedUntil > this.now()) {
+      return { usageError: `Provider requests paused until ${new Date(previous.serverBlockedUntil).toISOString()}.` };
+    }
     if (!ignoreBackoff && previous.nextAllowedAt && previous.nextAllowedAt > this.now()) {
       return { usageError: 'Account usage check is temporarily paused after a provider error.' };
+    }
+    if (!ignoreBackoff && previous.authBlockedFor) {
+      const current = await this.profiles.credential(provider, id);
+      if (!current || fingerprint(current) === previous.authBlockedFor) {
+        return { usageError: 'Sign in again to resume automatic account checks.' };
+      }
     }
     this.locks.get(provider)?.touch();
     let outcome: ProbeResult;
@@ -845,14 +872,14 @@ export class AccountAutomation {
       // The active login is in use by the user's own CLI: its usage is read there, never from its profile home.
       native = active && !keepAlive && await this.inUseNatively(provider, id);
       if (native) {
-        outcome = { credential: {}, result: await this.profiles.readActiveUsage!(provider) };
+        outcome = { credential: {}, result: await this.profiles.readActiveUsage!(provider, ignoreBackoff || source === 'rotation') };
       } else {
         credential = await this.profiles.credential(provider, id);
         if (!credential) { throw new Error('Saved credential is missing.'); }
         // Codex usage is read over HTTPS; the earned-reset count, which only the CLI reports, once an hour.
         const creditsRead = provider === 'codex' && !keepAlive &&
           (previous.creditsCheckedAt === undefined || this.now() - previous.creditsCheckedAt >= CREDITS_MAX_AGE_MS);
-        const accountSettings = { ...(this.profiles.probeSettings?.(provider, id, settings) ?? settings), ...(creditsRead ? { creditsRead } : {}) };
+        const accountSettings = { ...(this.profiles.probeSettings?.(provider, id, settings) ?? settings), manual: ignoreBackoff || source === 'rotation', ...(creditsRead ? { creditsRead } : {}) };
         outcome = await this.probe(provider, credential, accountSettings, keepAlive, this.abort.signal);
         await this.profiles.refreshedCredential(provider, id, credential, outcome.credential);
       }
@@ -866,7 +893,8 @@ export class AccountAutomation {
     // A read over HTTPS carries no earned-reset count (only the CLI reports it); the last known count stays.
     const previousCredits = provider === 'codex' ? deserializeUsage(state)?.resetCredits : undefined;
     const result: LiveResult = outcome.result.kind === 'ok' && previousCredits && !outcome.result.usage.resetCredits
-      ? { kind: 'ok', usage: { ...outcome.result.usage, resetCredits: previousCredits } } : outcome.result;
+      ? { kind: 'ok', usage: { ...outcome.result.usage, resetCredits: previousCredits,
+        creditsObservedAt: deserializeUsage(state)?.creditsObservedAt ?? state.creditsCheckedAt ?? deserializeUsage(state)?.fetchedAt.getTime() } } : outcome.result;
     const usageError = result.kind === 'ok' ? undefined
       : result.kind === 'error' ? result.message : result.reason ?? 'Usage unavailable.';
     const credited = result.kind === 'ok' ? this.countResetCredits(provider, state, result.usage) : undefined;
@@ -874,9 +902,15 @@ export class AccountAutomation {
     const resetConfirmed = credited && (!atLimit(credited.usage, settings) ||
       (beforeCredits !== undefined && (credited.usage.resetCredits?.availableCount ?? beforeCredits) < beforeCredits));
     this.write(provider, id, { ...state, checkedAt: this.now(),
+      serverBlockedUntil: result.kind === 'error' && (result.retryAfterMs !== undefined || result.status === 429)
+        ? Math.max(state.serverBlockedUntil ?? 0, this.now() + Math.max(60_000, result.retryAfterMs ?? settings.checkIntervalMs)) : state.serverBlockedUntil,
+      modelFailures: keepAlive ? (outcome.keepAliveError ? (state.modelFailures ?? 0) + 1 : 0) : state.modelFailures,
+      nextKeepAliveAt: keepAlive ? this.now() + Math.max(settings.intervalMs,
+        Math.min(24 * 3_600_000, settings.intervalMs * 2 ** Math.min(5, outcome.keepAliveError ? state.modelFailures ?? 0 : 0))) : state.nextKeepAliveAt,
       usage: credited ? this.serialize(credited.usage) : state.usage,
       samples: credited ? addSample(state.samples, credited.usage) : state.samples,
-      creditsCheckedAt: outcome.result.kind === 'ok' && outcome.result.usage.resetCredits ? this.now() : state.creditsCheckedAt,
+      creditsCheckedAt: outcome.result.kind === 'ok' && outcome.result.usage.resetCredits
+        ? outcome.result.usage.creditsObservedAt ?? outcome.result.usage.fetchedAt.getTime() : state.creditsCheckedAt,
       resetCreditTotal: credited ? credited.total : state.resetCreditTotal,
       resetAttemptKey: resetConfirmed ? undefined : state.resetAttemptKey,
       nextAllowedAt: result.kind === 'error' && result.transient
@@ -897,6 +931,7 @@ export class AccountAutomation {
     const revoked = [outcome.keepAliveError, usageError].find(needsSignIn);
     const problem = revoked ?? (verifying ? outcome.keepAliveError : undefined);
     if (problem && credential) {
+      if (revoked) this.write(provider, id, { ...this.read(provider, id), authBlockedFor: fingerprint(outcome.credential) });
       // Fingerprint the login as it was sent: a refresh written back afterwards must not re-announce it.
       const key = `${fingerprint(credential)}:${revoked ? 'revoked' : problem}`;
       if (state.problemNotified !== key) {
@@ -1138,6 +1173,7 @@ export class AccountAutomation {
     if (held) { return held; }
     if (!this.rotationAllowed(provider) && !settings.autoReset) { return 'automatic rotation and earned resets are off'; }
     const forced = this.forced.has(provider);
+    if (!forced && this.settings(provider).backgroundNetwork === false) return 'background network requests are paused';
     const active = this.profiles.activeProfileId(provider);
     if (!active) { return 'no saved profile is active'; }
     if (this.profiles.profiles(provider).length < 2 && !settings.autoReset) { return 'fewer than two profiles are saved'; }
@@ -1273,7 +1309,7 @@ export class AccountAutomation {
       const requiredWindows = counted(current, selectionSettings).map(window => window.label);
       for (const candidate of candidates) {
         const entry = evaluated.find(entry => entry.account.id === candidate.id)!;
-        if (this.disposed || this.paused || this.holds.has(provider) || !this.rotationAllowed(provider)) { return 'the sweep was interrupted'; }
+        if (this.disposed || this.paused || this.holds.has(provider) || !this.rotationAllowed(provider) || (!forced && this.settings(provider).backgroundNetwork === false)) { return 'the sweep was interrupted'; }
         // Never switch to an account whose last check failed, and spend nothing on it: its next successful keep-alive,
         // periodic or by hand, makes it a candidate again.
         const problem = this.checkProblem(provider, candidate.id);

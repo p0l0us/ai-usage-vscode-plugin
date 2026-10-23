@@ -2,7 +2,7 @@
   "name": "ai-usage-vscode-plugin",
   "displayName": "AI subscription management and usage",
   "description": "Manage your Claude Code, Codex and GitHub Copilot subscriptions and see what is left of them: switch between saved accounts without signing in again, keep them warm, rotate on exhaustion, and read live 5h/7d windows, premium requests and org billing in the status bar and chat input. Open source, contributions welcome.",
-  "version": "1.8.0",
+  "version": "1.9.0",
   "publisher": "p0l0us",
   "license": "GPL-3.0-only",
   "repository": {
@@ -7149,9 +7149,9 @@
             "type": "number",
             "minimum": 0.25,
             "maximum": 168,
-            "default": 2,
+            "default": 1,
             "scope": "machine",
-            "markdownDescription": "**Claude keep-alive period in hours.** Each saved Claude account is checked once per period. The schedule persists across window restarts.",
+            "markdownDescription": "**Claude keep-alive period in hours.** Each saved Claude account other than the active one is checked once per period (hourly by default): the vendor CLI sends one short prompt with `#aiUsage.claude.keepAlive.model#` from the account's own home (`#aiUsage.claude.keepAlive.home#`) and records the usage it reports. The schedule persists across window restarts.",
             "order": 7
           },
           "aiUsage.claude.keepAlive.model": {
@@ -7267,6 +7267,12 @@
             "tags": [
               "advanced"
             ]
+          },
+          "aiUsage.claude.backgroundNetwork": {
+            "type": "boolean",
+            "default": true,
+            "markdownDescription": "Allow scheduled Claude network requests, keep-alives, earned resets and automatic rotation. Turn off to keep local/cached usage while pausing background traffic. Explicit manual actions still work and respect provider retry deadlines.",
+            "scope": "machine"
           }
         }
       },
@@ -7346,7 +7352,7 @@
             ],
             "order": 2,
             "markdownEnumDescriptions": [
-              "Automatically use the cheapest fresh usable reading: shared account cache, local session log, direct usage API, then the CLI. Stops at the first success; endpoint budgets and backoff still apply. Freshness uses `#aiUsage.codex.checkIntervalMinutes#` (minutes).",
+              "Use shared account readings and inspect session logs every five seconds. Reconcile account-specific quota at `#aiUsage.codex.checkIntervalMinutes#`; ambiguous session logs cannot postpone that deadline. Reuse credit-only CLI lookups for an hour while keeping their observation time separate. Provider retry deadlines apply to all network paths.",
               "Session logs, with the usage endpoint filling the gap: the newest log record is used while it is no older than `#aiUsage.codex.checkIntervalMinutes#`, and once it falls behind — Codex has been idle, or has written no record yet — the endpoint is called instead. An app-server check also reads earned-reset availability; select `sessionLog` for an offline status-bar source.",
               "Local Codex CLI: runs `codex app-server` and calls `account/rateLimits/read`. Uses the CLI's own login and token refresh; documented integration surface.",
               "ChatGPT usage endpoint using the token in `~/.codex/auth.json`. Undocumented; may change without notice.",
@@ -7416,9 +7422,9 @@
             "type": "number",
             "minimum": 0.25,
             "maximum": 168,
-            "default": 6,
+            "default": 1,
             "scope": "machine",
-            "markdownDescription": "**Codex keep-alive period in hours.** Each saved Codex account is checked once per period. The schedule persists across window restarts.",
+            "markdownDescription": "**Codex keep-alive period in hours.** Each saved Codex account other than the active one is checked once per period (hourly by default): the vendor CLI sends one short prompt with `#aiUsage.codex.keepAlive.model#` from the account's own home (`#aiUsage.codex.keepAlive.home#`) and records the usage it reports. The schedule persists across window restarts.",
             "order": 7
           },
           "aiUsage.codex.keepAlive.model": {
@@ -7546,6 +7552,12 @@
             "tags": [
               "advanced"
             ]
+          },
+          "aiUsage.codex.backgroundNetwork": {
+            "type": "boolean",
+            "default": true,
+            "markdownDescription": "Allow scheduled Codex network requests, keep-alives, earned resets and automatic rotation. Turn off to keep local/cached usage while pausing background traffic. Explicit manual actions still work and respect provider retry deadlines.",
+            "scope": "machine"
           }
         }
       },

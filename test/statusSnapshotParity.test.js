@@ -38,6 +38,9 @@ for (const mode of ['background', 'embedded']) {
     const f = await fixture(t, mode);
     const saved = await f.a.saveNative('codex', { name: 'Known zero' });
     await f.a.importCredential('codex', 'Unknown credits', { tokens: { access_token: 'second', account_id: 'second' } });
+    // Populate admission for the saved identity too. The startup refresh may have begun before saveNative,
+    // when this login was still unsaved; its later first saved-account read is not a subscriber request.
+    await f.a.call('usage.read', { provider: 'codex', id: saved.profile.id });
     for (const id of ['claude', 'codex', 'copilot']) await f.a.liveUsage(id);
     const reads = f.readCount(); const first = await f.a.statusSnapshot();
     assert.equal(f.a.supports('status-snapshot'), true);

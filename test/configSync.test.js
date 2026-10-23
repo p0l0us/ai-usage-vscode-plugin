@@ -73,7 +73,7 @@ test('user settings are read for seeding, differences are found, and pulls write
   const sync = new ConfigSync(() => undefined);
   const serviceConfig = setConfigValue(config, 'claude.autoRotate.strategy', 'leastWaste');
   assert.equal(await sync.pull(serviceConfig), 3);
-  assert.deepEqual(updates.sort(), [['aiUsage.claude.autoRotate.enabled', true], ['aiUsage.claude.autoRotate.strategy', 'leastWaste'], ['aiUsage.codex.keepAlive.periodHours', 6]]);
+  assert.deepEqual(updates.sort(), [['aiUsage.claude.autoRotate.enabled', true], ['aiUsage.claude.autoRotate.strategy', 'leastWaste'], ['aiUsage.codex.keepAlive.periodHours', 1]]);
   assert.equal(sync.isWriting, false, 'hydration has finished; expected values suppress only matching events');
   assert.deepEqual(sync.changedKeys({ affectsConfiguration: () => true }, serviceConfig), {}, 'nothing is pushed back during a pull');
   assert.equal(sync.isWriting, false);

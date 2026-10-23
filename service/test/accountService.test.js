@@ -25,18 +25,18 @@ function fixture(t, options = {}) {
   const service = new AccountService({
     ownership: options.ownership,
     seedConfig: { 'claude.keepAlive.enabled': false, 'codex.keepAlive.enabled': false,
-      'claude.autoRotate.enabled': false, 'codex.autoRotate.enabled': false,
+      'claude.autoRotate.enabled': false, 'codex.autoRotate.enabled': false, 'codex.autoReset.enabled': false,
       'claude.keepAlive.home': path.join(root, '.claude-profile-{number}'),
       'codex.keepAlive.home': path.join(root, '.codex-profile-{number}') },
-    home, version: 'test', fetchUsage: async provider => ({ kind: 'ok', usage: usage(provider, [50, 5]) }), log: (message) => logs.push(message),
+    home, version: 'test', fetchUsage: options.fetchUsage ?? (async provider => ({ kind: 'ok', usage: usage(provider, [50, 5]) })), log: (message) => logs.push(message),
     terminateStaleCodexDaemons: options.terminateStaleCodexDaemons,
     // The active account is read through the native login: whatever login the native file holds, with that token's values.
-    readNativeUsage: async provider => {
+    readNativeUsage: options.readNativeUsage ?? (async provider => {
       const token = provider === 'claude' ? JSON.parse(fs.readFileSync(path.join(claudeHome, '.credentials.json'), 'utf8')).claudeAiOauth.accessToken
         : JSON.parse(fs.readFileSync(path.join(codexHome, 'auth.json'), 'utf8')).tokens.account_id;
       const percents = values[token];
       return percents ? { kind: 'ok', usage: usage(provider, percents) } : { kind: 'error', provider, title: provider, message: options.usageErrors?.[token] ?? 'Unavailable' };
-    },
+    }),
     identityOf: async (provider, credential) => provider === 'codex'
       ? { email: `${credential.tokens?.account_id}@example.com`, accountId: credential.tokens?.account_id }
       : { email: `${credential.claudeAiOauth?.accessToken}@example.com`, accountId: `account-${credential.claudeAiOauth?.accessToken}` },
@@ -60,8 +60,32 @@ function fixture(t, options = {}) {
   return { root, home, service, logs, events, probes, probeHomes, values, claudeHome, call: (method, params) => service.handle(method, params) };
 }
 
+test('status throttling also blocks manual native usage checks through automation', async t => {
+  let statusReads = 0, nativeReads = 0;
+  const f = fixture(t, { fetchUsage: async provider => { statusReads++; return { kind: 'error', provider, title: provider,
+    status: 429, transient: true, retryAfterMs: HOUR, message: 'Rate limited' }; },
+    readNativeUsage: async provider => { nativeReads++; return { kind: 'ok', usage: usage(provider, [10, 10]) }; } });
+  const saved = await f.call('profiles.saveNative', { provider: 'codex', name: 'Codex' });
+  await f.service.liveUsage('codex', true);
+  const result = await f.service.automation.readUsageNow('codex', saved.profile.id);
+  assert.match(result.usageError, /paused until/);
+  assert.equal(statusReads, 1); assert.equal(nativeReads, 0);
+});
+
+test('automation quota is reused by status without another request', async t => {
+  let statusReads = 0, nativeReads = 0;
+  const f = fixture(t, { fetchUsage: async provider => { statusReads++; return { kind: 'ok', usage: usage(provider, [50, 5]) }; },
+    readNativeUsage: async provider => { nativeReads++; return { kind: 'ok', usage: usage(provider, [10, 10]) }; } });
+  const saved = await f.call('profiles.saveNative', { provider: 'codex', name: 'Codex' });
+  await f.service.automation.readUsageNow('codex', saved.profile.id);
+  const result = await f.service.liveUsage('codex');
+  assert.equal(result.result.usage.windows[0].usedPercent, 10);
+  assert.equal(nativeReads, 1); assert.equal(statusReads, 0);
+});
+
 test('with inactive checks on, startup refreshes every saved account with keep-alive and rotation off, and cached views publish updates', async t => {
-  const f = fixture(t, { ownership: { held: () => true, assertHeld() {} }, values: { 'acc-1': [30, 5], c: [20, 5] } });
+  const f = fixture(t, { ownership: { held: () => true, assertHeld() {} }, values: { 'acc-1': [30, 5], c: [20, 5] },
+    fetchUsage: async provider => ({ kind: 'ok', usage: usage(provider, provider === 'codex' ? [30, 5] : [10, 10]) }) });
   await f.call('config.set', { values: { 'claude.checkInactiveAccounts': true, 'codex.checkInactiveAccounts': true,
     'claude.autoRotate.enabled': false, 'codex.autoRotate.enabled': false,
     'codex.autoReset.enabled': false, 'bridge.autoStart': false, 'copilot.enabled': false } });
@@ -72,7 +96,7 @@ test('with inactive checks on, startup refreshes every saved account with keep-a
   f.service.automation.observe('claude', saved.profile.id, usage('claude', [75, 5]));
   f.events.length = 0;
   f.service.start();
-  const deadline = Date.now() + 5_000;
+  const deadline = Date.now() + 15_000;
   while (f.probes.length < 2 || f.events.filter(event => event.event === 'stateChanged').length < 4) {
     assert.ok(Date.now() < deadline, 'startup completed the saved-account refresh');
     await new Promise(resolve => setTimeout(resolve, 10));

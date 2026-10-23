@@ -193,11 +193,49 @@ test('Codex session log: only the six most recently modified files are inspected
   assert.equal(ok(await live.fetchCodexUsageFromSessionLog()).windows[0].usedPercent, 6);
 });
 
-test('Codex session log: a record without a timestamp is dated by the file mtime', async (t) => {
+test('Codex session log: file mtime cannot supply a missing event timestamp', async (t) => {
   const sessions = sessionRoot(t);
   const mtime = Date.parse('2026-10-10T10:00:00Z');
   writeLog(sessions, 'a.jsonl', JSON.stringify({ payload: { rate_limits: { primary: { used_percent: 7, window_minutes: 300 } } } }) + '\n', mtime);
-  assert.equal(ok(await live.fetchCodexUsageFromSessionLog()).fetchedAt.getTime(), mtime);
+  assert.equal((await live.fetchCodexUsageFromSessionLog()).kind, 'error');
+});
+
+test('Codex session tails handle unchanged files, split appends, truncation and replacement', async t => {
+  const sessions = sessionRoot(t), file = path.join(sessions, 'a.jsonl');
+  const first = record('2026-10-10T10:00:00Z', { used_percent: 10, window_minutes: 300 }) + '\n';
+  const next = record('2026-10-10T11:00:00Z', { used_percent: 20, window_minutes: 300 }) + '\n';
+  writeLog(sessions, 'a.jsonl', first);
+  assert.equal(ok(await live.fetchCodexUsageFromSessionLog()).windows[0].usedPercent, 10);
+  assert.equal(ok(await live.fetchCodexUsageFromSessionLog()).windows[0].usedPercent, 10);
+  fs.appendFileSync(file, next.slice(0, -8));
+  assert.equal(ok(await live.fetchCodexUsageFromSessionLog()).windows[0].usedPercent, 10);
+  fs.appendFileSync(file, next.slice(-8));
+  assert.equal(ok(await live.fetchCodexUsageFromSessionLog()).windows[0].usedPercent, 20);
+  fs.writeFileSync(file, first);
+  assert.equal(ok(await live.fetchCodexUsageFromSessionLog()).windows[0].usedPercent, 10);
+  fs.renameSync(file, path.join(sessions, 'old.txt')); fs.writeFileSync(file, next);
+  assert.equal(ok(await live.fetchCodexUsageFromSessionLog()).windows[0].usedPercent, 20);
+});
+
+test('Codex RPC completes initialized handshake and preserves retry errors without transport fallback', async t => {
+  const root = temporary(t), home = codexHome(root);
+  const cli = require('./fixtures/live/helpers').fakeCli(root, `
+let initialized = false;
+require('readline').createInterface({ input: process.stdin }).on('line', line => {
+  const message = JSON.parse(line);
+  if (message.method === 'initialize') console.log(JSON.stringify({id:message.id,result:{}}));
+  else if (message.method === 'initialized') initialized = true;
+  else console.log(JSON.stringify({ id:message.id, error:{ code:-32001, message: initialized ? 'throttled' : 'handshake missing', data:{status:429,retryAfterMs:3600000,code:'rate_limited'} } }));
+});`);
+  const metrics = [];
+  const result = await require('../out/requestDiagnostics').traceRequests(metric => metrics.push(metric), () => live.fetchCodexUsageCli(cli, home));
+  assert.equal(metrics.filter(metric => metric === 'rpc').length, 2, 'initialize and rateLimits/read are separate RPC requests');
+  assert.equal(metrics.filter(metric => metric === 'process').length, 1);
+  assert.equal(result.kind, 'error'); assert.match(result.message, /throttled/);
+  assert.equal(result.status, 429); assert.equal(result.retryAfterMs, 3600000); assert.equal(result.code, 'rate_limited');
+  const verification = await live.verifyCodexNativeAccount({ tokens: { account_id: 'a' } }, cli, home);
+  assert.equal(verification.status, 'unverified'); assert.equal(verification.errorStatus, 429);
+  assert.equal(verification.retryAfterMs, 3600000);
 });
 
 test('Codex session log: windows without minutes are labelled "limit"; invalid ones are dropped; a plan comes from the record', async (t) => {
@@ -408,7 +446,7 @@ test('verifyCodexNativeAccount: uses getAuthStatus, falls back to account/read, 
   const bothFail = fakeCodex(root, { getAuthStatus: { error: 'no' }, 'account/read': { error: 'still no' } });
   const failed = await live.verifyCodexNativeAccount(expected, bothFail, home);
   assert.equal(failed.status, 'unverified');
-  assert.match(failed.detail, /could not be asked for its login: getAuthStatus failed: no; account\/read failed: still no/);
+  assert.match(failed.detail, /login verification failed: getAuthStatus failed: no/);
 
   const missing = await live.verifyCodexNativeAccount(expected, path.join(root, 'nope'), home);
   assert.equal(missing.status, 'unverified');

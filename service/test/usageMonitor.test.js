@@ -6,7 +6,7 @@ const path = require('node:path');
 const { UsageMonitor, serializeUsageState, deserializeUsageState } = require('../out/usageMonitor');
 const { defaultConfig } = require('../out/configStore');
 const { ApiCallBudget } = require('../out/apiBudget');
-function fixture(t, fetch) {
+function fixture(t, fetch, extra = {}) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'usage-monitor-'));
   let time = Date.now(), identity = 'a'; const calls = [], observations = [];
   const config = defaultConfig(); config.claude.source = 'api'; config.codex.source = 'api';
@@ -15,7 +15,7 @@ function fixture(t, fetch) {
   const monitor = new UsageMonitor({ directory, config: () => config, now: () => time, identity: () => identity,
     budget: new ApiCallBudget(path.join(directory, 'budget'), () => 30000), log() {},
     fetch: async (...args) => { calls.push(args); return fetch ? fetch(...args, reading) : reading(args[0]); },
-    observe: async (...args) => observations.push(args) });
+    observe: async (...args) => observations.push(args), ...extra });
   t.after(() => { monitor.dispose(); fs.rmSync(directory, { recursive: true, force: true }); });
   return { monitor, config, calls, observations, reading, advance: ms => time += ms, identity: value => identity = value };
 }
@@ -72,4 +72,36 @@ test('Copilot account and workspace contexts cannot reuse another window’s quo
   assert.equal((await f.monitor.read('copilot', false, b)).result.usage.windows[0].usedPercent, 90);
   assert.equal((await f.monitor.read('copilot', false, a)).result.usage.windows[0].usedPercent, 10);
   assert.equal(f.calls.length, 2);
+});
+
+test('fresh stored active usage prevents the status request before it happens', async t => {
+  let stored;
+  const f = fixture(t, undefined, { storedActive: async () => stored });
+  stored = f.reading('codex').usage;
+  assert.equal((await f.monitor.read('codex')).result.usage, stored);
+  assert.equal(f.calls.length, 0);
+});
+
+test('earned credit lookup runs inside the account lock and does not renew credit age', async t => {
+  let locked = false, credits = 0;
+  const f = fixture(t, undefined, {
+    runFetch: async (provider, collect) => { locked = true; try { return await collect(); } finally { locked = false; } },
+    codexCredits: async () => { assert.equal(locked, true); credits++; return { availableCount: 3 }; }
+  });
+  f.config.codex.source = 'auto';
+  const first = await f.monitor.read('codex', true);
+  f.advance(20 * 60000);
+  const second = await f.monitor.read('codex', true);
+  assert.equal(credits, 1);
+  assert.equal(second.result.usage.creditsObservedAt, first.result.usage.creditsObservedAt);
+  assert.ok(second.result.usage.fetchedAt > first.result.usage.fetchedAt);
+});
+
+test('background network pause permits local inspection and explicit manual requests', async t => {
+  const f = fixture(t); f.config.codex.backgroundNetwork = false;
+  await f.monitor.read('codex'); assert.equal(f.calls.length, 0);
+  await f.monitor.read('codex', true); assert.equal(f.calls.length, 1);
+  f.config.codex.source = 'sessionLog';
+  await f.monitor.read('codex'); assert.equal(f.calls.length, 2);
+  assert.equal(f.observations.at(-1)[2], false);
 });

@@ -266,6 +266,20 @@ function nestedString(value: StoredCredential, objectKey: string, key: string): 
   return isObject(nested) && nonEmptyString(nested[key]) ? nested[key] : undefined;
 }
 
+/** Distinguishes ChatGPT users sharing a workspace when both logins expose the user claim. */
+export function codexUsersConflict(stored: StoredCredential, native: StoredCredential): boolean {
+  const user = (credential: StoredCredential): string | undefined => {
+    try {
+      const token = nestedString(credential, 'tokens', 'id_token');
+      const claims = token && JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8'));
+      const id = claims?.['https://api.openai.com/auth']?.chatgpt_user_id;
+      return typeof id === 'string' && id ? id : undefined;
+    } catch { return undefined; }
+  };
+  const a = user(stored), b = user(native);
+  return Boolean(a && b && a !== b);
+}
+
 /**
  * True when a native credential can safely refresh the stored copy of the active profile.
  * Codex exposes a stable account id. Claude credentials do not carry a user id, and an organization id is not
@@ -277,6 +291,7 @@ export function isSameCredentialOwner(provider: AuthProvider, stored: StoredCred
     return true;
   }
   if (provider === 'codex') {
+    if (codexUsersConflict(stored, native)) return false;
     const storedAccount = nestedString(stored, 'tokens', 'account_id');
     const nativeAccount = nestedString(native, 'tokens', 'account_id');
     if (storedAccount && nativeAccount) {
