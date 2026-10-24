@@ -17,7 +17,9 @@ export type ProbeSettings = {
 
 /** How a Codex probe reads usage; tests replace both. */
 export type CodexUsageFetchers = { http: typeof fetchCodexUsage; cli: typeof fetchCodexUsageCli };
-export type ProbeResult = { result: LiveResult; credential: StoredCredential; keepAliveError?: string };
+export type ProbeResult = { result: LiveResult; credential: StoredCredential; keepAliveError?: string;
+  /** The check was refused before anything was sent (a provider deadline), so nothing about the prompt was learned. */
+  skipped?: boolean };
 
 /** A sweep reads several accounts in a row; waiting out the shared spacing beats being rate-limited. */
 const BUDGET_WAIT_MS = 2 * 60_000;

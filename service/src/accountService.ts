@@ -14,7 +14,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { ApiCallBudget, sleep } from './apiBudget';
 import { AuthProvider, StoredCredential, parseCredentialJson, readNativeCredential, writeJsonAtomically } from './authFiles';
-import { activateClaudeAccountMetadata, claudeAccountFileConfirms, CredentialIdentity } from './accountIdentity';
+import { activateClaudeAccountMetadata, claudeAccountFileConfirms, CredentialIdentity, codexCredentialUserId } from './accountIdentity';
 import { AccountAutomation, AutomationProfiles, KeepAliveNowResult, LockWait } from './accountAutomation';
 import {
   resetCodexAccount, acquireAccountLock, claudeUsage, explainAccountProblem, isolatedEnvironment, loginArgs, loginHome, probeAccount, readableProblem, stagedCredentialPath
@@ -231,7 +231,7 @@ export class AccountService {
       async (provider, credential, settings, keepAlive, signal) => {
         const key = usageAccountKey(provider, credential, settings.accountKey);
         const blocked = this.usageCoordinator.blocked(provider, key);
-        if (blocked) return { credential, result: blocked };
+        if (blocked) return { credential, result: blocked, skipped: true };
         let outcome: Awaited<ReturnType<typeof probe>> | undefined;
         const collect = async () => {
           outcome = await probe(provider, credential, settings, keepAlive, signal, provider === 'claude' ? this.claudeBudget : undefined);
@@ -300,7 +300,10 @@ export class AccountService {
       observe: async (provider, usage, attributable, identity) => {
         if (identity !== (options.usageIdentity ?? nativeUsageIdentity)(provider)) return;
         const id = this.store.activeProfileId(provider);
-        if (attributable && id && await this.store.matchesNative(provider, id)) this.automation.observe(provider, id, usage);
+        // A Codex session-log reading names the login that created its session. Recorded after the login last
+        // changed and matching the native login's user, it is the active account's own reading, not a hint.
+        const credited = attributable || (provider === 'codex' && this.sessionLogIsActive(usage));
+        if (credited && id && await this.store.matchesNative(provider, id)) this.automation.observe(provider, id, usage);
         else if (!attributable) this.automation.hintLimit(provider, usage);
       } });
     this.runtime = new ServiceRuntime(options.home, () => this.config, options.version, this.log,
@@ -885,6 +888,20 @@ export class AccountService {
       const result = await (provider === 'claude' ? claudeUsage(claudeConfigDir(), new AbortController().signal, this.claudeBudget) : fetchCodexUsage());
       return result.kind === 'ok' ? { kind: 'ok', usage: { ...result.usage, source: 'api' } } : result;
     }, { manual, generation, isCurrent: () => generation === nativeUsageIdentity(provider) });
+  }
+
+  /**
+   * True when a Codex session-log reading belongs to the native login: its session was created by the same ChatGPT
+   * user, and the record is newer than the last login change. A Codex process keeps its login in memory, so a record
+   * from a session of another user is that user's usage (a process from before a switch), never this account's.
+   */
+  private sessionLogIsActive(usage: LiveUsage): boolean {
+    if (usage.source !== 'sessionLog' || !usage.loginUserId) return false;
+    let native: StoredCredential | undefined;
+    try { native = readNativeCredential('codex'); } catch { return false; }
+    if (codexCredentialUserId(native) !== usage.loginUserId) return false;
+    const changedAt = this.codexLoginChangedAt();
+    return changedAt === undefined || usage.fetchedAt.getTime() > changedAt;
   }
 
   private nativeRequestKey(provider: AuthProvider): string {

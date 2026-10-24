@@ -69,6 +69,13 @@ export function codexCredentialEmail(credential: StoredCredential): string | und
   return typeof idToken === 'string' ? emailString(decodeJwtClaims(idToken)?.email) : undefined;
 }
 
+/** Codex: the ChatGPT user id claim of the stored id token, which tells the users of one workspace apart. */
+export function codexCredentialUserId(credential: StoredCredential): string | undefined {
+  const idToken = nested(credential.tokens, 'id_token');
+  const user = typeof idToken === 'string' ? nested(decodeJwtClaims(idToken)?.['https://api.openai.com/auth'], 'chatgpt_user_id') : undefined;
+  return typeof user === 'string' && user ? user : undefined;
+}
+
 /** Claude Code's account file: `~/.claude.json` by default, or inside `CLAUDE_CONFIG_DIR` when that is set. */
 export function claudeAccountFile(): string {
   return process.env.CLAUDE_CONFIG_DIR ? path.join(process.env.CLAUDE_CONFIG_DIR, '.claude.json') : path.join(os.homedir(), '.claude.json');

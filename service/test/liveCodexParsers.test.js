@@ -238,6 +238,42 @@ require('readline').createInterface({ input: process.stdin }).on('line', line =>
   assert.equal(verification.retryAfterMs, 3600000);
 });
 
+test('Codex session log: the session_meta head names the login that created the session, and an append keeps it', async t => {
+  const sessions = sessionRoot(t);
+  const meta = JSON.stringify({ timestamp: '2026-10-10T09:00:00Z', type: 'session_meta',
+    payload: { creator_user_id: 'user-abc', creator_account_id: 'ws-1', base_instructions: 'x'.repeat(200) } });
+  writeLog(sessions, 'a.jsonl', meta + '\n' + record('2026-10-10T10:00:00Z', { used_percent: 10, window_minutes: 300 }) + '\n');
+  assert.equal(ok(await live.fetchCodexUsageFromSessionLog()).loginUserId, 'user-abc');
+  fs.appendFileSync(path.join(sessions, 'a.jsonl'), record('2026-10-10T11:00:00Z', { used_percent: 20, window_minutes: 300 }) + '\n');
+  const usage = ok(await live.fetchCodexUsageFromSessionLog());
+  assert.equal(usage.windows[0].usedPercent, 20);
+  assert.equal(usage.loginUserId, 'user-abc', 'the creator survives an append');
+  writeLog(sessions, 'b.jsonl', record('2026-10-10T12:00:00Z', { used_percent: 30, window_minutes: 300 }) + '\n');
+  assert.equal(ok(await live.fetchCodexUsageFromSessionLog()).loginUserId, undefined, 'a file without session_meta names nobody');
+});
+
+test('Codex RPC settles within a bounded wait when a grandchild keeps the pipes open', async t => {
+  const root = temporary(t), home = codexHome(root);
+  const cli = require('./fixtures/live/helpers').fakeCli(root, `
+require('readline').createInterface({ input: process.stdin }).on('line', line => {
+  const message = JSON.parse(line);
+  if (message.method === 'initialize') console.log(JSON.stringify({ id: message.id, result: {} }));
+  else if (message.method === 'account/rateLimits/read') {
+    console.log(JSON.stringify({ id: message.id, result: { rateLimits: { primary: { usedPercent: 12 } } } }));
+    // A helper that inherits the pipes and outlives us, like a daemon the app-server leaves behind.
+    require('child_process').spawn('sleep', ['3'], { stdio: 'inherit', detached: true }).unref();
+    setTimeout(() => process.exit(0), 20);
+  }
+});`);
+  process.env.AI_USAGE_CODEX_RPC_CLOSE_WAIT_MS = '200';
+  t.after(() => { delete process.env.AI_USAGE_CODEX_RPC_CLOSE_WAIT_MS; });
+  const started = Date.now();
+  const result = await live.fetchCodexUsageCli(cli, home);
+  assert.ok(Date.now() - started < 2500, `settled after ${Date.now() - started} ms`);
+  assert.equal(result.kind, 'ok', JSON.stringify(result));
+  assert.equal(result.usage.windows[0].usedPercent, 12);
+});
+
 test('Codex session log: windows without minutes are labelled "limit"; invalid ones are dropped; a plan comes from the record', async (t) => {
   const sessions = sessionRoot(t);
   writeLog(sessions, 'a.jsonl', record('2026-10-11T08:00:00Z', { used_percent: 150 }, { used_percent: 'x', window_minutes: 60 }, { plan_type: 'plus' }) + '\n');

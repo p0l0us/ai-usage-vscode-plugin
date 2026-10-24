@@ -32,6 +32,8 @@ export type LiveUsage = {
   resetCredits?: { availableCount: number; earliestExpiresAt?: number; totalCount?: number };
   /** Epoch ms of the credit observation, independent of a later quota observation. */
   creditsObservedAt?: number;
+  /** Codex session log: the ChatGPT user that created the session the reading came from, to credit it to a saved account. */
+  loginUserId?: string;
   /** Extra tooltip lines. */
   details?: string[];
   fetchedAt: Date;
@@ -765,6 +767,12 @@ type CodexRpcRequest = { method: string; params?: unknown };
 type CodexRpcMessage = { id?: number; result?: unknown; error?: { message?: string; code?: number | string;
   data?: { status?: number; statusCode?: number; retryAfterMs?: number; retry_after_seconds?: number; code?: string } } };
 
+/** How long after `SIGKILL` an RPC waits for the app-server's pipes to close before it gives up on them. */
+function codexRpcCloseWaitMs(): number {
+  const configured = Number(process.env.AI_USAGE_CODEX_RPC_CLOSE_WAIT_MS);
+  return Number.isFinite(configured) && configured >= 0 ? configured : 5_000;
+}
+
 export class CodexRpcError extends Error {
   readonly status?: number;
   readonly code?: number | string;
@@ -796,15 +804,30 @@ function codexRpc(cli: string, requests: CodexRpcRequest[], env: NodeJS.ProcessE
     let expectedId = 1;
     let complete: (() => void) | undefined;
     let killTimer: NodeJS.Timeout | undefined;
+    let closeTimer: NodeJS.Timeout | undefined;
+    let completed = false;
     const results: unknown[] = [];
+    // Settles the caller once: normally when the process has closed, otherwise when the bounded wait is over.
+    const done = () => {
+      if (completed) return;
+      completed = true;
+      clearTimeout(killTimer);
+      clearTimeout(closeTimer);
+      complete?.();
+    };
     const finish = (fn: () => void) => {
       if (!settled) {
         settled = true;
         clearTimeout(timer);
         complete = fn;
         child.kill();
-        // Keep the caller's credential lock until the owned process has stopped writing its home.
-        killTimer = setTimeout(() => child.kill('SIGKILL'), 1000);
+        // Keep the caller's credential lock until the owned process has stopped writing its home, but not for
+        // ever: a grandchild holding the pipes would otherwise keep `close` from firing and the lock from returning.
+        killTimer = setTimeout(() => {
+          child.kill('SIGKILL');
+          closeTimer = setTimeout(() => { child.stdout.destroy(); child.stderr.destroy(); done(); }, codexRpcCloseWaitMs());
+          closeTimer.unref();
+        }, 1000);
         killTimer.unref();
       }
     };
@@ -817,7 +840,7 @@ function codexRpc(cli: string, requests: CodexRpcRequest[], env: NodeJS.ProcessE
     };
 
     child.on('error', (error) => finish(() => reject(error)));
-    child.on('close', () => { clearTimeout(killTimer); complete?.(); });
+    child.on('close', done);
     // Without a listener, a write into a pipe the app-server already closed (EPIPE) is an uncaught error that ends the service.
     child.stdin.on('error', (error) => finish(() => reject(new Error(`codex app-server closed its input (${error.message})${stderr.trim() ? `: ${stderr.trim().slice(0, 200)}` : ''}`))));
     child.on('exit', (code) => finish(() => reject(new Error(`codex app-server exited (${code ?? 'signal'}): ${stderr.trim().slice(0, 200)}`))));
@@ -1140,11 +1163,18 @@ function newestFiles(dir: string, limit: number): string[] {
   return results.sort((a, b) => b.mtime - a.mtime).slice(0, limit).map((entry) => entry.file);
 }
 
-type LogReading = { limits: CodexLogRateLimits; at: Date };
-type LogCursor = { generation: string; size: number; mtime: number; pending: Buffer; reading?: LogReading };
+type LogReading = { limits: CodexLogRateLimits; at: Date; creator?: string };
+type LogCursor = { generation: string; size: number; mtime: number; pending: Buffer; reading?: LogReading; creator?: string };
 const logCursors = new Map<string, LogCursor>();
+/** The `creator_user_id` of a session file's first line (`session_meta`), when the head holds it. */
+function sessionCreator(head: string): string | undefined {
+  const newline = head.indexOf('\n');
+  const line = newline < 0 ? head : head.slice(0, newline);
+  if (!line.includes('"session_meta"')) return undefined;
+  return /"creator_user_id"\s*:\s*"([^"]+)"/.exec(line)?.[1];
+}
 /** Bounded incremental tail reader. An append preserves metadata; truncation/replacement invalidates it. */
-function lastRateLimitsIn(file: string): { limits: CodexLogRateLimits; at: Date } | undefined {
+function lastRateLimitsIn(file: string): LogReading | undefined {
   try {
     const stat = fs.statSync(file), size = stat.size;
     const generation = `${stat.dev}:${stat.ino}:${stat.birthtimeMs}`;
@@ -1154,7 +1184,13 @@ function lastRateLimitsIn(file: string): { limits: CodexLogRateLimits; at: Date 
     const start = Math.max(cursor?.size ?? 0, size - 512 * 1024);
     const fd = fs.openSync(file, 'r');
     let data: Buffer;
+    let creator = cursor?.creator;
     try {
+      if (!cursor) {
+        // The first line (`session_meta`) names the login that created the session; it is read once per file.
+        const head = Buffer.alloc(Math.min(size, 8192));
+        creator = sessionCreator(head.subarray(0, fs.readSync(fd, head, 0, head.length, 0)).toString('utf8'));
+      }
       const buffer = Buffer.alloc(size - start);
       const read = fs.readSync(fd, buffer, 0, buffer.length, start);
       data = Buffer.concat([start === cursor?.size ? cursor.pending : Buffer.alloc(0), buffer.subarray(0, read)]);
@@ -1171,9 +1207,10 @@ function lastRateLimitsIn(file: string): { limits: CodexLogRateLimits; at: Date 
         if (limits && (limits.primary || limits.secondary) && at && at.getTime() <= Date.now() && (!reading || at >= reading.at)) reading = { limits, at };
       } catch { /* Partial tail start or invalid record. */ }
     }
+    const result = reading && creator ? { ...reading, creator } : reading;
     if (logCursors.size >= 24 && !logCursors.has(file)) logCursors.delete(logCursors.keys().next().value!);
-    logCursors.set(file, { generation, size, mtime: stat.mtimeMs, pending: data.subarray(Math.max(end + 1, data.length - 512 * 1024)), reading });
-    return reading;
+    logCursors.set(file, { generation, size, mtime: stat.mtimeMs, pending: data.subarray(Math.max(end + 1, data.length - 512 * 1024)), reading: result, creator });
+    return result;
   } catch {
     logCursors.delete(file);
     return undefined;
@@ -1186,7 +1223,7 @@ export async function fetchCodexUsageFromSessionLog(): Promise<LiveResult> {
   if (!fs.existsSync(sessionsDir)) {
     return { kind: 'unavailable', provider, reason: 'No Codex session logs found.' };
   }
-  let best: { limits: CodexLogRateLimits; at: Date } | undefined;
+  let best: LogReading | undefined;
   for (const file of newestFiles(sessionsDir, 6)) {
     const found = lastRateLimitsIn(file);
     if (found && (!best || found.at > best.at)) {
@@ -1216,6 +1253,7 @@ export async function fetchCodexUsageFromSessionLog(): Promise<LiveResult> {
       plan: best.limits.plan_type ?? readCodexAuth()?.plan,
       windows,
       source: 'sessionLog',
+      ...(best.creator ? { loginUserId: best.creator } : {}),
       details: [`Source: Codex session log (recorded ${best.at.toLocaleString()})`],
       // The reading is as old as the last Codex turn, not as the moment we read the file.
       fetchedAt: best.at

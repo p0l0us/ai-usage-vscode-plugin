@@ -169,6 +169,14 @@ export const SETTINGS_CATALOG = [
     "description": "**Smallest gap between two calls to Anthropic's usage endpoint**, counted across all open windows, every saved account and manual refreshes. Anthropic rate-limits this endpoint and does not document the limit; the extension also honours a stricter one when a response advertises it (`anthropic-ratelimit-requests-*` or `Retry-After`). A refresh that arrives too early shows the cached reading instead of calling out. `0` leaves only the service's own limits."
   },
   {
+    "key": "claude.api.minAccountIntervalMinutes",
+    "type": "number",
+    "min": 1,
+    "max": 1440,
+    "default": 30,
+    "description": "**Smallest gap between two automatic reads of one Claude account's usage endpoint, in minutes.** Between reads the figures come from Claude Code's account file, read every `#aiUsage.claude.accountFile.checkIntervalSeconds#` seconds, from the stored reading and from keep-alives. This caps what `#aiUsage.claude.checkIntervalMinutes#` and rotation's faster reads near a threshold would otherwise send. A check you start yourself, the one read after a window reset and the check rotation makes before a switch may come sooner; a server's `Retry-After` always wins, and `#aiUsage.claude.api.minIntervalSeconds#` still spaces the calls of all accounts. Applies to the `auto` and `both` sources and to every saved-account check; an explicit `api` or `cli` source keeps `#aiUsage.claude.checkIntervalMinutes#`."
+  },
+  {
     "key": "claude.keepAlive.enabled",
     "type": "boolean",
     "default": true,
@@ -356,6 +364,14 @@ export const SETTINGS_CATALOG = [
     "type": "boolean",
     "default": false,
     "description": "**Check inactive Codex accounts.** Off (default): saved accounts other than the active one are assumed unused, so their usage cannot change except by a window reset, which rotation already counts as fresh. They are read only by their keep-alive (`#aiUsage.codex.keepAlive.enabled#`, every `#aiUsage.codex.keepAlive.periodHours#` hours), which also finds a login that stopped working, and by a check you start yourself. The active account is read every `#aiUsage.codex.checkIntervalMinutes#` as before. On: every saved account is also read every `#aiUsage.codex.checkIntervalMinutes#`, which helps when an account is used from another computer but exercises each login far more often. With keep-alives off and this off, inactive readings stay as they were."
+  },
+  {
+    "key": "codex.api.minAccountIntervalMinutes",
+    "type": "number",
+    "min": 1,
+    "max": 1440,
+    "default": 30,
+    "description": "**Smallest gap between two automatic reads of one Codex account's usage endpoint, in minutes.** Between reads the figures come from Codex's session log, inspected every five seconds and credited to the active account when the session's login is the active one, from the stored reading and from keep-alives. This caps what `#aiUsage.codex.checkIntervalMinutes#` and rotation's faster reads near a threshold would otherwise send. A check you start yourself, the one read after a window reset and the check rotation makes before a switch may come sooner; a server's `Retry-After` always wins. Applies to the `auto` and `both` sources and to every saved-account check; an explicit `api` or `cli` source keeps `#aiUsage.codex.checkIntervalMinutes#`."
   },
   {
     "key": "codex.keepAlive.enabled",

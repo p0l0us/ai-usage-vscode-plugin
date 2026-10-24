@@ -267,6 +267,7 @@ it is installed and runs on the remote machine, so:
 | `aiUsage.chatTokens.enabled` | on | Show the local Claude/Codex chat's consumed-token chip. |
 | `aiUsage.<claude\|codex>.source` | `auto` | Fresh shared cache, local file, direct API, then CLI; stops at the first usable reading. |
 | `aiUsage.<service>.checkIntervalMinutes` | 30 / 30 / 5 | How often Claude / Codex / Copilot are queried. Claude accepts fractions down to 0.25 (15 s). |
+| `aiUsage.<claude\|codex>.api.minAccountIntervalMinutes` | 30 | Smallest gap between two automatic reads of one account's usage endpoint; local readings and keep-alives fill in between. |
 | `aiUsage.<claude\|codex>.checkInactiveAccounts` | off | Also read accounts other than the active one on that interval; off, only their keep-alive reads them. |
 | `aiUsage.copilot.account` | (auto) | GitHub login to use when several are signed in. |
 | `aiUsage.<service>.enabled` | on | Hide a service you do not use. |

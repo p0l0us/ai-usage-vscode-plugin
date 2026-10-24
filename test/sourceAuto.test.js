@@ -149,3 +149,17 @@ test('monitor auto adds the CLI earned resets to a Codex reading without them, s
   assert.equal(creditReads.length, 3);
   assert.deepEqual(creditReads, [config.codex.cliPath, config.codex.cliPath, config.codex.cliPath]);
 });
+
+test('api.minAccountIntervalMinutes floors automatic endpoint reads for auto and both, leaves explicit sources and local inspection alone', () => {
+  const config = defaultConfig(); config.codex.source = config.claude.source = 'auto';
+  config.codex.checkIntervalMinutes = config.claude.checkIntervalMinutes = 5;
+  assert.equal(usageSettings(config, 'codex').apiCheckIntervalMs, 30 * 60_000, 'the default floor lifts a five-minute interval');
+  assert.equal(usageSettings(config, 'codex').checkIntervalMs, 5000, 'the session log is still inspected every five seconds');
+  assert.equal(usageSettings(config, 'claude').apiCheckIntervalMs, 30 * 60_000);
+  config.codex.api.minAccountIntervalMinutes = 2;
+  assert.equal(usageSettings(config, 'codex').apiCheckIntervalMs, 5 * 60_000, 'a longer configured interval wins');
+  config.codex.source = 'both'; config.codex.api.minAccountIntervalMinutes = 30;
+  assert.equal(usageSettings(config, 'codex').apiCheckIntervalMs, 30 * 60_000, 'both has a local source to fill in too');
+  config.codex.source = 'api';
+  assert.equal(usageSettings(config, 'codex').apiCheckIntervalMs, 5 * 60_000, 'an explicit api source keeps the interval the user chose');
+});

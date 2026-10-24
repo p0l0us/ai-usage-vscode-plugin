@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.10.0 (2026-10-24)
+
+- New settings `aiUsage.claude.api.minAccountIntervalMinutes` and `aiUsage.codex.api.minAccountIntervalMinutes` (default 30): the smallest gap between two automatic reads of one account's usage endpoint. The gap caps what `checkIntervalMinutes` and rotation's faster reads near a threshold would otherwise send; between reads the figures come from the local source, the stored reading and keep-alives. A check you start yourself, the one read after a window reset and rotation's check before a switch may come sooner, and a server's `Retry-After` always wins. The gap applies to the `auto` and `both` sources and to every saved-account check; an explicit `api` or `cli` source keeps its own interval. On a machine with `codex.checkIntervalMinutes` at 5, the active login's endpoint reads drop from up to 12 an hour to 2.
+- A Codex session-log reading is credited to the active account, not only shown as a hint, when its session was created by the native login (the `creator_user_id` of the file's first line matches the login's ChatGPT user) and the record is newer than the last login change. A Codex process keeps its login in memory, so a session created by another user is that user's usage, never this account's. Rotation and the Accounts menu therefore see each turn's usage within five seconds without an endpoint read; the endpoint is still read on the gap above to reconcile.
+- A model prompt that keeps failing in a keep-alive no longer delays the account's usage read. Before, the whole keep-alive waited longer after each failed prompt, up to a day, and with inactive checks off nothing else read the account meanwhile. Now the read keeps the hourly period (over HTTPS, or through the CLI without a prompt when the earned-reset count is due) and only the prompt waits; the log says so. A check the provider's deadline refused no longer resets that wait.
+- A Codex app-server that leaves a helper process holding its pipes no longer stalls the account lock until the service restarts: an RPC waits at most five seconds after ending the process for the pipes to close, then returns. The wait held the lock for ever in that case before.
+
 ## 1.9.0 (2026-10-23)
 
 - Add `aiUsage.claude.backgroundNetwork` and `aiUsage.codex.backgroundNetwork` to pause scheduled provider traffic while retaining local/cached usage and explicit commands. Usage tooltips show observation age, source and separate per-hour HTTP, RPC, CLI-start and model-attempt counters.

@@ -34,6 +34,8 @@ export type ProviderConfig = {
   api: {
     /** Smallest gap between two calls to the usage endpoint, across every account and client (Claude). */
     minIntervalSeconds: number;
+    /** Smallest gap between two automatic reads of one account's usage endpoint, in minutes; local readings fill in between. */
+    minAccountIntervalMinutes: number;
   };
   keepAlive: {
     enabled: boolean;
@@ -121,7 +123,8 @@ export const SETTINGS: SettingSchema[] = [
   { key: 'cliPath', type: 'string', description: 'Command or full path of the vendor CLI.' },
   { key: 'checkIntervalMinutes', type: 'number', min: 0.25, max: 1440, description: 'Spacing of usage endpoint calls and the pause after a transient error, in minutes; Claude accepts a quarter minute, Codex at least one.' },
   { key: 'checkInactiveAccounts', type: 'boolean', description: 'Read the usage of saved accounts other than the active one every check interval. Off: nobody is assumed to use them, so their readings change only with a keep-alive or a check by hand.' },
-  { key: 'api.minIntervalSeconds', type: 'number', min: 0, max: 600, providers: ['claude'], description: 'Smallest gap between two calls to the Claude usage endpoint, across all accounts and clients.' }
+  { key: 'api.minIntervalSeconds', type: 'number', min: 0, max: 600, providers: ['claude'], description: 'Smallest gap between two calls to the Claude usage endpoint, across all accounts and clients.' },
+  { key: 'api.minAccountIntervalMinutes', type: 'number', min: 1, max: 1440, description: 'Smallest gap, in minutes, between two automatic reads of one account\'s usage endpoint; local readings (the Codex session log, Claude Code\'s account file) and keep-alives keep the figures current in between. A check started by hand, the read after a window reset and rotation\'s check before a switch may come sooner; a server\'s Retry-After always wins.' }
 ];
 
 /** Settings outside the provider blocks, addressed by their key alone (`mcp.enabled`), listed after the others. */
@@ -152,7 +155,7 @@ export function defaultProviderConfig(provider: AuthProvider): ProviderConfig {
     cliPath: provider,
     checkIntervalMinutes: 30,
     checkInactiveAccounts: false,
-    api: { minIntervalSeconds: 30 },
+    api: { minIntervalSeconds: 30, minAccountIntervalMinutes: 30 },
     keepAlive: { enabled: true, periodHours: 1, model: claude ? 'haiku' : 'gpt-6-luna', home: `~/.${provider}-profile-{number}` },
     autoReset: { enabled: !claude, confirmationRequired: false },
     terminateStaleDaemons: !claude,
@@ -356,6 +359,7 @@ export function automationSettings(config: ServiceConfig, provider: AuthProvider
     intervalMs: Math.max(0.25, own.keepAlive.periodHours) * 3_600_000,
     // Claude accepts a quarter minute: every endpoint call is spaced by the shared budget regardless.
     checkIntervalMs: Math.max(claude ? 0.25 : 1, own.checkIntervalMinutes) * 60_000,
+    endpointMinIntervalMs: Math.max(1, own.api.minAccountIntervalMinutes) * 60_000,
     checkInactiveAccounts: own.checkInactiveAccounts === true,
     home: own.keepAlive.home,
     cliPath: own.cliPath,

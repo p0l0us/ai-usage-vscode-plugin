@@ -83,6 +83,36 @@ test('automation quota is reused by status without another request', async t => 
   assert.equal(nativeReads, 1); assert.equal(statusReads, 0);
 });
 
+test('a Codex session-log reading is credited to the active account when its session was created by the native login after the last switch', async t => {
+  const jwt = claims => ['{"alg":"none"}', JSON.stringify(claims), 'sig'].map(part => Buffer.from(part).toString('base64url')).join('.');
+  const login = (account, user) => ({ auth_mode: 'chatgpt', tokens: { access_token: `t-${account}`, refresh_token: `r-${account}`, account_id: account,
+    id_token: jwt({ 'https://api.openai.com/auth': { chatgpt_user_id: user, chatgpt_account_id: 'workspace' } }) } });
+  let reading = { kind: 'ok', usage: { ...usage('codex', [40, 5]), source: 'sessionLog', loginUserId: 'u1' } };
+  let nativeReads = 0;
+  const f = fixture(t, { fetchUsage: async () => reading, values: { 'acc-1': [10, 10], 'acc-2': [10, 10] },
+    readNativeUsage: async provider => { nativeReads++; return { kind: 'ok', usage: usage(provider, [10, 10]) }; } });
+  fs.writeFileSync(path.join(f.root, 'codex', 'auth.json'), JSON.stringify(login('acc-1', 'u1')));
+  const first = await f.call('profiles.saveNative', { provider: 'codex', name: 'First' });
+  await f.service.liveUsage('codex', true);
+  assert.equal(f.service.automation.usage('codex', first.profile.id)?.windows[0].usedPercent, 40, 'the session-log reading is the active account\'s own');
+  assert.equal(nativeReads, 0, 'no endpoint read was needed for it');
+  // A session another user created (a process from before a switch) is a hint at most.
+  reading = { kind: 'ok', usage: { ...usage('codex', [70, 5]), source: 'sessionLog', loginUserId: 'u2' } };
+  await f.service.liveUsage('codex', true);
+  assert.equal(f.service.automation.usage('codex', first.profile.id)?.windows[0].usedPercent, 40);
+  // After a switch, a record older than the switch is not the new login's either, whatever user id it carries.
+  const second = await f.call('profiles.importCredential', { provider: 'codex', name: 'Second', credential: login('acc-2', 'u2') });
+  await f.call('profiles.activate', { provider: 'codex', id: second.profile.id });
+  const changedAt = JSON.parse(fs.readFileSync(path.join(f.home, 'state', 'codex-login.json'), 'utf8')).changedAt;
+  reading = { kind: 'ok', usage: { ...usage('codex', [55, 5], changedAt - 1000), source: 'sessionLog', loginUserId: 'u2' } };
+  await f.service.liveUsage('codex', true);
+  assert.notEqual(f.service.automation.usage('codex', second.profile.id)?.windows[0].usedPercent, 55, 'a record from before the switch is ignored');
+  await new Promise(resolve => setTimeout(resolve, 5));
+  reading = { kind: 'ok', usage: { ...usage('codex', [65, 5]), source: 'sessionLog', loginUserId: 'u2' } };
+  await f.service.liveUsage('codex', true);
+  assert.equal(f.service.automation.usage('codex', second.profile.id)?.windows[0].usedPercent, 65, 'a newer record of the new login is credited');
+});
+
 test('with inactive checks on, startup refreshes every saved account with keep-alive and rotation off, and cached views publish updates', async t => {
   const f = fixture(t, { ownership: { held: () => true, assertHeld() {} }, values: { 'acc-1': [30, 5], c: [20, 5] },
     fetchUsage: async provider => ({ kind: 'ok', usage: usage(provider, provider === 'codex' ? [30, 5] : [10, 10]) }) });

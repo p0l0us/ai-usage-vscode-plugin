@@ -49,6 +49,8 @@ export type AutomationSettings = ProbeSettings & RotationLimits & {
   checkIntervalMs: number;
   /** False: the periodic usage round reads only the active account; the others are read by keep-alives only. */
   checkInactiveAccounts?: boolean;
+  /** Automatic endpoint reads of one account are spaced at least this far apart; a reset, a check by hand and rotation's pre-switch read may come sooner. */
+  endpointMinIntervalMs?: number;
 };
 
 export type KeepAliveNowResult = {
@@ -85,6 +87,8 @@ export type UsageSample = { at: number; windows: Array<{ label: string; usedPerc
 export type AccountState = CacheEntry & {
   serverBlockedUntil?: number;
   nextKeepAliveAt?: number;
+  /** A model prompt that keeps failing waits until then; the account's usage read keeps its period. */
+  nextPromptAt?: number;
   modelFailures?: number;
   authBlockedFor?: string;
   lastKeepAliveAt?: number;
@@ -467,7 +471,7 @@ export class AccountAutomation {
   }
 
   /**
-   * A failing model never retries more often than the configured successful cadence.
+   * The usage read keeps the configured period; a failing prompt waits on `nextPromptAt` besides.
    */
   private keepAliveDueAt(state: AccountState, settings: AutomationSettings): number {
     if (state.lastKeepAliveAt === undefined) { return 0; }
@@ -698,7 +702,10 @@ export class AccountAutomation {
         const resetSinceCheck = usage?.windows.some(window => window.resetsAt &&
           window.resetsAt.getTime() <= now && window.resetsAt.getTime() > (state.checkedAt ?? 0));
         // The active account is read the sooner the faster it approaches a threshold, so the limit is seen before it is hit.
-        const interval = profile.id === active && usage ? activeReadDelayMs(usage, usageRates(state.samples, usage), settings) : settings.checkIntervalMs;
+        // The endpoint is read no more often than `endpointMinIntervalMs` per account; local readings keep the figures
+        // current in between, and a reset still earns one read.
+        const interval = Math.max(settings.endpointMinIntervalMs ?? 0,
+          profile.id === active && usage ? activeReadDelayMs(usage, usageRates(state.samples, usage), settings) : settings.checkIntervalMs);
         if (!force && state.checkedAt !== undefined && now - state.checkedAt < interval && !resetSinceCheck) continue;
         const checked = await this.checkAccount(provider, profile.id, settings, false);
         // The active account read at (or heading for) its limit is rotated away now, not once the rest of the round,
@@ -829,7 +836,11 @@ export class AccountAutomation {
           if (this.now() < this.keepAliveDueAt(state, settings)) { continue; }
           // Persist before starting so a failed call or window restart cannot create a retry storm.
           this.write(provider, profile.id, { ...state, lastKeepAliveAt: this.now() });
-          await this.checkAccount(provider, profile.id, settings, true);
+          // A prompt that keeps failing waits longer each time; the usage read, which finds a dead login and feeds
+          // rotation, keeps the plain period (over HTTPS, or the CLI without a prompt when the credit count is due).
+          const prompt = !(state.nextPromptAt && this.now() < state.nextPromptAt);
+          if (!prompt) { this.log(`${provider}: account ${profile.id} is read without a model prompt; the prompt waits until ${new Date(state.nextPromptAt!).toISOString()}`); }
+          await this.checkAccount(provider, profile.id, settings, prompt);
           // Long sweeps must still read other accounts and react to an exhausted
           // active login between keep-alives, without duplicating the sweep's reads.
           await this.refreshDue(provider, false, true);
@@ -904,9 +915,11 @@ export class AccountAutomation {
     this.write(provider, id, { ...state, checkedAt: this.now(),
       serverBlockedUntil: result.kind === 'error' && (result.retryAfterMs !== undefined || result.status === 429)
         ? Math.max(state.serverBlockedUntil ?? 0, this.now() + Math.max(60_000, result.retryAfterMs ?? settings.checkIntervalMs)) : state.serverBlockedUntil,
-      modelFailures: keepAlive ? (outcome.keepAliveError ? (state.modelFailures ?? 0) + 1 : 0) : state.modelFailures,
-      nextKeepAliveAt: keepAlive ? this.now() + Math.max(settings.intervalMs,
-        Math.min(24 * 3_600_000, settings.intervalMs * 2 ** Math.min(5, outcome.keepAliveError ? state.modelFailures ?? 0 : 0))) : state.nextKeepAliveAt,
+      // A prompt that was never sent (a provider deadline refused the check) changes neither the count nor the wait.
+      modelFailures: keepAlive && !outcome.skipped ? (outcome.keepAliveError ? (state.modelFailures ?? 0) + 1 : 0) : state.modelFailures,
+      nextKeepAliveAt: keepAlive ? this.now() + settings.intervalMs : state.nextKeepAliveAt,
+      nextPromptAt: keepAlive && !outcome.skipped ? (outcome.keepAliveError ? this.now() + Math.max(settings.intervalMs,
+        Math.min(24 * 3_600_000, settings.intervalMs * 2 ** Math.min(5, state.modelFailures ?? 0))) : undefined) : state.nextPromptAt,
       usage: credited ? this.serialize(credited.usage) : state.usage,
       samples: credited ? addSample(state.samples, credited.usage) : state.samples,
       creditsCheckedAt: outcome.result.kind === 'ok' && outcome.result.usage.resetCredits

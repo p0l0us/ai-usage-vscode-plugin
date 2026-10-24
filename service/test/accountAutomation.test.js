@@ -420,6 +420,37 @@ test('model failures with successful quota never accelerate the keep-alive caden
   assert.deepEqual(calls(), ['a', 'c'], 'a repeated model failure increases the wait');
 });
 
+test('a failing model prompt backs off alone: the account is still read every period without a prompt', async t => {
+  const f = fixture(t, { values: { a: [10, 10] }, keepAliveErrors: { b: 'Selected model is at capacity.' },
+    settings: { codex: { enabled: true, checkIntervalMs: 24 * HOUR } } });
+  const prompted = () => f.calls.filter(call => call[0] === 'codex' && call[2]).map(call => call[1]);
+  const readOnly = () => f.calls.filter(call => call[0] === 'codex' && !call[2]).map(call => call[1]);
+  await f.service.tick(); assert.deepEqual(prompted(), ['a', 'b', 'c']);
+  f.calls.length = 0; f.advance(6 * HOUR); await f.service.tick();
+  assert.deepEqual(prompted(), ['a', 'b', 'c'], 'one failure does not delay the next prompt');
+  f.calls.length = 0; f.advance(6 * HOUR); await f.service.tick();
+  assert.deepEqual(prompted(), ['a', 'c'], 'after two failures the prompt waits twice the period');
+  assert.deepEqual(readOnly(), ['b'], 'the account is still read, without a prompt');
+  assert.ok(f.messages.some(message => /account b is read without a model prompt/.test(message)));
+  f.calls.length = 0; f.advance(6 * HOUR); await f.service.tick();
+  assert.deepEqual(prompted(), ['a', 'b', 'c'], 'the prompt returns once its wait is over');
+});
+
+test('automatic endpoint reads of the active account keep the configured minimum gap; a reset still earns one read', async t => {
+  const f = fixture(t, { values: { b: [10, 10], c: [10, 10] }, readActive: { codex: [30, 10] },
+    settings: { codex: { checkIntervalMs: 60_000, endpointMinIntervalMs: 30 * 60_000, checkInactiveAccounts: false } } });
+  await f.service.refreshUsage('codex');
+  assert.deepEqual(f.nativeReads, ['codex'], 'the first read happens');
+  f.advance(10 * 60_000); await f.service.refreshUsage('codex');
+  assert.equal(f.nativeReads.length, 1, 'ten minutes later the endpoint is left alone although the check interval is one minute');
+  f.advance(21 * 60_000); await f.service.refreshUsage('codex');
+  assert.equal(f.nativeReads.length, 2, 'after the gap it is read again');
+  f.observe('codex', [['5h', 10, 0.1], ['7d', 10, 120]]);
+  f.advance(12 * 60_000); await f.service.refreshUsage('codex');
+  assert.equal(f.nativeReads.length, 3, 'a window that reset since the last read earns one read before the gap is over');
+  assert.deepEqual(f.calls, [], 'inactive accounts are not read on the interval');
+});
+
 test('manual keep-alive runs while disabled, updates account stats, and resets its periodic schedule', async t => {
   const f = fixture(t);
   const result = await f.service.sendKeepAliveNow('codex', 'b');

@@ -80,6 +80,14 @@ for details.
   `aiUsage.claude.api.minIntervalSeconds` and by any limit the endpoint advertises. The active account is read more
   often than this as it approaches a rotation threshold, down to once a minute; see
   [What starts a rotation](ROTATION.md#what-starts-a-rotation).
+- `aiUsage.<claude|codex>.api.minAccountIntervalMinutes` (30): the smallest gap between two automatic reads of one
+  account's usage endpoint. It caps what `checkIntervalMinutes` and rotation's faster reads near a threshold would
+  otherwise send. Between reads the figures come from the local source (Codex's session log, inspected every five
+  seconds and credited to the active account when the session was created by that login after the last switch;
+  Claude Code's account file), from the stored reading and from keep-alives. A check you start yourself, the one read
+  after a window reset and the check rotation makes before a switch may come sooner; a server's `Retry-After` always
+  wins. Applies to the `auto` and `both` sources and to every saved-account check; an explicit `api` or `cli` source
+  keeps `checkIntervalMinutes`.
 - `aiUsage.<claude|codex>.checkInactiveAccounts` (off): whether saved accounts other than the active one are also
   read every `checkIntervalMinutes`. Off, background reads of inactive accounts occur with their keep-alive (every
   `keepAlive.periodHours`), which also finds a login that stopped working. Explicit checks remain available from the Accounts menu,
@@ -522,7 +530,8 @@ in between two accounts. Once the wait runs out, the notification says that the 
 | `autoReset.enabled` | — | `true` | Automatically redeem an earned Codex rate-limit reset credit when the active saved account is limited and the timing rules favor a reset. |
 | `autoRotate.updateUsageBeforeRotation` | `false` | `false` | Read the target account's usage right before a rotation switch (a usage call, never a keep-alive). Off: stored readings decide, a window that has reset since counts as fresh. |
 | `autoRotate.resetAware` | — | `true` | Avoid automatic Codex switches in the five minutes before a reported quota reset; recheck after it. |
-| `keepAlive.periodHours` | `1` | `1` | Per-account keep-alive period, minimum 0.25 hours. |
+| `keepAlive.periodHours` | `1` | `1` | Per-account keep-alive period, minimum 0.25 hours. A model prompt that keeps failing waits longer each time (up to a day); the usage read keeps the period. |
+| `api.minAccountIntervalMinutes` | `30` | `30` | Smallest gap between two automatic reads of one account's usage endpoint; local readings fill in between. |
 | `autoRotate.fiveHourThresholdPercent` | `95` | `100` | Threshold for the 5h window; Codex's default rotates only on a used-up window. |
 | `autoRotate.weeklyThresholdPercent` | `99.5` | `99` | Threshold for the weekly windows (`7d`, and `7d Fable` when it counts). |
 | `autoRotate.modelLimits` | `auto` | — | Whether `7d Fable` counts: `auto` (when Claude Code's `model` is Fable or unset), `always`, `never`. |

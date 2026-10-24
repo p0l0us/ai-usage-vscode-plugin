@@ -26,7 +26,11 @@ export function deserializeUsageState(state: UsageStateView): UsageState {
 }
 export function usageSettings(config: ServiceConfig, provider: ProviderId): { source: UsageSource; checkIntervalMs: number; apiCheckIntervalMs: number } {
   const own = config[provider];
-  const apiCheckIntervalMs = Math.max(provider === 'claude' ? 0.25 : 1, own.checkIntervalMinutes) * 60_000;
+  const configured = Math.max(provider === 'claude' ? 0.25 : 1, own.checkIntervalMinutes) * 60_000;
+  // With a local source to fill in (`auto`, `both`), automatic endpoint reads are spaced at least
+  // `api.minAccountIntervalMinutes`; an explicit `api` or `cli` source keeps the interval the user chose.
+  const floor = provider !== 'copilot' && ['auto', 'both'].includes(own.source) ? Math.max(1, config[provider].api.minAccountIntervalMinutes) * 60_000 : 0;
+  const apiCheckIntervalMs = Math.max(configured, floor);
   // `auto` reads the free local account file this often too, so rotation sees the active account within seconds.
   return { source: own.source, apiCheckIntervalMs, checkIntervalMs: provider === 'claude' && ['auto', 'both', 'accountFile'].includes(own.source)
     ? Math.max(5, config.claude.accountFile.checkIntervalSeconds) * 1000 : provider === 'codex' && ['auto', 'both', 'sessionLog'].includes(own.source) ? 5_000 : apiCheckIntervalMs };

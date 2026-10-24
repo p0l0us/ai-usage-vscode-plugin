@@ -18,6 +18,8 @@ test('defaults match the extension settings: Claude rotates at 95/99.5, Codex at
   assert.equal(config.claude.autoRotate.updateUsageBeforeRotation, false);
   assert.equal(config.codex.autoRotate.updateUsageBeforeRotation, false);
   assert.equal(config.codex.keepAlive.periodHours, 1);
+  assert.equal(config.codex.api.minAccountIntervalMinutes, 30);
+  assert.equal(config.claude.api.minAccountIntervalMinutes, 30);
   assert.equal(config.claude.keepAlive.periodHours, 1);
   assert.equal(config.codex.keepAlive.model, 'gpt-6-luna');
   assert.equal(config.claude.keepAlive.enabled, true);
@@ -108,6 +110,8 @@ test('automation settings bound intervals and honor Codex strategy, trigger and 
   assert.equal(codex.updateUsageBeforeRotation, false);
   assert.equal(claude.updateUsageBeforeRotation, false);
   assert.equal(codex.checkInactiveAccounts, false, 'inactive accounts are left to their keep-alives by default');
+  assert.equal(codex.endpointMinIntervalMs, 30 * 60_000, 'automatic endpoint reads of one account are half an hour apart by default');
+  assert.equal(automationSettings(setConfigValue(config, 'codex.api.minAccountIntervalMinutes', 10), 'codex').endpointMinIntervalMs, 10 * 60_000);
   assert.equal(claude.checkInactiveAccounts, false);
   assert.equal(automationSettings(setConfigValue(config, 'codex.checkInactiveAccounts', true), 'codex').checkInactiveAccounts, true);
   assert.equal(codex.autoReset, true);
