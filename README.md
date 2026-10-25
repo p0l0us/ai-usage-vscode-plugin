@@ -187,8 +187,9 @@ marked **Login problem**; choosing it opens a small menu instead of activating i
 login in a terminal with a separate home inside the keep-alive home and stores the new login in the profile,
 **Try a keep-alive** sends a keep-alive, which refreshes an expired token and, when the login cannot be refreshed,
 offers **Sign in again** in its failure notification, **Select anyway** activates the login as it is, and **Back**
-returns to the accounts. The same sign-in is available for any profile as **Sign in again…** under **Manage saved profiles…**; either
-way the active login is replaced only when that profile is the active one.
+returns to the accounts. The same sign-in is available for any profile through the sign-in button on its row and as
+**Sign in again…** under **Manage saved profiles…**; either way the active login is replaced only when that profile is
+the active one.
 
 ![Active Claude profile row with its 5h, 7d and 7d Fable usage and reset countdowns](images/screenshots/accounts-row-active.png)
 ![Claude profile row whose last keep-alive failed, marked with a warning](images/screenshots/accounts-row-warning.png)

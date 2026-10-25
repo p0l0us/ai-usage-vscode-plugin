@@ -1129,3 +1129,24 @@ test('a disabled profile is marked in the Accounts menu, its row button enables 
   assert.deepEqual(f.calls.filter((call) => call[0] === 'setDisabled'), [['setDisabled', 'codex', 'b', false], ['setDisabled', 'codex', 'a', true]]);
   assert.match(informationMessages.at(-1), /“Work” is disabled/);
 });
+
+test('a row button signs in again for that profile, and the accounts list returns once the sign-in is done', async () => {
+  const views = { claude: { provider: 'claude', title: 'Claude', profiles: [profile({ active: true }), profile({ id: 'b', name: 'Backup', number: 2 })],
+    activeProfileId: 'a', nativeUnsaved: false, checkingActive: false, keepAlive: false, autoRotate: false, strategySummary: '', scopes } };
+  const f = fixture(views);
+  const signedIn = [];
+  const hooks = hooksOf({ signIn: async (provider, p) => { signedIn.push([provider, p.id, menus.at(-1).hidden]); } });
+  quickPickResponses.push((items, options, picker) => {
+    const row = items.find((item) => item.profile?.id === 'b');
+    assert.deepEqual(row.buttons.map((button) => button.iconPath.id), ['info', 'sign-in', 'circle-slash']);
+    const button = row.buttons.find((button) => button.signIn);
+    assert.equal(button.tooltip, 'Sign in again: run the Claude CLI login in a separate home and store the new login in this profile');
+    picker.triggerItemButton(row, button);
+    return undefined;
+  });
+  quickPickResponses.push((items) => { assert.ok(items.some((item) => item.profile), 'the accounts list is shown again after the sign-in'); return undefined; });
+  await f.menu.show('claude', hooks);
+  assert.deepEqual(signedIn, [['claude', 'b', true]], 'the menu is closed before the sign-in starts');
+  assert.equal(quickPickResponses.length, 0);
+  assert.deepEqual(f.calls.filter((call) => call[0] === 'activate'), [], 'the row button does not activate the profile');
+});

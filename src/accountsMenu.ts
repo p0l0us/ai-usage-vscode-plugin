@@ -31,8 +31,8 @@ export function cliTerminalCommand(cli: string, args: string[]): string {
   return `${process.platform === 'win32' ? '& ' : ''}${[cli, ...args].map(quote).join(' ')}`;
 }
 
-/** A row button: the info one, or the one that disables (`setDisabled: true`) or enables the profile. */
-type MenuButton = vscode.QuickInputButton & { setDisabled?: boolean };
+/** A row button: the info one, the one that signs in again for the profile, or the one that disables (`setDisabled: true`) or enables it. */
+type MenuButton = vscode.QuickInputButton & { setDisabled?: boolean; signIn?: true };
 
 type ProfileItem = vscode.QuickPickItem & {
   profile?: ProfileView;
@@ -186,6 +186,8 @@ export class AccountsMenu {
       catch (error) { void vscode.window.showErrorMessage(`AI Usage: could not read the ${TITLES[provider]} accounts: ${errorMessage(error)}`); return; }
       const config = this.services.config ?? await client.getConfig();
       const mcp = config.mcp.enabled && hooks?.registerMcp ? { registration: await hooks.mcpRegistration?.(provider) } : undefined;
+      // Set by a row button: the sign-in opens a terminal, so the menu closes first and the list returns afterwards.
+      let signInRequested: ProfileView | undefined;
       const item = await pickWithBack(this.items(view, config, Boolean(hooks?.back), mcp, hooks?.activeUsage), {
         title: `AI Usage · ${TITLES[provider]} accounts`,
         placeHolder: 'Choose a profile to activate, or manage saved profiles',
@@ -202,6 +204,11 @@ export class AccountsMenu {
         };
         const state = this.services.onStateChanged?.(changed => { if (!changed || changed === provider) update(); });
         const info = picker.onDidTriggerItemButton?.(({ item, button }) => {
+          if ((button as MenuButton).signIn && item.profile) {
+            signInRequested = item.profile;
+            picker.hide();
+            return;
+          }
           const setDisabled = (button as MenuButton).setDisabled;
           if (setDisabled !== undefined && item.profile) {
             const name = item.profile.name;
@@ -216,6 +223,11 @@ export class AccountsMenu {
         update();
         return { dispose: () => { state?.dispose(); events?.dispose(); info?.dispose(); } };
       });
+      if (signInRequested) {
+        try { await hooks?.signIn(provider, signInRequested); }
+        catch (error) { this.reportFailure(provider, error); }
+        continue;
+      }
       if (!item || item.action === 'back') { return; }
       try {
         if (item.profile) {
@@ -258,10 +270,14 @@ export class AccountsMenu {
           default: break;
         }
       } catch (error) {
-        this.log(`${provider}: authentication profile operation failed: ${errorMessage(error)}`);
-        void vscode.window.showErrorMessage(`AI Usage: authentication profile operation failed: ${errorMessage(error)}`);
+        this.reportFailure(provider, error);
       }
     }
+  }
+
+  private reportFailure(provider: AuthProvider, error: unknown): void {
+    this.log(`${provider}: authentication profile operation failed: ${errorMessage(error)}`);
+    void vscode.window.showErrorMessage(`AI Usage: authentication profile operation failed: ${errorMessage(error)}`);
   }
 
   /** Recovery actions when the shared runtime neither answers nor could be hosted in this window. */
@@ -313,6 +329,8 @@ export class AccountsMenu {
       const toggle: MenuButton = profile.disabled
         ? { iconPath: new vscode.ThemeIcon('play-circle'), tooltip: 'Enable: let rotation and keep-alives use this account again', setDisabled: false }
         : { iconPath: new vscode.ThemeIcon('circle-slash'), tooltip: 'Disable: leave this account out of rotation, keep-alives and background usage reads', setDisabled: true };
+      const signIn: MenuButton = { iconPath: new vscode.ThemeIcon('sign-in'),
+        tooltip: `Sign in again: run the ${TITLES[provider]} CLI login in a separate home and store the new login in this profile`, signIn: true };
       return {
         label,
         iconPath: loginProblem ? new vscode.ThemeIcon('warning', new vscode.ThemeColor('editorWarning.foreground'))
@@ -326,7 +344,7 @@ export class AccountsMenu {
         profile,
         readOnly: profile.limit.readOnly,
         loginProblem,
-        ...((info) => ({ info, buttons: [{ iconPath: new vscode.ThemeIcon('info'), tooltip: info } as MenuButton, toggle] }))(accountInfo(profile, displayedUsage))
+        ...((info) => ({ info, buttons: [{ iconPath: new vscode.ThemeIcon('info'), tooltip: info } as MenuButton, signIn, toggle] }))(accountInfo(profile, displayedUsage))
       };
     });
     // VS Code shows a separator's label right-aligned on the row below it, where the active account stands out;

@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.11.0 (2026-10-25)
+
+- Every profile row of the Claude and Codex Accounts menus has a sign-in button, between the info and the disable buttons. It runs the same sign-in as **Sign in again…** under **Manage saved profiles…**: the vendor CLI login in a terminal with a separate home, stored in that profile, and the accounts list returns when the sign-in is done. Before, a profile whose check reported a paused or expired login was renewed through the Manage menu or by choosing the row and taking **Renew the login…**.
+
 ## 1.10.0 (2026-10-24)
 
 - New settings `aiUsage.claude.api.minAccountIntervalMinutes` and `aiUsage.codex.api.minAccountIntervalMinutes` (default 30): the smallest gap between two automatic reads of one account's usage endpoint. The gap caps what `checkIntervalMinutes` and rotation's faster reads near a threshold would otherwise send; between reads the figures come from the local source, the stored reading and keep-alives. A check you start yourself, the one read after a window reset and rotation's check before a switch may come sooner, and a server's `Retry-After` always wins. The gap applies to the `auto` and `both` sources and to every saved-account check; an explicit `api` or `cli` source keeps its own interval. On a machine with `codex.checkIntervalMinutes` at 5, the active login's endpoint reads drop from up to 12 an hour to 2.

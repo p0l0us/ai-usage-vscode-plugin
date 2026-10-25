@@ -236,7 +236,8 @@ user-profile directory's ACL on Windows. For Claude only the `claudeAiOauth` obj
 entries remain untouched. Codex `auth.json` is replaced as a unit. When the native active login can be matched
 safely to its saved profile (Codex account id, Claude organization, or an identical refresh token), refreshed token data
 is captured before switching away. If a saved profile stops working with "Login expired" or "Invalid token", use
-**Sign in again…** in its Accounts menu, or choose the profile itself: an account marked **Login problem** is not
+the sign-in button on its row in the Accounts menu, **Sign in again…** under **Manage saved profiles…**, or choose the
+profile itself: an account marked **Login problem** is not
 activated but opens a menu with **Renew the login…** (the same sign-in), **Try a keep-alive** (a keep-alive refreshes
 an expired token, and when the login cannot be refreshed its failure notification offers **Sign in again**),
 **Select anyway** (activates the login as it is) and **Back**. The sign-in runs the vendor CLI's login in a
