@@ -283,7 +283,8 @@ These apply to `soonestReset`, `evenPace` and `leastWaste`:
   its threshold: an account at 5h 96% is never switched to, however good its weekly score.
 - **A login problem disqualifies.** An account whose last keep-alive or usage check found a login problem (an
   expired or revoked login) is not switched to and costs the sweep nothing, until a later check of it succeeds: the
-  next periodic keep-alive, or **Send keep-alive now…**. A keep-alive that failed for another reason, such as a CLI
+  next periodic keep-alive, the ▷ button on the account's row, or **Send keep-alive now…** under **Manage saved
+  profiles…**. A keep-alive that failed for another reason, such as a CLI
   error or no credits, says nothing about the stored usage and does not block a rotation. A keep-alive that failed for a
   passing reason (the model at capacity, a rate limit, a network error, a timeout) is repeated after the check interval
   instead of a whole keep-alive period later. The notification that no candidate remains

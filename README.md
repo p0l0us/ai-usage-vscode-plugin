@@ -69,7 +69,14 @@ log and settings actions in one picker. A service's **Accounts** row opens its A
 Run **AI Usage: Manage Claude/Codex Authentication Profiles** from the Command Palette, click the Claude or Codex
 status bar item, or choose a service's **Accounts** row in the AI Usage menu, to open that service's **Accounts**
 menu. You can save and name the current login, import a credential JSON file, export every saved profile to a file
-and import it on another computer, and switch among up to 20 profiles per service. A profile is **private**, kept by
+and import it on another computer, and switch among up to 20 profiles per service.
+
+> **Codex: experimental.** Switching Codex accounts (by hand or by automatic rotation) and the Codex account proxy
+> are experimental: open Codex chats and background processes can keep the previous login or fail a turn until
+> they are restarted, and the behaviour can change between releases. Reading Codex usage works normally, but keep
+> `aiUsage.codex.checkIntervalMinutes` and `aiUsage.codex.api.minAccountIntervalMinutes` long enough that the checks
+> do not run into the provider's rate limits.
+> Claude account switching is not affected. A profile is **private**, kept by
 the [account service](#the-account-service-and-the-ai-usage-command) on this host, or a **project** profile, kept
 with its login in the workspace folder's `.ai-usage.profiles.json` and listed whenever that folder is open; see
 [Private and project profiles](docs/CONFIGURATION.md#private-and-project-profiles). Every saved profile is listed
@@ -154,12 +161,12 @@ for terminal sessions. The CLI registration also appears in that service's Accou
 
 Click the Claude or Codex status bar item to open that service's **Accounts** menu (or choose **Accounts** in the
 details panel); **Back** leads to the AI Usage menu of all services. This menu lets
-you switch accounts manually, save the current login to a new or existing profile, and send a keep-alive on
-demand. **Account keep-alive and usage collection** (`aiUsage.<service>.keepAlive.enabled`) and **automatic
+you switch accounts manually and save the current login to a new or existing profile. The ▷ button on a saved
+account's row sends it a keep-alive right away, and **Manage saved profiles… → Send keep-alive now…** sends one to
+a chosen account or to all of them. **Account keep-alive and usage collection** (`aiUsage.<service>.keepAlive.enabled`) and **automatic
 account rotation** (`aiUsage.<service>.autoRotate.enabled`) are set in Settings, independently per service
 (both are on by default, keep-alive with the smallest model); the menu shows what each one is set to. The active login is never kept alive or checked from its profile home; it is read through the native login it is in use with. Rotation chooses the next account from stored readings and never sends a keep-alive; `aiUsage.<service>.autoRotate.updateUsageBeforeRotation` (off by default) reads the target's usage right before the switch.
 
-![Send keep-alive now… item under Account features in the Accounts menu](images/screenshots/accounts-keep-alive-now.png)
 ![Keep-alive and rotation settings… item showing keep-alive on and rotation on with the leastWaste strategy](images/screenshots/accounts-keep-alive-settings-claude.png)
 
 - Claude sends `what is date today` using `haiku` every **2 hours** per saved account, in `~/.claude-tmp`.

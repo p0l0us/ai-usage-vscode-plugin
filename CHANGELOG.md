@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.12.0 (2026-11-01)
+
+- Each saved account in the Claude and Codex Accounts menu has a ▷ button that sends it a keep-alive right away and refreshes its usage; the menu stays open. The active account has none, since its login is never kept alive from its profile home. **Send keep-alive now…** (one account or all of them) moved from Account features to **Manage saved profiles…**.
+- Codex account switching, by hand or by automatic rotation, and the Codex account proxy are marked experimental in the Codex Accounts menu, in Settings and in the documentation. Reading Codex usage is not affected, but `aiUsage.codex.checkIntervalMinutes` and `aiUsage.codex.api.minAccountIntervalMinutes` should be long enough not to run into the provider's rate limits.
+
 ## 1.11.0 (2026-10-25)
 
 - Every profile row of the Claude and Codex Accounts menus has a sign-in button, between the info and the disable buttons. It runs the same sign-in as **Sign in again…** under **Manage saved profiles…**: the vendor CLI login in a terminal with a separate home, stored in that profile, and the accounts list returns when the sign-in is done. Before, a profile whose check reported a paused or expired login was renewed through the Manage menu or by choosing the row and taking **Renew the login…**.

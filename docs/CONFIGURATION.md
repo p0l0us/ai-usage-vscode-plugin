@@ -164,6 +164,12 @@ Usage details also show counts for the current UTC hour: direct HTTP attempts, R
 
 ## Claude and Codex authentication profiles
 
+> **Codex: experimental.** Switching Codex accounts (by hand or by automatic rotation) and the
+> [Codex account proxy](#what-happens-to-running-codex-sessions) are experimental: running Codex processes can keep
+> the previous login or fail a turn until they are restarted, and the behaviour can change between releases. Reading
+> Codex usage works normally, but keep `aiUsage.codex.checkIntervalMinutes` and
+> `aiUsage.codex.api.minAccountIntervalMinutes` long enough that the checks do not run into the provider's rate limits. Claude account switching is not affected.
+
 Authentication profiles are commands, not settings, because credentials must never appear in `settings.json`.
 Run **AI Usage: Manage Claude/Codex Authentication Profiles** to save the current native login, import a credential
 JSON file, rename/delete profiles, or activate one of up to 20 profiles per service. The profiles, logins included,
@@ -511,7 +517,8 @@ server with Claude Code and Codex, and what a switch by an agent means.
 ## Account automation
 
 Save or import each subscription login in **AI Usage: Manage Claude/Codex Authentication Profiles**. Under each
-provider's **Accounts** menu you can switch accounts manually and send a keep-alive on demand. Both features are
+provider's **Accounts** menu you can switch accounts manually, send one account a keep-alive with the ▷ button on
+its row, or choose **Manage saved profiles… → Send keep-alive now…** for a chosen account or all of them. Both features are
 set in Settings, per provider: both are on by default. The menu shows their current state and links to Settings.
 
 Account checks of one service run one at a time in the account service. A keep-alive sent by hand that finds a
@@ -519,7 +526,6 @@ sweep running waits for it, up to 3 minutes, and says so in its progress notific
 **All accounts** (and `ai-usage keepalive --all`) runs as one sweep in the service, so a periodic check cannot cut
 in between two accounts. Once the wait runs out, the notification says that the accounts were not sent.
 
-![Send keep-alive now… item under Account features](../images/screenshots/accounts-keep-alive-now.png)
 ![Claude Keep-alive and rotation settings… item: keep-alive on, rotation on with leastWaste and proactive](../images/screenshots/accounts-keep-alive-settings-claude.png)
 ![Codex Keep-alive and rotation settings… item: keep-alive off, rotation on at 7d ≥ 99%](../images/screenshots/accounts-keep-alive-settings-codex.png)
 

@@ -18,6 +18,7 @@ service/tsconfig.json
 service/node_modules/**
 service/scripts/**
 *.tgz
+*.tar.gz
 service/*.tgz
 coverage/**
 reports/**

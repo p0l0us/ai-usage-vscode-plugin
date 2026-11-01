@@ -31,8 +31,8 @@ export function cliTerminalCommand(cli: string, args: string[]): string {
   return `${process.platform === 'win32' ? '& ' : ''}${[cli, ...args].map(quote).join(' ')}`;
 }
 
-/** A row button: the info one, the one that signs in again for the profile, or the one that disables (`setDisabled: true`) or enables it. */
-type MenuButton = vscode.QuickInputButton & { setDisabled?: boolean; signIn?: true };
+/** A row button: the info one, the one that sends a keep-alive, the one that signs in again for the profile, or the one that disables (`setDisabled: true`) or enables it. */
+type MenuButton = vscode.QuickInputButton & { setDisabled?: boolean; signIn?: true; keepAlive?: true };
 
 type ProfileItem = vscode.QuickPickItem & {
   profile?: ProfileView;
@@ -42,7 +42,7 @@ type ProfileItem = vscode.QuickPickItem & {
   readOnly?: boolean;
   /** The login error of the profile's last check; selecting it offers to renew the login or check it again instead of activating. */
   loginProblem?: string;
-  action?: 'save' | 'manage' | 'openCli' | 'keepAliveNow' | 'registerMcp' | 'settings' | 'service' | 'install' | 'retry' | 'back';
+  action?: 'save' | 'manage' | 'openCli' | 'registerMcp' | 'settings' | 'service' | 'install' | 'retry' | 'back';
 };
 
 export type MenuHooks = {
@@ -190,7 +190,9 @@ export class AccountsMenu {
       let signInRequested: ProfileView | undefined;
       const item = await pickWithBack(this.items(view, config, Boolean(hooks?.back), mcp, hooks?.activeUsage), {
         title: `AI Usage · ${TITLES[provider]} accounts`,
-        placeHolder: 'Choose a profile to activate, or manage saved profiles',
+        placeHolder: provider === 'codex'
+          ? 'Experimental: Codex account switching and the Codex proxy. Choose a profile to activate, or manage saved profiles'
+          : 'Choose a profile to activate, or manage saved profiles',
         matchOnDescription: true,
         matchOnDetail: true
       }, (candidate) => candidate.action === 'back', async () => hooks?.back?.(provider), picker => {
@@ -204,6 +206,11 @@ export class AccountsMenu {
         };
         const state = this.services.onStateChanged?.(changed => { if (!changed || changed === provider) update(); });
         const info = picker.onDidTriggerItemButton?.(({ item, button }) => {
+          if ((button as MenuButton).keepAlive && item.profile) {
+            // The keep-alive reports through its own notification; the menu stays open and updates with the reading.
+            void hooks?.sendKeepAlive(provider, [item.profile]);
+            return;
+          }
           if ((button as MenuButton).signIn && item.profile) {
             signInRequested = item.profile;
             picker.hide();
@@ -252,11 +259,6 @@ export class AccountsMenu {
         switch (item.action) {
           case 'openCli': {
             if (await this.openCli(client, view, hooks)) return;
-            break;
-          }
-          case 'keepAliveNow': {
-            const profiles = await this.pickKeepAliveTargets(view);
-            if (profiles.length) { await hooks?.sendKeepAlive(provider, profiles); }
             break;
           }
           case 'registerMcp': await hooks?.registerMcp?.(provider); break;
@@ -331,6 +333,9 @@ export class AccountsMenu {
         : { iconPath: new vscode.ThemeIcon('circle-slash'), tooltip: 'Disable: leave this account out of rotation, keep-alives and background usage reads', setDisabled: true };
       const signIn: MenuButton = { iconPath: new vscode.ThemeIcon('sign-in'),
         tooltip: `Sign in again: run the ${TITLES[provider]} CLI login in a separate home and store the new login in this profile`, signIn: true };
+      // The active login is kept fresh by the user's own use and is never exercised from its profile home.
+      const keepAlive: MenuButton[] = profile.active ? []
+        : [{ iconPath: new vscode.ThemeIcon('play'), tooltip: 'Send a keep-alive now and refresh the usage statistics', keepAlive: true as const }];
       return {
         label,
         iconPath: loginProblem ? new vscode.ThemeIcon('warning', new vscode.ThemeColor('editorWarning.foreground'))
@@ -344,7 +349,7 @@ export class AccountsMenu {
         profile,
         readOnly: profile.limit.readOnly,
         loginProblem,
-        ...((info) => ({ info, buttons: [{ iconPath: new vscode.ThemeIcon('info'), tooltip: info } as MenuButton, signIn, toggle] }))(accountInfo(profile, displayedUsage))
+        ...((info) => ({ info, buttons: [{ iconPath: new vscode.ThemeIcon('info'), tooltip: info } as MenuButton, ...keepAlive, signIn, toggle] }))(accountInfo(profile, displayedUsage))
       };
     });
     // VS Code shows a separator's label right-aligned on the row below it, where the active account stands out;
@@ -363,7 +368,6 @@ export class AccountsMenu {
     items.push({ label: 'Account features', kind: vscode.QuickPickItemKind.Separator });
     if (view.profiles.length) {
       items.push({ label: '$(terminal) Open CLI…', detail: `Choose a saved account and open ${TITLES[provider]} in a VS Code terminal with that account's home.`, action: 'openCli' });
-      items.push({ label: '$(play) Send keep-alive now…', detail: 'Choose a saved account, or all of them, send the configured keep-alive prompt immediately, and refresh usage statistics.', action: 'keepAliveNow' });
     }
     if (mcp) {
       const registration = mcp.registration;
@@ -497,13 +501,16 @@ export class AccountsMenu {
 
   /** Management actions return here; Back returns to the Accounts menu. */
   private async manageMenu(client: ServiceClient, provider: AuthProvider, hooks?: MenuHooks): Promise<void> {
-    type Action = 'importCredential' | 'transfer' | 'signIn' | 'rename' | 'reorder' | 'disable' | 'enable' | 'delete';
+    type Action = 'importCredential' | 'transfer' | 'keepAliveNow' | 'signIn' | 'rename' | 'reorder' | 'disable' | 'enable' | 'delete';
     while (true) {
       const view = await this.view(client, provider);
       const items: Array<vscode.QuickPickItem & { action?: Action }> = [
         { label: '$(file-code) Import credential JSON…', detail: `Imports a credential file into the account service${view.scopes.projectEnabled && view.scopes.folders.length ? ', privately or into an open project,' : ''} without activating it.`, action: 'importCredential' },
         { label: '$(arrow-swap) Export or import saved profiles…', detail: 'Moves saved Claude and Codex profiles, logins included, through a JSON file.', action: 'transfer' }
       ];
+      if (view.profiles.some((profile) => !profile.active)) {
+        items.push({ label: '$(play) Send keep-alive now…', detail: 'Choose a saved account, or all of them, send the configured keep-alive prompt immediately, and refresh usage statistics.', action: 'keepAliveNow' });
+      }
       if (view.profiles.length) {
         items.push({ label: '$(sign-in) Sign in again…', detail: `Runs the ${TITLES[provider]} CLI login in a separate home and stores the new login in a saved profile.`, action: 'signIn' });
         items.push({ label: '$(edit) Rename a profile…', action: 'rename' });
@@ -525,6 +532,11 @@ export class AccountsMenu {
       switch (picked.action) {
         case 'importCredential': await this.importFile(client, provider, view); break;
         case 'transfer': await this.transferMenu(provider); break;
+        case 'keepAliveNow': {
+          const profiles = await this.pickKeepAliveTargets(view);
+          if (profiles.length) { await hooks?.sendKeepAlive(provider, profiles); }
+          break;
+        }
         case 'signIn': {
           const profile = await this.pickSaved(view, `Sign in again for a ${TITLES[provider]} profile`);
           if (profile) { await hooks?.signIn(provider, profile); }

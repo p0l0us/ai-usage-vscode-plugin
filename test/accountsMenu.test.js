@@ -222,7 +222,7 @@ test('profile actions live in Manage saved profiles and moving a profile updates
     return items.find((item) => item.action === 'manage');
   });
   quickPickResponses.push((items) => {
-    assert.deepEqual(items.filter((item) => item.action).map((item) => item.action), ['importCredential', 'transfer', 'signIn', 'rename', 'reorder', 'disable', 'delete']);
+    assert.deepEqual(items.filter((item) => item.action).map((item) => item.action), ['importCredential', 'transfer', 'keepAliveNow', 'signIn', 'rename', 'reorder', 'disable', 'delete']);
     return items.find((item) => item.action === 'reorder');
   });
   quickPickResponses.push((items) => items.find((item) => item.profile?.id === 'b'));
@@ -642,29 +642,52 @@ test('keep-alive now: one account, all of them, Back and Escape', async () => {
   const f = fixture({ claude: baseView('claude', [profile({ active: true }), profile({ id: 'b', name: 'Other', number: 2 }), profile({ id: 'c', name: 'Third', number: 3 })]) });
   const sent = [];
   const hooks = hooksOf({ sendKeepAlive: async (provider, profiles) => { sent.push([provider, profiles.map((p) => p.id)]); } });
-  quickPickResponses.push(pickAction('keepAliveNow'), (items, options) => {
+  // The choice lives in Manage saved profiles; afterwards Escape leaves management and then the account list.
+  const keepAliveNow = [pickAction('manage'), pickAction('keepAliveNow')];
+  quickPickResponses.push(...keepAliveNow, (items, options) => {
     assert.equal(options.title, 'Send a Claude keep-alive now');
     assert.deepEqual(items.filter((item) => item.kind !== -1).map((item) => item.label), ['$(run-all) All accounts', 'Other', 'Third', '$(arrow-left) Back']);
     assert.equal(items[0].description, '2 saved accounts other than the active one, one by one');
     return items[0];
-  }, undefined);
+  }, undefined, undefined);
   await f.menu.show('claude', hooks);
   assert.deepEqual(sent, [['claude', ['b', 'c']]]);
-  quickPickResponses.push(pickAction('keepAliveNow'), (items) => items.find((item) => item.label === 'Other'), undefined);
+  quickPickResponses.push(...keepAliveNow, (items) => items.find((item) => item.label === 'Other'), undefined, undefined);
   await f.menu.show('claude', hooks);
   assert.deepEqual(sent.at(-1), ['claude', ['b']]);
-  // Back (no profiles on its row) and Escape send nothing and return to the list.
-  quickPickResponses.push(pickAction('keepAliveNow'), (items) => items.at(-1), pickAction('keepAliveNow'), undefined, undefined);
+  // Back (no profiles on its row) and Escape send nothing and return to management.
+  quickPickResponses.push(...keepAliveNow, (items) => items.at(-1), pickAction('keepAliveNow'), undefined, undefined, undefined);
   await f.menu.show('claude', hooks);
   assert.equal(sent.length, 2);
   assert.equal(quickPickResponses.length, 0);
   // A single saved account has no "All accounts" row.
   const single = fixture({ claude: baseView('claude', [profile()]) });
-  quickPickResponses.push(pickAction('keepAliveNow'), (items) => { assert.ok(!items.some((item) => /All accounts/.test(item.label))); return undefined; }, undefined);
+  quickPickResponses.push(...keepAliveNow, (items) => { assert.ok(!items.some((item) => /All accounts/.test(item.label))); return undefined; }, undefined, undefined);
   await single.menu.show('claude', hooks);
   // Without a hook nothing breaks either.
-  quickPickResponses.push(pickAction('keepAliveNow'), (items) => items.find((item) => item.label === 'Work'), undefined);
+  quickPickResponses.push(...keepAliveNow, (items) => items.find((item) => item.label === 'Work'), undefined, undefined);
   await single.menu.show('claude');
+  // Only the active account is saved: nothing to keep alive, so management does not offer it.
+  const onlyActive = fixture({ claude: baseView('claude', [profile({ active: true })]) });
+  quickPickResponses.push(pickAction('manage'), (items) => { assert.ok(!items.some((item) => item.action === 'keepAliveNow')); return undefined; }, undefined);
+  await onlyActive.menu.show('claude', hooks);
+  assert.equal(quickPickResponses.length, 0);
+});
+
+test('the play button on an account row sends it a keep-alive and keeps the menu open; the active row has none', async () => {
+  const f = fixture({ claude: baseView('claude', [profile({ active: true }), profile({ id: 'b', name: 'Other', number: 2 })]) });
+  const sent = [];
+  const hooks = hooksOf({ sendKeepAlive: async (provider, profiles) => { sent.push([provider, profiles.map((p) => p.id)]); } });
+  quickPickResponses.push((items, options, picker) => {
+    const row = (id) => items.find((item) => item.profile?.id === id);
+    assert.ok(!row('a').buttons.some((button) => button.keepAlive), 'the active login is never kept alive');
+    assert.deepEqual(row('b').buttons.map((button) => button.iconPath.id), ['info', 'play', 'sign-in', 'circle-slash']);
+    picker.triggerItemButton(row('b'), row('b').buttons.find((button) => button.keepAlive));
+    assert.ok(!items.some((item) => item.action === 'keepAliveNow'), 'the menu item moved to Manage saved profiles');
+    return undefined;
+  });
+  await f.menu.show('claude', hooks);
+  assert.deepEqual(sent, [['claude', ['b']]]);
 });
 
 test('Open CLI: Back reopens the account menu, a failing preparation is reported, and the project folder is the terminal cwd', async () => {
@@ -823,7 +846,7 @@ test('manage menu lists what fits the state and Back or Escape returns to the ac
   await none.menu.show('claude');
   const one = fixture({ claude: baseView('claude', [profile()]) });
   quickPickResponses.push(pickAction('manage'), (items) => {
-    assert.deepEqual(items.filter((item) => item.action).map((item) => item.action), ['importCredential', 'transfer', 'signIn', 'rename', 'delete'], 'no reorder with one profile');
+    assert.deepEqual(items.filter((item) => item.action).map((item) => item.action), ['importCredential', 'transfer', 'keepAliveNow', 'signIn', 'rename', 'delete'], 'no reorder with one profile');
     return undefined;
   }, undefined);
   await one.menu.show('claude');
@@ -1116,7 +1139,7 @@ test('a disabled profile is marked in the Accounts menu, its row button enables 
     return items.find((item) => item.action === 'manage');
   });
   quickPickResponses.push((items) => {
-    assert.deepEqual(items.filter((item) => item.action).map((item) => item.action), ['importCredential', 'transfer', 'signIn', 'rename', 'reorder', 'disable', 'enable', 'delete']);
+    assert.deepEqual(items.filter((item) => item.action).map((item) => item.action), ['importCredential', 'transfer', 'keepAliveNow', 'signIn', 'rename', 'reorder', 'disable', 'enable', 'delete']);
     return items.find((item) => item.action === 'disable');
   });
   quickPickResponses.push((items) => {
@@ -1138,7 +1161,7 @@ test('a row button signs in again for that profile, and the accounts list return
   const hooks = hooksOf({ signIn: async (provider, p) => { signedIn.push([provider, p.id, menus.at(-1).hidden]); } });
   quickPickResponses.push((items, options, picker) => {
     const row = items.find((item) => item.profile?.id === 'b');
-    assert.deepEqual(row.buttons.map((button) => button.iconPath.id), ['info', 'sign-in', 'circle-slash']);
+    assert.deepEqual(row.buttons.map((button) => button.iconPath.id), ['info', 'play', 'sign-in', 'circle-slash']);
     const button = row.buttons.find((button) => button.signIn);
     assert.equal(button.tooltip, 'Sign in again: run the Claude CLI login in a separate home and store the new login in this profile');
     picker.triggerItemButton(row, button);

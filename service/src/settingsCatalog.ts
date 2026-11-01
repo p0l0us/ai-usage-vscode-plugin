@@ -357,7 +357,7 @@ export const SETTINGS_CATALOG = [
     "min": 1,
     "max": 1440,
     "default": 30,
-    "description": "How often (minutes) Codex usage is checked; defaults to 30 minutes. In `auto` this is also the maximum age of a usable cached or local reading. With `both` this is also the maximum age of a session-log record before the usage endpoint fills the gap."
+    "description": "How often (minutes) Codex usage is checked; defaults to 30 minutes. Codex usage reading works normally, but keep this interval long enough: frequent checks can hit the provider's rate limits. In `auto` this is also the maximum age of a usable cached or local reading. With `both` this is also the maximum age of a session-log record before the usage endpoint fills the gap."
   },
   {
     "key": "codex.checkInactiveAccounts",
@@ -371,7 +371,7 @@ export const SETTINGS_CATALOG = [
     "min": 1,
     "max": 1440,
     "default": 30,
-    "description": "**Smallest gap between two automatic reads of one Codex account's usage endpoint, in minutes.** Between reads the figures come from Codex's session log, inspected every five seconds and credited to the active account when the session's login is the active one, from the stored reading and from keep-alives. This caps what `#aiUsage.codex.checkIntervalMinutes#` and rotation's faster reads near a threshold would otherwise send. A check you start yourself, the one read after a window reset and the check rotation makes before a switch may come sooner; a server's `Retry-After` always wins. Applies to the `auto` and `both` sources and to every saved-account check; an explicit `api` or `cli` source keeps `#aiUsage.codex.checkIntervalMinutes#`."
+    "description": "**Smallest gap between two automatic reads of one Codex account's usage endpoint, in minutes.** Codex usage reading works normally, but keep this gap long enough not to run into the provider's rate limits. Between reads the figures come from Codex's session log, inspected every five seconds and credited to the active account when the session's login is the active one, from the stored reading and from keep-alives. This caps what `#aiUsage.codex.checkIntervalMinutes#` and rotation's faster reads near a threshold would otherwise send. A check you start yourself, the one read after a window reset and the check rotation makes before a switch may come sooner; a server's `Retry-After` always wins. Applies to the `auto` and `both` sources and to every saved-account check; an explicit `api` or `cli` source keeps `#aiUsage.codex.checkIntervalMinutes#`."
   },
   {
     "key": "codex.keepAlive.enabled",
@@ -383,7 +383,7 @@ export const SETTINGS_CATALOG = [
     "key": "codex.autoRotate.enabled",
     "type": "boolean",
     "default": true,
-    "description": "**Automatic Codex account rotation.** Switch when the active account reaches a 5-hour or weekly threshold, or proactively if configured. The selected strategy chooses among eligible saved accounts; reset-aware timing avoids short-lived switches just before a quota reset. Requires at least two saved profiles. See [Rotation strategies and thresholds](https://github.com/p0l0us/ai-usage-vscode-plugin/blob/main/docs/ROTATION.md)."
+    "description": "**Automatic Codex account rotation (experimental).** Switching Codex accounts is experimental: open Codex chats and background processes may keep the previous login or fail until they restart. Switch when the active account reaches a 5-hour or weekly threshold, or proactively if configured. The selected strategy chooses among eligible saved accounts; reset-aware timing avoids short-lived switches just before a quota reset. Requires at least two saved profiles. See [Rotation strategies and thresholds](https://github.com/p0l0us/ai-usage-vscode-plugin/blob/main/docs/ROTATION.md)."
   },
   {
     "key": "codex.autoReset.enabled",
@@ -485,7 +485,7 @@ export const SETTINGS_CATALOG = [
     "key": "codex.proxy.enabled",
     "type": "boolean",
     "default": false,
-    "description": "Route the Codex VS Code extension's model calls through a local AI Usage proxy so that switching the Codex authentication profile reaches open Codex chats on their next turn, with no restart. AI Usage adds a `model_providers.ai-usage` entry to Codex's `config.toml` and selects it as `model_provider`; Codex re-reads that file whenever a chat starts. The proxy listens on 127.0.0.1 only, requires a token written into `config.toml`, attaches the login from `auth.json` to each request and forwards it to OpenAI unchanged (ChatGPT logins to the ChatGPT Codex backend, API keys to the OpenAI API). While it is on, Codex's own account panel shows no login, and chats opened before it was enabled keep their previous path until you start a new chat. Turning it off restores `config.toml`."
+    "description": "**Experimental.** Route the Codex VS Code extension's model calls through a local AI Usage proxy so that switching the Codex authentication profile reaches open Codex chats on their next turn, with no restart. AI Usage adds a `model_providers.ai-usage` entry to Codex's `config.toml` and selects it as `model_provider`; Codex re-reads that file whenever a chat starts. The proxy listens on 127.0.0.1 only, requires a token written into `config.toml`, attaches the login from `auth.json` to each request and forwards it to OpenAI unchanged (ChatGPT logins to the ChatGPT Codex backend, API keys to the OpenAI API). While it is on, Codex's own account panel shows no login, and chats opened before it was enabled keep their previous path until you start a new chat. Turning it off restores `config.toml`."
   },
   {
     "key": "codex.proxy.port",
